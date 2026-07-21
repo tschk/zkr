@@ -1,3 +1,7 @@
+use super::export::{
+    append_records, begin_commit, claim_evidence_record, claim_record, evidence_record,
+    source_record,
+};
 use super::*;
 
 impl MemoryDb {
@@ -131,6 +135,42 @@ impl MemoryDb {
             "UPDATE sources SET origin_evidence_id = ?1, origin_claim_id = ?2 WHERE id = ?3 AND tenant_id = ?4 AND person_id = ?5",
             params![evidence_id.0, claim_id.as_ref().map(|id| &id.0), source_id.0, input.tenant_id.0, input.person_id.0],
         )?;
+        let commit = begin_commit(
+            &transaction,
+            &input.tenant_id,
+            &input.person_id,
+            input.recorded_at,
+        )?;
+        let mut records = vec![
+            ExportRecord::Source(source_record(
+                &transaction,
+                &input.tenant_id,
+                &input.person_id,
+                &source_id,
+            )?),
+            ExportRecord::Evidence(evidence_record(
+                &transaction,
+                &input.tenant_id,
+                &input.person_id,
+                &evidence_id,
+            )?),
+        ];
+        if let Some(claim_id) = &claim_id {
+            records.push(ExportRecord::Claim(claim_record(
+                &transaction,
+                &input.tenant_id,
+                &input.person_id,
+                claim_id,
+            )?));
+            records.push(ExportRecord::ClaimEvidence(claim_evidence_record(
+                &transaction,
+                &input.tenant_id,
+                &input.person_id,
+                claim_id,
+                &evidence_id,
+            )?));
+        }
+        append_records(&transaction, commit, records)?;
         transaction.commit()?;
         Ok(Remembered {
             source_id,
@@ -169,6 +209,15 @@ impl MemoryDb {
         require_text("correction text", &input.text)?;
         require_text("value", &input.value)?;
         let transaction = self.connection.transaction()?;
+        let removed_profiles = transaction
+            .prepare(
+                "SELECT id FROM profile_entries WHERE tenant_id = ?1 AND person_id = ?2 AND claim_id = ?3 ORDER BY id",
+            )?
+            .query_map(
+                params![input.tenant_id.0, input.person_id.0, input.claim_id.0],
+                |row| row.get::<_, String>(0),
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         let old = transaction
             .query_row(
                 "SELECT subject, predicate, kind, valid_from, recorded_from FROM claims WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND status = 'accepted'",
@@ -223,6 +272,69 @@ impl MemoryDb {
             "UPDATE sources SET origin_evidence_id = ?1, origin_claim_id = ?2 WHERE id = ?3 AND tenant_id = ?4 AND person_id = ?5",
             params![evidence_id.0, claim_id.0, source_id.0, input.tenant_id.0, input.person_id.0],
         )?;
+        let correction = CorrectionRecord {
+            tenant_id: input.tenant_id.clone(),
+            person_id: input.person_id.clone(),
+            superseded_claim_id: input.claim_id.clone(),
+            claim_id: claim_id.clone(),
+            source_id: source_id.clone(),
+            evidence_id: evidence_id.clone(),
+            valid_at: input.valid_at,
+            recorded_at: input.recorded_at,
+        };
+        transaction.execute(
+            "INSERT INTO corrections(tenant_id, person_id, superseded_claim_id, claim_id, source_id, evidence_id, valid_at, recorded_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![correction.tenant_id.0, correction.person_id.0, correction.superseded_claim_id.0, correction.claim_id.0, correction.source_id.0, correction.evidence_id.0, correction.valid_at, correction.recorded_at],
+        )?;
+        let commit = begin_commit(
+            &transaction,
+            &input.tenant_id,
+            &input.person_id,
+            input.recorded_at,
+        )?;
+        let mut records = vec![
+            ExportRecord::Source(source_record(
+                &transaction,
+                &input.tenant_id,
+                &input.person_id,
+                &source_id,
+            )?),
+            ExportRecord::Evidence(evidence_record(
+                &transaction,
+                &input.tenant_id,
+                &input.person_id,
+                &evidence_id,
+            )?),
+            ExportRecord::Claim(claim_record(
+                &transaction,
+                &input.tenant_id,
+                &input.person_id,
+                &input.claim_id,
+            )?),
+            ExportRecord::Claim(claim_record(
+                &transaction,
+                &input.tenant_id,
+                &input.person_id,
+                &claim_id,
+            )?),
+            ExportRecord::ClaimEvidence(claim_evidence_record(
+                &transaction,
+                &input.tenant_id,
+                &input.person_id,
+                &claim_id,
+                &evidence_id,
+            )?),
+            ExportRecord::Correction(correction),
+        ];
+        records.extend(removed_profiles.into_iter().map(|id| {
+            ExportRecord::Deletion(DeletionRecord {
+                tenant_id: input.tenant_id.clone(),
+                person_id: input.person_id.clone(),
+                target: MemoryRef::ProfileEntry(ProfileEntryId(id)),
+                deleted_at: input.recorded_at,
+            })
+        }));
+        append_records(&transaction, commit, records)?;
         transaction.commit()?;
         Ok(Corrected {
             source_id,
@@ -235,6 +347,42 @@ impl MemoryDb {
     pub fn delete_source(&mut self, input: DeleteInput) -> Result<Deleted> {
         require_scope(&input.tenant_id, &input.person_id)?;
         let transaction = self.connection.transaction()?;
+        let evidence_ids = transaction
+            .prepare(
+                "SELECT id FROM evidence WHERE source_id = ?1 AND tenant_id = ?2 AND person_id = ?3 ORDER BY id",
+            )?
+            .query_map(
+                params![input.source_id.0, input.tenant_id.0, input.person_id.0],
+                |row| row.get::<_, String>(0).map(EvidenceId),
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let candidate_claim_ids = transaction
+            .prepare(
+                "SELECT DISTINCT c.id FROM claims c JOIN claim_evidence ce ON ce.claim_id = c.id AND ce.tenant_id = c.tenant_id AND ce.person_id = c.person_id JOIN evidence e ON e.id = ce.evidence_id AND e.tenant_id = ce.tenant_id AND e.person_id = ce.person_id WHERE e.source_id = ?1 AND c.tenant_id = ?2 AND c.person_id = ?3 AND c.status = 'accepted' ORDER BY c.id",
+            )?
+            .query_map(
+                params![input.source_id.0, input.tenant_id.0, input.person_id.0],
+                |row| row.get::<_, String>(0).map(ClaimId),
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let profile_ids = transaction
+            .prepare(
+                "SELECT p.id FROM profile_entries p WHERE p.tenant_id = ?1 AND p.person_id = ?2 AND p.claim_id IN (SELECT DISTINCT ce.claim_id FROM claim_evidence ce JOIN evidence e ON e.id = ce.evidence_id AND e.tenant_id = ce.tenant_id AND e.person_id = ce.person_id WHERE e.source_id = ?3 AND ce.tenant_id = ?1 AND ce.person_id = ?2) ORDER BY p.id",
+            )?
+            .query_map(
+                params![input.tenant_id.0, input.person_id.0, input.source_id.0],
+                |row| row.get::<_, String>(0),
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let review_ids = transaction
+            .prepare(
+                "SELECT r.id FROM daily_reviews r WHERE r.tenant_id = ?1 AND r.person_id = ?2 AND EXISTS (SELECT 1 FROM json_each(r.evidence_ids) citation JOIN evidence e ON e.id = citation.value WHERE e.source_id = ?3 AND e.tenant_id = ?1 AND e.person_id = ?2) ORDER BY r.id",
+            )?
+            .query_map(
+                params![input.tenant_id.0, input.person_id.0, input.source_id.0],
+                |row| row.get::<_, String>(0).map(DailyReviewId),
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         let recorded_at = transaction
             .query_row(
                 "SELECT recorded_at FROM sources WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND deleted_at IS NULL",
@@ -279,6 +427,17 @@ impl MemoryDb {
             }
             error => Error::Sql(error),
         })? as u64;
+        let mut changed_claim_ids = Vec::new();
+        for claim_id in candidate_claim_ids {
+            let changed: bool = transaction.query_row(
+                "SELECT status = 'retracted' AND recorded_until = ?1 FROM claims WHERE id = ?2 AND tenant_id = ?3 AND person_id = ?4",
+                params![input.deleted_at, claim_id.0, input.tenant_id.0, input.person_id.0],
+                |row| row.get(0),
+            )?;
+            if changed {
+                changed_claim_ids.push(claim_id);
+            }
+        }
         transaction.execute(
             "DELETE FROM embeddings WHERE tenant_id = ?1 AND person_id = ?2 AND ((target_kind = 'source' AND target_id = ?3) OR (target_kind = 'evidence' AND target_id IN (SELECT id FROM evidence WHERE source_id = ?3 AND tenant_id = ?1 AND person_id = ?2)) OR (target_kind = 'claim' AND target_id IN (SELECT c.id FROM claims c JOIN claim_evidence ce ON ce.claim_id = c.id AND ce.tenant_id = c.tenant_id AND ce.person_id = c.person_id JOIN evidence e ON e.id = ce.evidence_id AND e.tenant_id = ce.tenant_id AND e.person_id = ce.person_id WHERE c.tenant_id = ?1 AND c.person_id = ?2 AND c.status = 'retracted' AND e.source_id = ?3)))",
             params![input.tenant_id.0, input.person_id.0, input.source_id.0],
@@ -291,6 +450,72 @@ impl MemoryDb {
             "DELETE FROM daily_reviews WHERE tenant_id = ?1 AND person_id = ?2 AND EXISTS (SELECT 1 FROM json_each(evidence_ids) citation JOIN evidence e ON e.id = citation.value WHERE e.source_id = ?3 AND e.tenant_id = ?1 AND e.person_id = ?2)",
             params![input.tenant_id.0, input.person_id.0, input.source_id.0],
         )?;
+        let commit = begin_commit(
+            &transaction,
+            &input.tenant_id,
+            &input.person_id,
+            input.deleted_at,
+        )?;
+        let mut records = vec![
+            ExportRecord::Source(source_record(
+                &transaction,
+                &input.tenant_id,
+                &input.person_id,
+                &input.source_id,
+            )?),
+            ExportRecord::Deletion(DeletionRecord {
+                tenant_id: input.tenant_id.clone(),
+                person_id: input.person_id.clone(),
+                target: MemoryRef::Source(input.source_id.clone()),
+                deleted_at: input.deleted_at,
+            }),
+        ];
+        for evidence_id in &evidence_ids {
+            records.push(ExportRecord::Evidence(evidence_record(
+                &transaction,
+                &input.tenant_id,
+                &input.person_id,
+                evidence_id,
+            )?));
+            records.push(ExportRecord::Deletion(DeletionRecord {
+                tenant_id: input.tenant_id.clone(),
+                person_id: input.person_id.clone(),
+                target: MemoryRef::Evidence(evidence_id.clone()),
+                deleted_at: input.deleted_at,
+            }));
+        }
+        for claim_id in &changed_claim_ids {
+            records.push(ExportRecord::Claim(claim_record(
+                &transaction,
+                &input.tenant_id,
+                &input.person_id,
+                claim_id,
+            )?));
+        }
+        for profile_id in profile_ids {
+            let remains: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM profile_entries WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3)",
+                params![profile_id, input.tenant_id.0, input.person_id.0],
+                |row| row.get(0),
+            )?;
+            if !remains {
+                records.push(ExportRecord::Deletion(DeletionRecord {
+                    tenant_id: input.tenant_id.clone(),
+                    person_id: input.person_id.clone(),
+                    target: MemoryRef::ProfileEntry(ProfileEntryId(profile_id)),
+                    deleted_at: input.deleted_at,
+                }));
+            }
+        }
+        records.extend(review_ids.into_iter().map(|id| {
+            ExportRecord::Deletion(DeletionRecord {
+                tenant_id: input.tenant_id.clone(),
+                person_id: input.person_id.clone(),
+                target: MemoryRef::DailyReview(id),
+                deleted_at: input.deleted_at,
+            })
+        }));
+        append_records(&transaction, commit, records)?;
         transaction.commit()?;
         Ok(Deleted {
             source_id: input.source_id,
@@ -318,9 +543,48 @@ impl MemoryDb {
         if !claim_exists || !evidence_exists {
             return Err(Error::NotFound);
         }
+        let relation = serde_json::to_string(&input.relation)?;
+        let existing = transaction
+            .query_row(
+                "SELECT relation, confidence_basis_points FROM claim_evidence WHERE tenant_id = ?1 AND person_id = ?2 AND claim_id = ?3 AND evidence_id = ?4",
+                params![input.tenant_id.0, input.person_id.0, input.claim_id.0, input.evidence_id.0],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, u16>(1)?)),
+            )
+            .optional()?;
+        if let Some((stored_relation, stored_confidence)) = existing {
+            if stored_relation == relation && stored_confidence == input.confidence_basis_points {
+                transaction.commit()?;
+                return Ok(());
+            }
+            return Err(Error::Invalid(
+                "claim evidence link conflicts with existing payload".to_owned(),
+            ));
+        }
         transaction.execute(
             "INSERT INTO claim_evidence(tenant_id, person_id, claim_id, evidence_id, relation, confidence_basis_points) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
-            params![input.tenant_id.0, input.person_id.0, input.claim_id.0, input.evidence_id.0, serde_json::to_string(&input.relation)?, input.confidence_basis_points],
+            params![input.tenant_id.0, input.person_id.0, input.claim_id.0, input.evidence_id.0, relation, input.confidence_basis_points],
+        )?;
+        let recorded_at = transaction.query_row(
+            "SELECT MAX(c.recorded_from, e.recorded_at) FROM claims c JOIN evidence e WHERE c.id = ?1 AND c.tenant_id = ?2 AND c.person_id = ?3 AND e.id = ?4 AND e.tenant_id = ?2 AND e.person_id = ?3",
+            params![input.claim_id.0, input.tenant_id.0, input.person_id.0, input.evidence_id.0],
+            |row| row.get(0),
+        )?;
+        let commit = begin_commit(
+            &transaction,
+            &input.tenant_id,
+            &input.person_id,
+            recorded_at,
+        )?;
+        append_records(
+            &transaction,
+            commit,
+            [ExportRecord::ClaimEvidence(claim_evidence_record(
+                &transaction,
+                &input.tenant_id,
+                &input.person_id,
+                &input.claim_id,
+                &input.evidence_id,
+            )?)],
         )?;
         transaction.commit()?;
         Ok(())
@@ -393,6 +657,17 @@ impl MemoryDb {
             "INSERT INTO profile_entries(id, tenant_id, person_id, key, value, stability, claim_id, recorded_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) ON CONFLICT(tenant_id, person_id, key) DO UPDATE SET value = excluded.value, stability = excluded.stability, claim_id = excluded.claim_id, recorded_at = excluded.recorded_at",
             params![profile.id.0, profile.tenant_id.0, profile.person_id.0, profile.key, profile.value, stability, profile.claim_id.0, profile.recorded_at],
         )?;
+        let commit = begin_commit(
+            &transaction,
+            &profile.tenant_id,
+            &profile.person_id,
+            profile.recorded_at,
+        )?;
+        append_records(
+            &transaction,
+            commit,
+            [ExportRecord::Profile(profile.clone())],
+        )?;
         transaction.commit()?;
         Ok(profile)
     }
@@ -458,6 +733,22 @@ impl MemoryDb {
             "INSERT INTO daily_reviews(id, tenant_id, person_id, day, summary, evidence_ids, recorded_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![id.0, input.tenant_id.0, input.person_id.0, input.day, input.summary, serde_json::to_string(&input.evidence_ids)?, input.recorded_at],
         )?;
+        let review = DailyReview {
+            id: id.clone(),
+            tenant_id: input.tenant_id.clone(),
+            person_id: input.person_id.clone(),
+            day: input.day,
+            summary: input.summary,
+            evidence_ids: input.evidence_ids,
+            recorded_at: input.recorded_at,
+        };
+        let commit = begin_commit(
+            &transaction,
+            &review.tenant_id,
+            &review.person_id,
+            review.recorded_at,
+        )?;
+        append_records(&transaction, commit, [ExportRecord::DailyReview(review)])?;
         transaction.commit()?;
         Ok(StoredReview { id })
     }

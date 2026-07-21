@@ -1,13 +1,14 @@
 use crate::{
-    ClaimEvidence, ClaimId, ClaimKind, DailyReviewId, EvidenceId, EvidenceRelation, MemoryRef,
-    PersonId, ProfileEntry, ProfileEntryId, ProfileStability, RetrievalItem, RetrievalPack,
-    SourceId, SourceKind, TenantId, Timestamp,
+    Claim, ClaimEvidence, ClaimId, ClaimKind, DailyReview, DailyReviewId, Evidence, EvidenceId,
+    EvidenceRelation, MemoryRef, PersonId, ProfileEntry, ProfileEntryId, ProfileStability,
+    RetrievalItem, RetrievalPack, Source, SourceId, SourceKind, TenantId, Timestamp,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 mod embeddings;
+mod export;
 mod lifecycle;
 mod retrieval;
 mod schema;
@@ -291,6 +292,94 @@ pub struct ReviewRecord {
     pub recorded_at: Timestamp,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SourceRecord {
+    pub source: Source,
+    pub ingestion_key: Option<String>,
+    pub origin_evidence_id: Option<EvidenceId>,
+    pub origin_claim_id: Option<ClaimId>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct EvidenceRecord {
+    pub evidence: Evidence,
+    pub locator: Option<TranscriptLocator>,
+    pub deleted_at: Option<Timestamp>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CorrectionRecord {
+    pub tenant_id: TenantId,
+    pub person_id: PersonId,
+    pub superseded_claim_id: ClaimId,
+    pub claim_id: ClaimId,
+    pub source_id: SourceId,
+    pub evidence_id: EvidenceId,
+    pub valid_at: Timestamp,
+    pub recorded_at: Timestamp,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DeletionRecord {
+    pub tenant_id: TenantId,
+    pub person_id: PersonId,
+    pub target: MemoryRef,
+    pub deleted_at: Timestamp,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "record", rename_all = "snake_case")]
+pub enum ExportRecord {
+    Source(SourceRecord),
+    Evidence(EvidenceRecord),
+    Claim(Claim),
+    ClaimEvidence(ClaimEvidence),
+    Correction(CorrectionRecord),
+    Deletion(DeletionRecord),
+    Profile(ProfileEntry),
+    DailyReview(DailyReview),
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ExportInput {
+    pub export_format: u32,
+    pub tenant_id: TenantId,
+    pub person_id: PersonId,
+    #[serde(default)]
+    pub after_commit: i64,
+    #[serde(default = "default_after_event_index")]
+    pub after_event_index: i64,
+    #[serde(default)]
+    pub high_water_mark: Option<i64>,
+    #[serde(default = "default_limit")]
+    pub limit: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExportCommit {
+    pub sequence: i64,
+    pub recorded_at: Timestamp,
+    pub event_count: i64,
+    pub first_event_index: i64,
+    pub records: Vec<ExportRecord>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExportPage {
+    pub export_format: u32,
+    pub database_schema_version: i64,
+    pub high_water_mark: i64,
+    pub next_after_commit: i64,
+    pub next_after_event_index: i64,
+    pub complete: bool,
+    pub commits: Vec<ExportCommit>,
+}
+
+pub const EXPORT_FORMAT_VERSION: u32 = 1;
+pub const DATABASE_SCHEMA_VERSION: i64 = 8;
+pub const MAX_EXPORT_RECORD_BYTES: usize = 1024 * 1024;
+pub const MAX_EXPORT_PAGE_BYTES: usize = 1024 * 1024;
+
 pub struct MemoryDb {
     connection: Connection,
 }
@@ -322,6 +411,9 @@ fn require_text(field: &str, value: &str) -> Result<()> {
 
 const fn default_limit() -> u32 {
     10
+}
+const fn default_after_event_index() -> i64 {
+    -1
 }
 const fn bounded_limit(limit: u32) -> u32 {
     if limit == 0 {

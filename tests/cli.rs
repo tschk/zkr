@@ -1,5 +1,6 @@
 use serde_json::{Value, json};
 use std::{
+    collections::BTreeMap,
     io::Write,
     process::{Command, Stdio},
     time::{SystemTime, UNIX_EPOCH},
@@ -266,7 +267,9 @@ fn database_help_matches_the_documented_command() {
         .output()
         .unwrap();
     assert!(output.status.success());
-    assert!(String::from_utf8(output.stdout).unwrap().contains("get"));
+    let help = String::from_utf8(output.stdout).unwrap();
+    assert!(help.contains("get"));
+    assert!(help.contains("export"));
     assert!(!database.exists());
 }
 
@@ -310,5 +313,172 @@ fn json_cli_round_trips_transcript_evidence_locator() {
     assert_eq!(locator["provider"], "deepgram");
     assert_eq!(locator["start_ms"], 1200);
     assert_eq!(locator["end_ms"], 2900);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn json_cli_exports_a_frozen_scoped_commit_page() {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("zkr-export-{nonce}.db"));
+    let database = path.to_str().unwrap();
+    run(
+        database,
+        "remember",
+        json!({
+            "tenant_id": "tenant",
+            "person_id": "person",
+            "kind": "conversation",
+            "text": "Sam works at Acme",
+            "captured_at": 10,
+            "recorded_at": 11,
+            "claim": { "subject": "Sam", "predicate": "employer", "value": "Acme", "kind": "fact", "valid_from": 10 }
+        }),
+    );
+    let page = run(
+        database,
+        "export",
+        json!({
+            "export_format": 1,
+            "tenant_id": "tenant",
+            "person_id": "person",
+            "after_commit": 0,
+            "limit": 10
+        }),
+    );
+    assert_eq!(page["complete"], true);
+    assert_eq!(page["export_format"], 1);
+    assert_eq!(page["high_water_mark"], page["next_after_commit"]);
+    assert_eq!(page["commits"].as_array().unwrap().len(), 1);
+    let records = page["commits"][0]["records"].as_array().unwrap();
+    assert!(records.iter().any(|record| record["kind"] == "source"));
+    assert!(records.iter().any(|record| record["kind"] == "evidence"));
+    assert!(records.iter().any(|record| record["kind"] == "claim"));
+    assert!(
+        records
+            .iter()
+            .any(|record| record["kind"] == "claim_evidence")
+    );
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn json_cli_rejects_invalid_export_cursors() {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("zkr-export-error-{nonce}.db"));
+    let failure = run_failure(
+        path.to_str().unwrap(),
+        "export",
+        json!({
+            "export_format": 1,
+            "tenant_id": "tenant",
+            "person_id": "person",
+            "after_commit": -1,
+            "limit": 10
+        }),
+    );
+    assert!(failure.contains("after_commit must not be negative"));
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn json_cli_split_correction_requires_a_complete_commit_before_cursor_advance() {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("zkr-export-correction-{nonce}.db"));
+    let database = path.to_str().unwrap();
+    let remembered = run(
+        database,
+        "remember",
+        json!({
+            "tenant_id": "tenant",
+            "person_id": "person",
+            "kind": "conversation",
+            "text": "Sam works at Acme",
+            "captured_at": 10,
+            "recorded_at": 11,
+            "claim": { "subject": "Sam", "predicate": "employer", "value": "Acme", "kind": "fact", "valid_from": 10 }
+        }),
+    );
+    run(
+        database,
+        "correct",
+        json!({
+            "tenant_id": "tenant",
+            "person_id": "person",
+            "claim_id": remembered["claim_id"],
+            "text": "Sam works at Beta",
+            "value": "Beta",
+            "valid_at": 20,
+            "recorded_at": 21
+        }),
+    );
+
+    let mut request_cursor = (0, -1);
+    let mut applied_cursor = (0, -1);
+    let mut high_water = None;
+    let mut staged = BTreeMap::<i64, (i64, Vec<i64>, Vec<String>)>::new();
+    let mut correction_sequence = None;
+    loop {
+        let page = run(
+            database,
+            "export",
+            json!({
+                "export_format": 1,
+                "tenant_id": "tenant",
+                "person_id": "person",
+                "after_commit": request_cursor.0,
+                "after_event_index": request_cursor.1,
+                "high_water_mark": high_water,
+                "limit": 1
+            }),
+        );
+        high_water = Some(page["high_water_mark"].as_i64().unwrap());
+        for commit in page["commits"].as_array().unwrap() {
+            let sequence = commit["sequence"].as_i64().unwrap();
+            let event_count = commit["event_count"].as_i64().unwrap();
+            let first_index = commit["first_event_index"].as_i64().unwrap();
+            let records = commit["records"].as_array().unwrap();
+            let entry = staged
+                .entry(sequence)
+                .or_insert_with(|| (event_count, Vec::new(), Vec::new()));
+            assert_eq!(entry.0, event_count);
+            for (offset, record) in records.iter().enumerate() {
+                entry.1.push(first_index + offset as i64);
+                let kind = record["kind"].as_str().unwrap().to_owned();
+                if kind == "correction" {
+                    correction_sequence = Some(sequence);
+                }
+                entry.2.push(kind);
+            }
+            if entry.1.len() as i64 == event_count {
+                assert_eq!(entry.1, (0..event_count).collect::<Vec<_>>());
+                applied_cursor = (sequence, event_count - 1);
+            } else if correction_sequence == Some(sequence) {
+                assert!(applied_cursor.0 < sequence);
+            }
+        }
+        request_cursor = (
+            page["next_after_commit"].as_i64().unwrap(),
+            page["next_after_event_index"].as_i64().unwrap(),
+        );
+        if page["complete"] == true {
+            break;
+        }
+    }
+    let correction_sequence = correction_sequence.unwrap();
+    assert_eq!(applied_cursor.0, correction_sequence);
+    assert!(
+        staged[&correction_sequence]
+            .2
+            .contains(&"correction".to_owned())
+    );
     std::fs::remove_file(path).unwrap();
 }
