@@ -73,6 +73,58 @@ class PluginTest(unittest.TestCase):
             },
         )
 
+    def test_uses_explicit_bitemporal_tool_fields(self):
+        schemas = {schema["name"]: schema for schema in plugin.SCHEMAS}
+        store = schemas["zkr_store"]["parameters"]["properties"]
+        correct = schemas["zkr_correct"]["parameters"]["properties"]
+        self.assertIn("captured_at", store)
+        self.assertIn("valid_from", store)
+        self.assertIn("recorded_at", store)
+        self.assertNotIn("valid_at", store)
+        self.assertIn("valid_at", correct)
+        self.assertIn("recorded_at", correct)
+        self.assertNotIn("occurred_at", correct)
+
+    def test_store_preserves_captured_valid_and_recorded_times(self):
+        provider = plugin.ZkrMemoryProvider()
+        calls = []
+
+        def run(command, payload):
+            calls.append((command, payload))
+            return {"id": "ok"}
+
+        provider._run = run
+        provider.handle_tool_call(
+            "zkr_store",
+            {
+                "content": "The user moved in 2020.",
+                "captured_at": 1_700_000_000,
+                "valid_from": 1_600_000_000,
+                "recorded_at": 1_700_000_100,
+            },
+        )
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "remember",
+                    {
+                        "kind": "conversation",
+                        "text": "The user moved in 2020.",
+                        "captured_at": 1_700_000_000,
+                        "recorded_at": 1_700_000_100,
+                        "claim": {
+                            "subject": "user",
+                            "predicate": "remembers",
+                            "value": "The user moved in 2020.",
+                            "kind": "fact",
+                            "valid_from": 1_600_000_000,
+                        },
+                    },
+                )
+            ],
+        )
+
     def test_tool_errors_are_redacted(self):
         provider = plugin.ZkrMemoryProvider()
 
@@ -99,7 +151,9 @@ class PluginTest(unittest.TestCase):
                 "subject": "user",
                 "predicate": "prefers",
                 "value": "concise reports",
-                "occurred_at": 1_700_000_000,
+                "captured_at": 1_700_000_000,
+                "valid_from": 1_700_000_000,
+                "recorded_at": 1_700_000_000,
             }))
             recalled = json.loads(provider.handle_tool_call("zkr_search", {"query": "concise"}))
             self.assertEqual(recalled["items"][0]["memory"]["id"], stored["claim_id"])
@@ -108,7 +162,8 @@ class PluginTest(unittest.TestCase):
                 "claim_id": stored["claim_id"],
                 "content": "The user now prefers detailed reports",
                 "value": "detailed reports",
-                "occurred_at": 1_700_000_001,
+                "valid_at": 1_700_000_001,
+                "recorded_at": 1_700_000_001,
             }))
             reflected = json.loads(provider.handle_tool_call("zkr_reflect", {
                 "day": "2026-07-21",
@@ -166,6 +221,7 @@ class PluginTest(unittest.TestCase):
                 "kind": "conversation",
                 "text": "User: replay me\nAssistant: done",
                 "captured_at": 1_700_000_000,
+                "recorded_at": 1_700_000_000,
                 "ingestion_key": "hermes-turn:stable",
                 "claim": None,
             })
@@ -218,6 +274,7 @@ class PluginTest(unittest.TestCase):
                 "kind": "conversation",
                 "text": "",
                 "captured_at": 1_700_000_000,
+                "recorded_at": 1_700_000_000,
                 "ingestion_key": "hermes-turn:poison",
                 "claim": None,
             })
@@ -225,6 +282,7 @@ class PluginTest(unittest.TestCase):
                 "kind": "conversation",
                 "text": "User: remember violet\nAssistant: done",
                 "captured_at": 1_700_000_001,
+                "recorded_at": 1_700_000_001,
                 "ingestion_key": "hermes-turn:after-poison",
                 "claim": None,
             })
@@ -269,6 +327,7 @@ class PluginTest(unittest.TestCase):
                 "kind": "conversation",
                 "text": "User: foreign\nAssistant: turn",
                 "captured_at": 1_700_000_000,
+                "recorded_at": 1_700_000_000,
                 "ingestion_key": "hermes-turn:foreign",
                 "claim": None,
             }
@@ -276,6 +335,7 @@ class PluginTest(unittest.TestCase):
                 "kind": "conversation",
                 "text": "User: local\nAssistant: turn",
                 "captured_at": 1_700_000_001,
+                "recorded_at": 1_700_000_001,
                 "ingestion_key": "hermes-turn:local",
                 "claim": None,
             })

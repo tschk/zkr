@@ -63,11 +63,17 @@ SCHEMAS = [
             "subject": {"type": "string", "description": "Who or what the memory describes."},
             "predicate": {"type": "string", "description": "The relationship or property."},
             "value": {"type": "string", "description": "The normalized remembered value."},
-            "kind": {
+            "claim_kind": {
+                "type": "string",
+                "enum": ["fact", "profile_fact", "preference", "task", "skill", "recommendation"],
+            },
+            "source_kind": {
                 "type": "string",
                 "enum": ["conversation", "screen", "audio", "document", "integration", "user_correction"],
             },
-            "occurred_at": {"type": "integer", "description": "Unix timestamp; defaults to now."},
+            "captured_at": {"type": "integer", "description": "Unix timestamp; defaults to now."},
+            "valid_from": {"type": "integer", "description": "Unix timestamp; defaults to captured_at."},
+            "recorded_at": {"type": "integer", "description": "Unix timestamp; defaults to now."},
         },
         ["content"],
     ),
@@ -78,7 +84,8 @@ SCHEMAS = [
             "claim_id": {"type": "string"},
             "content": {"type": "string", "description": "The correction evidence."},
             "value": {"type": "string", "description": "The corrected normalized value."},
-            "occurred_at": {"type": "integer", "description": "Unix timestamp; defaults to now."},
+            "valid_at": {"type": "integer", "description": "Unix timestamp; defaults to now."},
+            "recorded_at": {"type": "integer", "description": "Unix timestamp; defaults to now."},
         },
         ["claim_id", "content", "value"],
     ),
@@ -192,19 +199,23 @@ class ZkrMemoryProvider(MemoryProvider):
             if tool_name == "zkr_search":
                 result = self._run("search", args)
             elif tool_name == "zkr_store":
-                occurred_at = int(args.get("occurred_at", now))
+                captured_at = int(args.get("captured_at", now))
+                valid_from = int(args.get("valid_from", captured_at))
+                recorded_at = int(args.get("recorded_at", now))
                 content = str(args["content"])
                 result = self._run(
                     "remember",
                     {
-                        "kind": args.get("kind", "conversation"),
+                        "kind": args.get("source_kind", "conversation"),
                         "text": content,
-                        "captured_at": occurred_at,
+                        "captured_at": captured_at,
+                        "recorded_at": recorded_at,
                         "claim": {
                             "subject": args.get("subject", "user"),
                             "predicate": args.get("predicate", "remembers"),
                             "value": args.get("value", content),
-                            "valid_from": occurred_at,
+                            "kind": args.get("claim_kind", "fact"),
+                            "valid_from": valid_from,
                         },
                     },
                 )
@@ -215,7 +226,8 @@ class ZkrMemoryProvider(MemoryProvider):
                         "claim_id": args["claim_id"],
                         "text": args["content"],
                         "value": args["value"],
-                        "occurred_at": int(args.get("occurred_at", now)),
+                        "valid_at": int(args.get("valid_at", now)),
+                        "recorded_at": int(args.get("recorded_at", now)),
                     },
                 )
             elif tool_name == "zkr_delete":
@@ -320,11 +332,13 @@ class ZkrMemoryProvider(MemoryProvider):
 
     def _enqueue_turn(self, text: str) -> None:
         self._ensure_queue()
+        recorded_at = int(time.time())
         payload = self._scope(
             {
                 "kind": "conversation",
                 "text": text,
-                "captured_at": int(time.time()),
+                "captured_at": recorded_at,
+                "recorded_at": recorded_at,
                 "ingestion_key": f"hermes-turn:{uuid.uuid4()}",
                 "claim": None,
             }

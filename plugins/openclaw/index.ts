@@ -8,11 +8,20 @@ import type {
 import { runZkr, type ZkrOptions } from "./cli.ts";
 
 const Timestamp = Type.Integer();
+const ClaimKind = Type.Union([
+  Type.Literal("fact"),
+  Type.Literal("profile_fact"),
+  Type.Literal("preference"),
+  Type.Literal("task"),
+  Type.Literal("skill"),
+  Type.Literal("recommendation"),
+]);
 const Claim = Type.Object(
   {
     subject: Type.String({ minLength: 1 }),
     predicate: Type.String({ minLength: 1 }),
     value: Type.String({ minLength: 1 }),
+    kind: ClaimKind,
     valid_from: Timestamp,
   },
   { additionalProperties: false },
@@ -255,6 +264,7 @@ export function tools(
           ]),
           text: Type.String({ minLength: 1 }),
           captured_at: Timestamp,
+          recorded_at: Timestamp,
           claim: Type.Optional(Claim),
         },
         { additionalProperties: false },
@@ -272,6 +282,15 @@ export function tools(
         {
           query: Type.String({ minLength: 1 }),
           limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+          as_of: Type.Optional(
+            Type.Object(
+              {
+                valid_at: Timestamp,
+                recorded_at: Timestamp,
+              },
+              { additionalProperties: false },
+            ),
+          ),
         },
         { additionalProperties: false },
       ),
@@ -289,7 +308,8 @@ export function tools(
           claim_id: Type.String({ minLength: 1 }),
           text: Type.String({ minLength: 1 }),
           value: Type.String({ minLength: 1 }),
-          occurred_at: Timestamp,
+          valid_at: Timestamp,
+          recorded_at: Timestamp,
         },
         { additionalProperties: false },
       ),

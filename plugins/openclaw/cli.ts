@@ -19,6 +19,7 @@ export type ZkrOptions = {
 };
 
 export const ZKR_COMMAND_FAILED = "zkr command failed";
+const MAX_ZKR_OUTPUT_BYTES = 1024 * 1024;
 
 export async function runZkr(
   operation: ZkrCommand,
@@ -34,26 +35,47 @@ export async function runZkr(
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });
-    const stdout: Buffer[] = [];
-    const timeout = setTimeout(() => child.kill(), 30_000);
-
-    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-    child.stderr.resume();
-    child.on("error", () => {
+    const output = { stdout: [] as Buffer[], stderr: [] as Buffer[] };
+    let outputBytes = 0;
+    let settled = false;
+    const timeout = setTimeout(() => fail(), 30_000);
+    const fail = (kill = true) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timeout);
+      if (kill) child.kill();
       reject(new Error(ZKR_COMMAND_FAILED));
+    };
+    const capture = (stream: Buffer[], chunk: Buffer) => {
+      if (settled) return;
+      outputBytes += chunk.length;
+      if (outputBytes > MAX_ZKR_OUTPUT_BYTES) {
+        fail();
+        return;
+      }
+      stream.push(chunk);
+    };
+
+    child.stdout.on("data", (chunk: Buffer) => capture(output.stdout, chunk));
+    child.stderr.on("data", (chunk: Buffer) => capture(output.stderr, chunk));
+    child.on("error", () => {
+      fail(false);
     });
     child.on("close", (code) => {
+      if (settled) return;
       clearTimeout(timeout);
-      const output = Buffer.concat(stdout).toString("utf8");
       if (code !== 0) {
-        reject(new Error(ZKR_COMMAND_FAILED));
+        fail(false);
         return;
       }
       try {
-        resolve(JSON.parse(output));
+        const parsed = JSON.parse(
+          Buffer.concat(output.stdout).toString("utf8"),
+        );
+        settled = true;
+        resolve(parsed);
       } catch {
-        reject(new Error(ZKR_COMMAND_FAILED));
+        fail(false);
       }
     });
     child.stdin.end(JSON.stringify(input));

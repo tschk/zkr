@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { runZkr, ZKR_COMMAND_FAILED } from "./cli.ts";
 import { tools, ZkrMemoryHost, zkrPlugin } from "./index.ts";
 
@@ -14,6 +17,46 @@ describe("zkr OpenClaw tools", () => {
     expect(String(failure)).toBe(`Error: ${ZKR_COMMAND_FAILED}`);
     expect(String(failure)).not.toContain(command);
   });
+
+  test("rejects malformed successful CLI output", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "zkr-openclaw-"));
+    const command = join(directory, "malformed-output.js");
+    try {
+      writeFileSync(
+        command,
+        '#!/usr/bin/env bun\nprocess.stdout.write("not json");\n',
+      );
+      chmodSync(command, 0o700);
+      await expect(runZkr("search", {}, { command })).rejects.toThrow(
+        ZKR_COMMAND_FAILED,
+      );
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  for (const stream of ["stdout", "stderr"] as const) {
+    test(`rejects oversized ${stream} without leaking it`, async () => {
+      const directory = mkdtempSync(join(tmpdir(), "zkr-openclaw-"));
+      const command = join(directory, "oversized-output.js");
+      const marker = `secret-${stream}-output`;
+      try {
+        writeFileSync(
+          command,
+          `#!/usr/bin/env bun\nprocess.${stream}.write(${JSON.stringify(marker)}.repeat(65536));\n`,
+        );
+        chmodSync(command, 0o700);
+        const failure = await runZkr("search", {}, { command }).catch(
+          (error: unknown) => error,
+        );
+
+        expect(String(failure)).toBe(`Error: ${ZKR_COMMAND_FAILED}`);
+        expect(String(failure)).not.toContain(marker);
+      } finally {
+        rmSync(directory, { force: true, recursive: true });
+      }
+    });
+  }
 
   test("maps native tools to the zkr CLI contract", async () => {
     const calls: unknown[][] = [];
@@ -47,6 +90,23 @@ describe("zkr OpenClaw tools", () => {
     expect(
       (search!.parameters as { properties: object }).properties,
     ).not.toHaveProperty("tenant_id");
+  });
+
+  test("requires explicit bitemporal fields in write contracts", () => {
+    const registered = tools({});
+    const store = registered.find((tool) => tool.name === "zkr_store");
+    const correct = registered.find((tool) => tool.name === "zkr_correct");
+    const search = registered.find((tool) => tool.name === "zkr_search");
+
+    expect((store!.parameters as { required: string[] }).required).toEqual(
+      expect.arrayContaining(["captured_at", "recorded_at"]),
+    );
+    expect((correct!.parameters as { required: string[] }).required).toEqual(
+      expect.arrayContaining(["valid_at", "recorded_at"]),
+    );
+    expect(
+      (search!.parameters as { properties: object }).properties,
+    ).toHaveProperty("as_of");
   });
 
   test("rejects invalid runtime read windows", async () => {

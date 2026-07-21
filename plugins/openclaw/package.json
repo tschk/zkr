@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "bun build index.ts --outdir dist --target node --external openclaw/plugin-sdk/plugin-entry",
-    "format": "bunx prettier --check .",
+    "format": "bun ./node_modules/prettier/bin/prettier.cjs --check .",
     "lint": "bun run typecheck",
     "test": "bun test",
     "typecheck": "bun ./node_modules/typescript/bin/tsc --noEmit"
