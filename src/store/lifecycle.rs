@@ -1,6 +1,5 @@
 use super::export::{
-    append_records, begin_commit, claim_evidence_record, claim_record, evidence_record,
-    source_record,
+    append_commit, claim_evidence_record, claim_record, evidence_record, source_record,
 };
 use super::*;
 
@@ -135,12 +134,6 @@ impl MemoryDb {
             "UPDATE sources SET origin_evidence_id = ?1, origin_claim_id = ?2 WHERE id = ?3 AND tenant_id = ?4 AND person_id = ?5",
             params![evidence_id.0, claim_id.as_ref().map(|id| &id.0), source_id.0, input.tenant_id.0, input.person_id.0],
         )?;
-        let commit = begin_commit(
-            &transaction,
-            &input.tenant_id,
-            &input.person_id,
-            input.recorded_at,
-        )?;
         let mut records = vec![
             ExportRecord::Source(source_record(
                 &transaction,
@@ -170,7 +163,13 @@ impl MemoryDb {
                 &evidence_id,
             )?));
         }
-        append_records(&transaction, commit, records)?;
+        append_commit(
+            &transaction,
+            &input.tenant_id,
+            &input.person_id,
+            input.recorded_at,
+            records,
+        )?;
         transaction.commit()?;
         Ok(Remembered {
             source_id,
@@ -286,12 +285,6 @@ impl MemoryDb {
             "INSERT INTO corrections(tenant_id, person_id, superseded_claim_id, claim_id, source_id, evidence_id, valid_at, recorded_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![correction.tenant_id.0, correction.person_id.0, correction.superseded_claim_id.0, correction.claim_id.0, correction.source_id.0, correction.evidence_id.0, correction.valid_at, correction.recorded_at],
         )?;
-        let commit = begin_commit(
-            &transaction,
-            &input.tenant_id,
-            &input.person_id,
-            input.recorded_at,
-        )?;
         let mut records = vec![
             ExportRecord::Source(source_record(
                 &transaction,
@@ -334,7 +327,13 @@ impl MemoryDb {
                 deleted_at: input.recorded_at,
             })
         }));
-        append_records(&transaction, commit, records)?;
+        append_commit(
+            &transaction,
+            &input.tenant_id,
+            &input.person_id,
+            input.recorded_at,
+            records,
+        )?;
         transaction.commit()?;
         Ok(Corrected {
             source_id,
@@ -450,12 +449,6 @@ impl MemoryDb {
             "DELETE FROM daily_reviews WHERE tenant_id = ?1 AND person_id = ?2 AND EXISTS (SELECT 1 FROM json_each(evidence_ids) citation JOIN evidence e ON e.id = citation.value WHERE e.source_id = ?3 AND e.tenant_id = ?1 AND e.person_id = ?2)",
             params![input.tenant_id.0, input.person_id.0, input.source_id.0],
         )?;
-        let commit = begin_commit(
-            &transaction,
-            &input.tenant_id,
-            &input.person_id,
-            input.deleted_at,
-        )?;
         let mut records = vec![
             ExportRecord::Source(source_record(
                 &transaction,
@@ -515,7 +508,13 @@ impl MemoryDb {
                 deleted_at: input.deleted_at,
             })
         }));
-        append_records(&transaction, commit, records)?;
+        append_commit(
+            &transaction,
+            &input.tenant_id,
+            &input.person_id,
+            input.deleted_at,
+            records,
+        )?;
         transaction.commit()?;
         Ok(Deleted {
             source_id: input.source_id,
@@ -569,15 +568,11 @@ impl MemoryDb {
             params![input.claim_id.0, input.tenant_id.0, input.person_id.0, input.evidence_id.0],
             |row| row.get(0),
         )?;
-        let commit = begin_commit(
+        append_commit(
             &transaction,
             &input.tenant_id,
             &input.person_id,
             recorded_at,
-        )?;
-        append_records(
-            &transaction,
-            commit,
             [ExportRecord::ClaimEvidence(claim_evidence_record(
                 &transaction,
                 &input.tenant_id,
@@ -657,15 +652,11 @@ impl MemoryDb {
             "INSERT INTO profile_entries(id, tenant_id, person_id, key, value, stability, claim_id, recorded_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) ON CONFLICT(tenant_id, person_id, key) DO UPDATE SET value = excluded.value, stability = excluded.stability, claim_id = excluded.claim_id, recorded_at = excluded.recorded_at",
             params![profile.id.0, profile.tenant_id.0, profile.person_id.0, profile.key, profile.value, stability, profile.claim_id.0, profile.recorded_at],
         )?;
-        let commit = begin_commit(
+        append_commit(
             &transaction,
             &profile.tenant_id,
             &profile.person_id,
             profile.recorded_at,
-        )?;
-        append_records(
-            &transaction,
-            commit,
             [ExportRecord::Profile(profile.clone())],
         )?;
         transaction.commit()?;
@@ -704,7 +695,7 @@ impl MemoryDb {
                 })
             },
         )?;
-        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+        collect_json_page(rows)
     }
 
     pub fn store_review(&mut self, input: ReviewInput) -> Result<StoredReview> {
@@ -742,13 +733,13 @@ impl MemoryDb {
             evidence_ids: input.evidence_ids,
             recorded_at: input.recorded_at,
         };
-        let commit = begin_commit(
+        append_commit(
             &transaction,
-            &review.tenant_id,
-            &review.person_id,
+            &input.tenant_id,
+            &input.person_id,
             review.recorded_at,
+            [ExportRecord::DailyReview(review)],
         )?;
-        append_records(&transaction, commit, [ExportRecord::DailyReview(review)])?;
         transaction.commit()?;
         Ok(StoredReview { id })
     }
@@ -782,7 +773,7 @@ impl MemoryDb {
                 })
             },
         )?;
-        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+        collect_json_page(rows)
     }
 }
 

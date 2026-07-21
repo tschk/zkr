@@ -13,6 +13,17 @@ pub(super) fn begin_commit(
     Ok(transaction.last_insert_rowid())
 }
 
+pub(super) fn append_commit(
+    transaction: &Transaction<'_>,
+    tenant_id: &TenantId,
+    person_id: &PersonId,
+    recorded_at: Timestamp,
+    records: impl IntoIterator<Item = ExportRecord>,
+) -> Result<()> {
+    let commit = begin_commit(transaction, tenant_id, person_id, recorded_at)?;
+    append_records(transaction, commit, records)
+}
+
 pub(super) fn append_records(
     transaction: &Transaction<'_>,
     commit_sequence: i64,
@@ -185,6 +196,59 @@ pub(super) fn claim_evidence_record(
             })
         },
     ).map_err(Error::from)
+}
+
+pub(super) fn profile_record(
+    transaction: &Transaction<'_>,
+    tenant_id: &TenantId,
+    person_id: &PersonId,
+    profile_id: &ProfileEntryId,
+) -> Result<ProfileEntry> {
+    transaction
+        .query_row(
+            "SELECT key, value, stability, claim_id, recorded_at FROM profile_entries WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3",
+            params![profile_id.0, tenant_id.0, person_id.0],
+            |row| {
+                let stability: String = row.get(2)?;
+                Ok(ProfileEntry {
+                    id: profile_id.clone(),
+                    tenant_id: tenant_id.clone(),
+                    person_id: person_id.clone(),
+                    key: row.get(0)?,
+                    value: row.get(1)?,
+                    stability: serde_json::from_str(&stability).map_err(sql_json_error)?,
+                    claim_id: ClaimId(row.get(3)?),
+                    recorded_at: row.get(4)?,
+                })
+            },
+        )
+        .map_err(Error::from)
+}
+
+pub(super) fn review_record(
+    transaction: &Transaction<'_>,
+    tenant_id: &TenantId,
+    person_id: &PersonId,
+    review_id: &DailyReviewId,
+) -> Result<DailyReview> {
+    transaction
+        .query_row(
+            "SELECT day, summary, evidence_ids, recorded_at FROM daily_reviews WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3",
+            params![review_id.0, tenant_id.0, person_id.0],
+            |row| {
+                let evidence_ids: String = row.get(2)?;
+                Ok(DailyReview {
+                    id: review_id.clone(),
+                    tenant_id: tenant_id.clone(),
+                    person_id: person_id.clone(),
+                    day: row.get(0)?,
+                    summary: row.get(1)?,
+                    evidence_ids: serde_json::from_str(&evidence_ids).map_err(sql_json_error)?,
+                    recorded_at: row.get(3)?,
+                })
+            },
+        )
+        .map_err(Error::from)
 }
 
 fn sql_json_error(error: serde_json::Error) -> rusqlite::Error {

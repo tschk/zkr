@@ -395,6 +395,52 @@ fn stale_projections_are_excluded_and_reported_with_current_inputs() {
 }
 
 #[test]
+fn projection_issues_stay_within_the_page_byte_limit() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    db.remember(remember_raw("a", "sam", &"x".repeat(600_000)))
+        .unwrap();
+    db.remember(remember_raw("a", "sam", &"y".repeat(600_000)))
+        .unwrap();
+
+    let issues = db
+        .projection_issues(ProjectionAuditInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            model: "test/model".into(),
+            version: "1".into(),
+            limit: 100,
+        })
+        .unwrap();
+
+    assert_eq!(issues.len(), 1);
+    assert!(serde_json::to_vec(&issues).unwrap().len() <= MAX_PROJECTION_PAGE_BYTES);
+}
+
+#[test]
+fn projection_issues_reject_an_individually_oversized_issue() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    db.remember(remember_raw("a", "sam", &"x".repeat(1_000_000)))
+        .unwrap();
+
+    assert!(matches!(
+        db.projection_issues(ProjectionAuditInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            model: "test/model".into(),
+            version: "1".into(),
+            limit: 100,
+        }),
+        Err(Error::Invalid(message)) if message.contains("page limit")
+    ));
+}
+
+#[test]
 fn embedding_rejects_input_hash_for_different_text() {
     let mut db = MemoryDb {
         connection: Connection::open_in_memory().unwrap(),

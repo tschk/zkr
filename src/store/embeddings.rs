@@ -468,6 +468,7 @@ impl MemoryDb {
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         let mut issues = Vec::new();
+        let mut page_bytes = 2;
         let limit = bounded_limit(input.limit) as usize;
         for (kind, id) in targets {
             let projection = self.projection_input(
@@ -512,13 +513,24 @@ impl MemoryDb {
                     }
                 }
             };
-            issues.push(ProjectionIssue {
+            let issue = ProjectionIssue {
                 state,
                 input: projection,
                 stored_target_revision: stored.as_ref().map(|value| value.0),
                 stored_input_hash: stored.as_ref().map(|value| value.1.clone()),
                 stored_created_at: stored.map(|value| value.2),
-            });
+            };
+            let issue_bytes = serde_json::to_vec(&issue)?.len();
+            if issue_bytes + 2 > MAX_PROJECTION_PAGE_BYTES {
+                return Err(Error::Invalid(format!(
+                    "projection issue exceeds the {MAX_PROJECTION_PAGE_BYTES}-byte page limit"
+                )));
+            }
+            if !issues.is_empty() && page_bytes + issue_bytes + 1 > MAX_PROJECTION_PAGE_BYTES {
+                break;
+            }
+            page_bytes += issue_bytes + usize::from(!issues.is_empty());
+            issues.push(issue);
             if issues.len() == limit {
                 break;
             }

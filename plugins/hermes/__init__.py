@@ -18,6 +18,7 @@ from tools.registry import tool_error
 
 logger = logging.getLogger(__name__)
 _MAX_QUEUE_ATTEMPTS = 3
+_MAX_QUEUE_PAYLOAD_BYTES = 1024 * 1024
 _QUEUE_LOCKS: dict[Path, threading.Lock] = {}
 _QUEUE_LOCKS_GUARD = threading.Lock()
 
@@ -343,10 +344,14 @@ class ZkrMemoryProvider(MemoryProvider):
                 "claim": None,
             }
         )
+        serialized = json.dumps(payload)
+        if len(serialized.encode()) > _MAX_QUEUE_PAYLOAD_BYTES:
+            logger.warning("skipping oversized zkr turn")
+            return
         with _connection(self._queue_path) as connection:
             connection.execute(
                 "INSERT INTO pending_turns(payload) VALUES(?)",
-                (json.dumps(payload),),
+                (serialized,),
             )
         self._start_worker()
         self._wake.set()

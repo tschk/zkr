@@ -311,6 +311,17 @@ class PluginTest(unittest.TestCase):
             self.assertEqual(failed[2], "zkr command failed")
             self.assertIn("remember violet", provider.prefetch("violet"))
 
+    def test_oversized_turn_is_not_queued(self):
+        with tempfile.TemporaryDirectory() as directory:
+            provider = plugin.ZkrMemoryProvider()
+            provider._queue_path = Path(directory) / "zkr.queue"
+            provider._ensure_queue()
+            provider._start_worker = lambda: None
+            provider.sync_turn("x" * plugin._MAX_QUEUE_PAYLOAD_BYTES, "")
+            with plugin._connection(provider._queue_path) as connection:
+                pending = connection.execute("SELECT count(*) FROM pending_turns").fetchone()
+            self.assertEqual(pending, (0,))
+
     def test_foreign_scope_queue_payload_is_quarantined(self):
         binary = Path(__file__).parents[2] / "target" / "debug" / "zkr"
         with tempfile.TemporaryDirectory() as directory:

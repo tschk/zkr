@@ -376,9 +376,11 @@ pub struct ExportPage {
 }
 
 pub const EXPORT_FORMAT_VERSION: u32 = 1;
-pub const DATABASE_SCHEMA_VERSION: i64 = 8;
+pub const DATABASE_SCHEMA_VERSION: i64 = schema::SCHEMA_VERSION;
 pub const MAX_EXPORT_RECORD_BYTES: usize = 1024 * 1024;
 pub const MAX_EXPORT_PAGE_BYTES: usize = 1024 * 1024;
+pub const MAX_PROJECTION_PAGE_BYTES: usize = 1_000_000;
+pub const MAX_READ_PAGE_BYTES: usize = 1_000_000;
 
 pub struct MemoryDb {
     connection: Connection,
@@ -423,6 +425,30 @@ const fn bounded_limit(limit: u32) -> u32 {
     } else {
         limit
     }
+}
+
+fn collect_json_page<T: Serialize>(
+    rows: impl Iterator<Item = rusqlite::Result<T>>,
+) -> Result<Vec<T>> {
+    let mut items = Vec::new();
+    let mut page_bytes = 2;
+    for item in rows {
+        let item = item?;
+        let item_bytes = serde_json::to_vec(&item)?.len();
+        if item_bytes + 2 > MAX_READ_PAGE_BYTES {
+            return Err(Error::Invalid(format!(
+                "read record exceeds the {MAX_READ_PAGE_BYTES}-byte page limit"
+            )));
+        }
+        if !items.is_empty() && page_bytes + item_bytes + 1 > MAX_READ_PAGE_BYTES {
+            return Err(Error::Invalid(format!(
+                "read page exceeds the {MAX_READ_PAGE_BYTES}-byte page limit"
+            )));
+        }
+        page_bytes += item_bytes + usize::from(!items.is_empty());
+        items.push(item);
+    }
+    Ok(items)
 }
 
 #[cfg(test)]

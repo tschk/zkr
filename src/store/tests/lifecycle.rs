@@ -508,6 +508,62 @@ fn profile_entries_and_claim_evidence_remain_scoped_and_live() {
 }
 
 #[test]
+fn profile_and_review_pages_are_byte_bounded() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    for (index, key) in ["first", "second"].into_iter().enumerate() {
+        let mut input = remember("a", "sam", &format!("{key}-{}", "x".repeat(600_000)));
+        input.claim.as_mut().unwrap().kind = ClaimKind::ProfileFact;
+        input.claim.as_mut().unwrap().predicate = key.into();
+        input.captured_at = index as i64 + 10;
+        input.recorded_at = index as i64 + 10;
+        input.claim.as_mut().unwrap().valid_from = input.recorded_at;
+        let remembered = db.remember(input).unwrap();
+        db.store_profile(ProfileInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            stability: ProfileStability::Current,
+            claim_id: remembered.claim_id.unwrap(),
+            recorded_at: index as i64 + 10,
+        })
+        .unwrap();
+    }
+    assert!(matches!(
+        db.profiles(ProfilesInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            limit: 100,
+        })
+        ,
+        Err(Error::Invalid(message)) if message.contains("page limit")
+    ));
+
+    let evidence = db.remember(remember("a", "sam", "support")).unwrap();
+    for (index, day) in ["2026-07-20", "2026-07-21"].into_iter().enumerate() {
+        db.store_review(ReviewInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            day: day.into(),
+            summary: "y".repeat(600_000),
+            evidence_ids: vec![evidence.evidence_id.clone()],
+            recorded_at: index as i64 + 20,
+        })
+        .unwrap();
+    }
+    assert!(matches!(
+        db.reviews(ReviewsInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            limit: 100,
+        })
+        ,
+        Err(Error::Invalid(message)) if message.contains("page limit")
+    ));
+}
+
+#[test]
 fn reviews_require_live_same_scope_evidence() {
     let mut db = MemoryDb {
         connection: Connection::open_in_memory().unwrap(),

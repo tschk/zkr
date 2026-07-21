@@ -1,7 +1,11 @@
+use super::export::{
+    append_records, claim_evidence_record, claim_record, evidence_record, profile_record,
+    review_record, source_record,
+};
 use super::*;
 use rusqlite::{Transaction, TransactionBehavior};
 
-const SCHEMA_VERSION: i64 = 8;
+pub(super) const SCHEMA_VERSION: i64 = 8;
 pub(super) const CLAIM_TIME_INTERVAL_ERROR: &str = "invalid claim half-open time interval";
 
 pub(super) fn migrate(connection: &mut Connection) -> Result<()> {
@@ -211,36 +215,116 @@ fn migrate_v8(transaction: &Transaction<'_>) -> Result<()> {
                UNION ALL SELECT tenant_id, person_id, recorded_from FROM claims
                UNION ALL SELECT tenant_id, person_id, recorded_at FROM profile_entries
                UNION ALL SELECT tenant_id, person_id, recorded_at FROM daily_reviews
-             ) GROUP BY tenant_id, person_id;
-             INSERT INTO memory_export_events(commit_sequence, event_index, payload)
-             SELECT commits.sequence, ROW_NUMBER() OVER (PARTITION BY snapshots.tenant_id, snapshots.person_id ORDER BY record_kind, record_id) - 1, payload
-             FROM (
-               SELECT s.tenant_id, s.person_id, 'source' record_kind, s.id record_id,
-                 json_object('kind','source','record',json_object('source',json_object('id',s.id,'tenant_id',s.tenant_id,'person_id',s.person_id,'revision',s.revision,'kind',json(s.kind),'content',s.content,'captured_at',s.captured_at,'recorded_at',s.recorded_at,'deleted_at',s.deleted_at),'ingestion_key',s.ingestion_key,'origin_evidence_id',s.origin_evidence_id,'origin_claim_id',s.origin_claim_id)) payload FROM sources s
-               UNION ALL SELECT e.tenant_id,e.person_id,'evidence',e.id,
-                 json_object('kind','evidence','record',json_object('evidence',json_object('id',e.id,'tenant_id',e.tenant_id,'person_id',e.person_id,'source_id',e.source_id,'source_revision',e.source_revision,'quote',e.quote,'byte_range',NULL,'recorded_at',e.recorded_at),'locator',CASE WHEN l.evidence_id IS NULL THEN NULL ELSE json_object('device_id',l.device_id,'provider',l.provider,'stream_id',l.stream_id,'segment_id',l.segment_id,'start_ms',l.start_ms,'end_ms',l.end_ms) END,'deleted_at',e.deleted_at)) FROM evidence e LEFT JOIN evidence_locators l ON l.evidence_id=e.id AND l.tenant_id=e.tenant_id AND l.person_id=e.person_id
-               UNION ALL SELECT c.tenant_id,c.person_id,'claim',c.id,
-                 json_object('kind','claim','record',json_object('id',c.id,'tenant_id',c.tenant_id,'person_id',c.person_id,'subject',c.subject,'predicate',c.predicate,'value',c.value,'kind',c.kind,'valid_time',json_object('from',c.valid_from,'until',c.valid_until),'recorded_time',json_object('from',c.recorded_from,'until',c.recorded_until),'status',c.status)) FROM claims c
-               UNION ALL SELECT ce.tenant_id,ce.person_id,'claim_evidence',ce.claim_id||':'||ce.evidence_id,
-                 json_object('kind','claim_evidence','record',json_object('tenant_id',ce.tenant_id,'person_id',ce.person_id,'claim_id',ce.claim_id,'evidence_id',ce.evidence_id,'relation',json(ce.relation),'confidence_basis_points',ce.confidence_basis_points)) FROM claim_evidence ce
-               UNION ALL SELECT p.tenant_id,p.person_id,'profile',p.id,
-                 json_object('kind','profile','record',json_object('id',p.id,'tenant_id',p.tenant_id,'person_id',p.person_id,'key',p.key,'value',p.value,'stability',json(p.stability),'claim_id',p.claim_id,'recorded_at',p.recorded_at)) FROM profile_entries p
-               UNION ALL SELECT r.tenant_id,r.person_id,'review',r.id,
-                 json_object('kind','daily_review','record',json_object('id',r.id,'tenant_id',r.tenant_id,'person_id',r.person_id,'day',r.day,'summary',r.summary,'evidence_ids',json(r.evidence_ids),'recorded_at',r.recorded_at)) FROM daily_reviews r
-             ) snapshots JOIN memory_commits commits USING(tenant_id, person_id);",
+             ) GROUP BY tenant_id, person_id;",
         )?;
-        let oversized: bool = transaction.query_row(
-            "SELECT EXISTS(SELECT 1 FROM memory_export_events WHERE length(CAST(payload AS BLOB)) > ?1)",
-            [MAX_EXPORT_RECORD_BYTES as i64],
-            |row| row.get(0),
-        )?;
-        if oversized {
-            return Err(Error::Invalid(format!(
-                "legacy authoritative record exceeds the {MAX_EXPORT_RECORD_BYTES}-byte export compatibility limit"
-            )));
-        }
+        bootstrap_export_events(transaction)?;
     }
     Ok(())
+}
+
+fn bootstrap_export_events(transaction: &Transaction<'_>) -> Result<()> {
+    let mut statement = transaction
+        .prepare("SELECT sequence, tenant_id, person_id FROM memory_commits ORDER BY sequence")?;
+    let commits = statement
+        .query_map([], |row| {
+            Ok((row.get(0)?, TenantId(row.get(1)?), PersonId(row.get(2)?)))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    drop(statement);
+    for (commit, tenant_id, person_id) in commits {
+        let records = bootstrap_records(transaction, &tenant_id, &person_id)?;
+        for record in &records {
+            if serde_json::to_vec(record)?.len() > MAX_EXPORT_RECORD_BYTES {
+                return Err(Error::Invalid(format!(
+                    "legacy authoritative record exceeds the {MAX_EXPORT_RECORD_BYTES}-byte export compatibility limit"
+                )));
+            }
+        }
+        append_records(transaction, commit, records)?;
+    }
+    Ok(())
+}
+
+fn bootstrap_records(
+    transaction: &Transaction<'_>,
+    tenant_id: &TenantId,
+    person_id: &PersonId,
+) -> Result<Vec<ExportRecord>> {
+    let mut records = Vec::new();
+    for source_id in scoped_ids(transaction, "sources", "id", tenant_id, person_id)? {
+        records.push(ExportRecord::Source(source_record(
+            transaction,
+            tenant_id,
+            person_id,
+            &SourceId(source_id),
+        )?));
+    }
+    for evidence_id in scoped_ids(transaction, "evidence", "id", tenant_id, person_id)? {
+        records.push(ExportRecord::Evidence(evidence_record(
+            transaction,
+            tenant_id,
+            person_id,
+            &EvidenceId(evidence_id),
+        )?));
+    }
+    for claim_id in scoped_ids(transaction, "claims", "id", tenant_id, person_id)? {
+        records.push(ExportRecord::Claim(claim_record(
+            transaction,
+            tenant_id,
+            person_id,
+            &ClaimId(claim_id),
+        )?));
+    }
+    let mut statement = transaction.prepare(
+        "SELECT claim_id, evidence_id FROM claim_evidence WHERE tenant_id = ?1 AND person_id = ?2 ORDER BY claim_id, evidence_id",
+    )?;
+    let claim_evidence = statement
+        .query_map(params![tenant_id.0, person_id.0], |row| {
+            Ok((ClaimId(row.get(0)?), EvidenceId(row.get(1)?)))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    drop(statement);
+    for (claim_id, evidence_id) in claim_evidence {
+        records.push(ExportRecord::ClaimEvidence(claim_evidence_record(
+            transaction,
+            tenant_id,
+            person_id,
+            &claim_id,
+            &evidence_id,
+        )?));
+    }
+    for profile_id in scoped_ids(transaction, "profile_entries", "id", tenant_id, person_id)? {
+        records.push(ExportRecord::Profile(profile_record(
+            transaction,
+            tenant_id,
+            person_id,
+            &ProfileEntryId(profile_id),
+        )?));
+    }
+    for review_id in scoped_ids(transaction, "daily_reviews", "id", tenant_id, person_id)? {
+        records.push(ExportRecord::DailyReview(review_record(
+            transaction,
+            tenant_id,
+            person_id,
+            &DailyReviewId(review_id),
+        )?));
+    }
+    Ok(records)
+}
+
+fn scoped_ids(
+    transaction: &Transaction<'_>,
+    table: &str,
+    column: &str,
+    tenant_id: &TenantId,
+    person_id: &PersonId,
+) -> Result<Vec<String>> {
+    let mut statement = transaction.prepare(&format!(
+        "SELECT {column} FROM {table} WHERE tenant_id = ?1 AND person_id = ?2 ORDER BY {column}"
+    ))?;
+    Ok(statement
+        .query_map(params![tenant_id.0, person_id.0], |row| row.get(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
 fn ensure_column(
