@@ -20,3 +20,24 @@ jobs:
       - run: cargo check --all-targets --all-features
       - run: cargo test --all-features
 
+  openclaw:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: plugins/openclaw
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run format
+      - run: bun run lint
+      - run: bun run test
+      - run: bun run build
+
+  hermes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --bin zkr
+      - run: python3 plugins/hermes/test_plugin.py
