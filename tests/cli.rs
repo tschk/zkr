@@ -23,6 +23,24 @@ fn run(database: &str, command: &str, input: Value) -> Value {
     serde_json::from_slice(&output.stdout).unwrap()
 }
 
+fn run_failure(database: &str, command: &str, input: Value) -> String {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_zkr"))
+        .args(["--db", database, command])
+        .stdin(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.to_string().as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(!output.status.success());
+    String::from_utf8(output.stderr).unwrap()
+}
+
 #[test]
 fn json_cli_remembers_and_returns_cited_search_results() {
     let nonce = SystemTime::now()
@@ -106,6 +124,41 @@ fn json_cli_retrieves_raw_capture_without_a_claim() {
         found["items"][0]["evidence_ids"][0],
         remembered["evidence_id"]
     );
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn json_cli_rejects_ingestion_key_conflicts_and_deleted_replays() {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("zkr-idempotency-{nonce}.db"));
+    let database = path.to_str().unwrap();
+    let input = json!({
+        "tenant_id": "tenant",
+        "person_id": "person",
+        "ingestion_key": "capture-1",
+        "kind": "screen",
+        "text": "Roadmap review is Thursday",
+        "captured_at": 10
+    });
+    let remembered = run(database, "remember", input.clone());
+    assert_eq!(run(database, "remember", input.clone()), remembered);
+    let mut changed = input.clone();
+    changed["text"] = json!("Changed replay content");
+    assert!(run_failure(database, "remember", changed).contains("ingestion_key conflicts"));
+    run(
+        database,
+        "delete",
+        json!({
+            "tenant_id": "tenant",
+            "person_id": "person",
+            "source_id": remembered["source_id"],
+            "deleted_at": 20
+        }),
+    );
+    assert!(run_failure(database, "remember", input).contains("record not found"));
     std::fs::remove_file(path).unwrap();
 }
 

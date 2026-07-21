@@ -265,17 +265,57 @@ impl MemoryDb {
             params![source_id.0, input.tenant_id.0, input.person_id.0, input.ingestion_key, kind, input.text, input.captured_at],
         )?;
         if inserted == 0 {
-            let remembered = transaction.query_row(
-                "SELECT s.id, e.id, c.id FROM sources s JOIN evidence e ON e.source_id = s.id AND e.tenant_id = s.tenant_id AND e.person_id = s.person_id LEFT JOIN claim_evidence ce ON ce.evidence_id = e.id AND ce.tenant_id = e.tenant_id AND ce.person_id = e.person_id LEFT JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id WHERE s.tenant_id = ?1 AND s.person_id = ?2 AND s.ingestion_key = ?3 ORDER BY e.id, c.id LIMIT 1",
+            let replay = transaction.query_row(
+                "SELECT s.id, e.id, c.id, s.kind, s.content, s.captured_at, s.deleted_at, e.deleted_at, c.subject, c.predicate, c.value, c.valid_from FROM sources s JOIN evidence e ON e.source_id = s.id AND e.tenant_id = s.tenant_id AND e.person_id = s.person_id LEFT JOIN claim_evidence ce ON ce.evidence_id = e.id AND ce.tenant_id = e.tenant_id AND ce.person_id = e.person_id LEFT JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id WHERE s.tenant_id = ?1 AND s.person_id = ?2 AND s.ingestion_key = ?3 ORDER BY e.id, c.id LIMIT 1",
                 params![input.tenant_id.0, input.person_id.0, input.ingestion_key],
-                |row| Ok(Remembered {
-                    source_id: SourceId(row.get(0)?),
-                    evidence_id: EvidenceId(row.get(1)?),
-                    claim_id: row.get::<_, Option<String>>(2)?.map(ClaimId),
-                }),
-            )?;
+                |row| {
+                    Ok((
+                        Remembered {
+                            source_id: SourceId(row.get(0)?),
+                            evidence_id: EvidenceId(row.get(1)?),
+                            claim_id: row.get::<_, Option<String>>(2)?.map(ClaimId),
+                        },
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, Option<i64>>(6)?,
+                        row.get::<_, Option<i64>>(7)?,
+                        row.get::<_, Option<String>>(8)?,
+                        row.get::<_, Option<String>>(9)?,
+                        row.get::<_, Option<String>>(10)?,
+                        row.get::<_, Option<i64>>(11)?,
+                    ))
+                },
+            ).optional()?.ok_or(Error::NotFound)?;
+            if replay.4.is_some() || replay.5.is_some() {
+                return Err(Error::NotFound);
+            }
+            let stored_claim = match (&replay.6, &replay.7, &replay.8, replay.9) {
+                (Some(subject), Some(predicate), Some(value), Some(valid_from)) => {
+                    Some((subject, predicate, value, valid_from))
+                }
+                (None, None, None, None) => None,
+                _ => return Err(Error::NotFound),
+            };
+            let input_claim = input.claim.as_ref().map(|claim| {
+                (
+                    &claim.subject,
+                    &claim.predicate,
+                    &claim.value,
+                    claim.valid_from,
+                )
+            });
+            if replay.1 != kind
+                || replay.2 != input.text
+                || replay.3 != input.captured_at
+                || stored_claim != input_claim
+            {
+                return Err(Error::Invalid(
+                    "ingestion_key conflicts with different memory payload".to_owned(),
+                ));
+            }
             transaction.commit()?;
-            return Ok(remembered);
+            return Ok(replay.0);
         }
         transaction.execute(
             "INSERT INTO source_fts(source_id, tenant_id, person_id, content) VALUES(?1, ?2, ?3, ?4)",
@@ -1146,7 +1186,7 @@ mod tests {
         let mut first = remember_raw("a", "sam", "Remember once");
         first.ingestion_key = Some("turn-1".into());
         let stored = db.remember(first).unwrap();
-        let mut replay = remember_raw("a", "sam", "Changed replay content");
+        let mut replay = remember_raw("a", "sam", "Remember once");
         replay.ingestion_key = Some("turn-1".into());
         let replayed = db.remember(replay).unwrap();
         assert_eq!(stored.source_id, replayed.source_id);
@@ -1158,6 +1198,80 @@ mod tests {
                 .unwrap(),
             1
         );
+        let mut other_scope = remember_raw("b", "sam", "Remember once");
+        other_scope.ingestion_key = Some("turn-1".into());
+        assert_ne!(
+            stored.source_id,
+            db.remember(other_scope).unwrap().source_id
+        );
+    }
+
+    #[test]
+    fn ingestion_key_rejects_changed_payload() {
+        let mut db = MemoryDb {
+            connection: Connection::open_in_memory().unwrap(),
+        };
+        db.migrate().unwrap();
+        let mut first = remember_raw("a", "sam", "Remember once");
+        first.ingestion_key = Some("turn-1".into());
+        db.remember(first).unwrap();
+        let changed_text = remember_raw("a", "sam", "Changed replay content");
+        let mut changed_kind = remember_raw("a", "sam", "Remember once");
+        changed_kind.kind = SourceKind::Screen;
+        let mut changed_time = remember_raw("a", "sam", "Remember once");
+        changed_time.captured_at = 11;
+        let mut changed_claim = remember_raw("a", "sam", "Remember once");
+        changed_claim.claim = Some(ClaimInput {
+            subject: "Sam".into(),
+            predicate: "status".into(),
+            value: "focused".into(),
+            valid_from: 10,
+        });
+        for mut changed in [changed_text, changed_kind, changed_time, changed_claim] {
+            changed.ingestion_key = Some("turn-1".into());
+            assert!(matches!(db.remember(changed), Err(Error::Invalid(_))));
+        }
+        let with_claim = |value: &str| {
+            let mut input = remember_raw("a", "sam", "Claim capture");
+            input.ingestion_key = Some("claim-turn".into());
+            input.claim = Some(ClaimInput {
+                subject: "Sam".into(),
+                predicate: "status".into(),
+                value: value.into(),
+                valid_from: 10,
+            });
+            input
+        };
+        let stored = db.remember(with_claim("focused")).unwrap();
+        assert_eq!(
+            stored.claim_id,
+            db.remember(with_claim("focused")).unwrap().claim_id
+        );
+        assert!(matches!(
+            db.remember(with_claim("distracted")),
+            Err(Error::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn ingestion_key_rejects_deleted_memory() {
+        let mut db = MemoryDb {
+            connection: Connection::open_in_memory().unwrap(),
+        };
+        db.migrate().unwrap();
+        let mut first = remember_raw("a", "sam", "Remember once");
+        first.ingestion_key = Some("turn-1".into());
+        let stored = db.remember(first).unwrap();
+        db.delete_source(DeleteInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            source_id: stored.source_id,
+            deleted_at: 20,
+        })
+        .unwrap();
+        let mut replay = remember_raw("a", "sam", "Remember once");
+        replay.ingestion_key = Some("turn-1".into());
+        assert!(matches!(db.remember(replay), Err(Error::NotFound)));
     }
 
     #[test]
