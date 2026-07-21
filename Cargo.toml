@@ -1,11 +1,12 @@
 [package]
-name = "kr-memory"
+name = "zkr"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Evidence-backed temporal memory for personal agents"
-repository = "https://github.com/tschk/kr"
-license = "MPL-2.0"
+repository = "https://github.com/tschk/zkr"
+license = "ISC"
+exclude = ["plugins/"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
