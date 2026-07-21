@@ -1,3 +1,4 @@
+use super::retrieval::RetrievalTarget;
 use super::*;
 use rusqlite::{Connection, OptionalExtension, params};
 use sha2::{Digest, Sha256};

@@ -1,7 +1,8 @@
 use super::*;
 use rusqlite::{Transaction, TransactionBehavior};
 
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
+pub(super) const CLAIM_TIME_INTERVAL_ERROR: &str = "invalid claim half-open time interval";
 
 pub(super) fn migrate(connection: &mut Connection) -> Result<()> {
     connection.execute_batch("PRAGMA foreign_keys = ON;")?;
@@ -33,6 +34,9 @@ pub(super) fn migrate(connection: &mut Connection) -> Result<()> {
     }
     if version < 6 {
         migrate_v6(&transaction)?;
+    }
+    if version < 7 {
+        migrate_v7(&transaction)?;
     }
     set_version(&transaction, SCHEMA_VERSION)?;
     transaction.commit()?;
@@ -158,6 +162,24 @@ fn migrate_v6(transaction: &Transaction<'_>) -> Result<()> {
         ",
     )?;
     install_profile_triggers(transaction)?;
+    Ok(())
+}
+
+fn migrate_v7(transaction: &Transaction<'_>) -> Result<()> {
+    let invalid = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM claims WHERE (valid_until IS NOT NULL AND valid_until <= valid_from) OR (recorded_until IS NOT NULL AND recorded_until <= recorded_from))",
+        [],
+        |row| row.get::<_, bool>(0),
+    )?;
+    if invalid {
+        return Err(Error::Invalid(
+            "legacy claim has an invalid half-open time interval".to_owned(),
+        ));
+    }
+    transaction.execute_batch(&format!(
+        "CREATE TRIGGER IF NOT EXISTS claim_time_interval_insert BEFORE INSERT ON claims FOR EACH ROW WHEN (NEW.valid_until IS NOT NULL AND NEW.valid_until <= NEW.valid_from) OR (NEW.recorded_until IS NOT NULL AND NEW.recorded_until <= NEW.recorded_from) BEGIN SELECT RAISE(ABORT, '{CLAIM_TIME_INTERVAL_ERROR}'); END;
+         CREATE TRIGGER IF NOT EXISTS claim_time_interval_update BEFORE UPDATE OF valid_from, valid_until, recorded_from, recorded_until ON claims FOR EACH ROW WHEN (NEW.valid_until IS NOT NULL AND NEW.valid_until <= NEW.valid_from) OR (NEW.recorded_until IS NOT NULL AND NEW.recorded_until <= NEW.recorded_from) BEGIN SELECT RAISE(ABORT, '{CLAIM_TIME_INTERVAL_ERROR}'); END;",
+    ))?;
     Ok(())
 }
 

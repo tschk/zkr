@@ -1,0 +1,569 @@
+use super::*;
+
+impl MemoryDb {
+    pub fn remember(&mut self, input: RememberInput) -> Result<Remembered> {
+        self.remember_with_locator(input, None)
+    }
+
+    pub fn remember_with_locator(
+        &mut self,
+        input: RememberInput,
+        locator: Option<TranscriptLocator>,
+    ) -> Result<Remembered> {
+        require_scope(&input.tenant_id, &input.person_id)?;
+        require_text("text", &input.text)?;
+        if let Some(locator) = &locator {
+            validate_transcript_locator(locator)?;
+        }
+        if let Some(key) = &input.ingestion_key {
+            require_text("ingestion_key", key)?;
+        }
+        let transaction = self.connection.transaction()?;
+        let source_id = SourceId(new_id(&transaction)?);
+        let evidence_id = EvidenceId(new_id(&transaction)?);
+        let kind = serde_json::to_string(&input.kind)?;
+        let inserted = transaction.execute(
+            "INSERT OR IGNORE INTO sources(id, tenant_id, person_id, ingestion_key, revision, kind, content, captured_at, recorded_at) VALUES(?1, ?2, ?3, ?4, 1, ?5, ?6, ?7, ?8)",
+            params![source_id.0, input.tenant_id.0, input.person_id.0, input.ingestion_key, kind, input.text, input.captured_at, input.recorded_at],
+        )?;
+        if inserted == 0 {
+            let replay = transaction.query_row(
+                "SELECT s.id, e.id, c.id, s.kind, s.content, s.captured_at, s.recorded_at, s.deleted_at, e.deleted_at, c.subject, c.predicate, c.value, c.valid_from, c.kind FROM sources s JOIN evidence e ON e.id = s.origin_evidence_id AND e.tenant_id = s.tenant_id AND e.person_id = s.person_id LEFT JOIN claims c ON c.id = s.origin_claim_id AND c.tenant_id = s.tenant_id AND c.person_id = s.person_id WHERE s.tenant_id = ?1 AND s.person_id = ?2 AND s.ingestion_key = ?3",
+                params![input.tenant_id.0, input.person_id.0, input.ingestion_key],
+                |row| {
+                    Ok((
+                        Remembered {
+                            source_id: SourceId(row.get(0)?),
+                            evidence_id: EvidenceId(row.get(1)?),
+                            claim_id: row.get::<_, Option<String>>(2)?.map(ClaimId),
+                        },
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, i64>(6)?,
+                        row.get::<_, Option<i64>>(7)?,
+                        row.get::<_, Option<i64>>(8)?,
+                        row.get::<_, Option<String>>(9)?,
+                        row.get::<_, Option<String>>(10)?,
+                        row.get::<_, Option<String>>(11)?,
+                        row.get::<_, Option<i64>>(12)?,
+                        row.get::<_, Option<String>>(13)?,
+                    ))
+                },
+            ).optional()?.ok_or(Error::NotFound)?;
+            if replay.5.is_some() || replay.6.is_some() {
+                return Err(Error::NotFound);
+            }
+            let stored_locator = transaction
+                .query_row(
+                    "SELECT device_id, provider, stream_id, segment_id, start_ms, end_ms FROM evidence_locators WHERE tenant_id = ?1 AND person_id = ?2 AND evidence_id = ?3",
+                    params![input.tenant_id.0, input.person_id.0, replay.0.evidence_id.0],
+                    |row| {
+                        Ok(TranscriptLocator {
+                            device_id: row.get(0)?,
+                            provider: row.get(1)?,
+                            stream_id: row.get(2)?,
+                            segment_id: row.get(3)?,
+                            start_ms: row.get(4)?,
+                            end_ms: row.get(5)?,
+                        })
+                    },
+                )
+                .optional()?;
+            let stored_claim = match (&replay.7, &replay.8, &replay.9, replay.10, &replay.11) {
+                (Some(subject), Some(predicate), Some(value), Some(valid_from), Some(kind)) => {
+                    Some((subject, predicate, value, valid_from, kind.as_str()))
+                }
+                (None, None, None, None, None) => None,
+                _ => return Err(Error::NotFound),
+            };
+            let input_claim = input.claim.as_ref().map(|claim| {
+                (
+                    &claim.subject,
+                    &claim.predicate,
+                    &claim.value,
+                    claim.valid_from,
+                    claim_kind_name(&claim.kind),
+                )
+            });
+            if replay.1 != kind
+                || replay.2 != input.text
+                || replay.3 != input.captured_at
+                || replay.4 != input.recorded_at
+                || stored_claim != input_claim
+                || stored_locator.as_ref() != locator.as_ref()
+            {
+                return Err(Error::Invalid(
+                    "ingestion_key conflicts with different memory payload".to_owned(),
+                ));
+            }
+            transaction.commit()?;
+            return Ok(replay.0);
+        }
+        transaction.execute(
+            "INSERT INTO source_fts(source_id, tenant_id, person_id, content) VALUES(?1, ?2, ?3, ?4)",
+            params![source_id.0, input.tenant_id.0, input.person_id.0, input.text],
+        )?;
+        transaction.execute(
+            "INSERT INTO evidence(id, tenant_id, person_id, source_id, source_revision, quote, recorded_at) VALUES(?1, ?2, ?3, ?4, 1, ?5, ?6)",
+            params![evidence_id.0, input.tenant_id.0, input.person_id.0, source_id.0, input.text, input.recorded_at],
+        )?;
+        if let Some(locator) = locator {
+            transaction.execute(
+                "INSERT INTO evidence_locators(tenant_id, person_id, evidence_id, device_id, provider, stream_id, segment_id, start_ms, end_ms) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![input.tenant_id.0, input.person_id.0, evidence_id.0, locator.device_id, locator.provider, locator.stream_id, locator.segment_id, locator.start_ms, locator.end_ms],
+            )?;
+        }
+        let claim_id = input
+            .claim
+            .map(|claim| {
+                insert_claim(
+                    &transaction,
+                    &input.tenant_id,
+                    &input.person_id,
+                    &evidence_id,
+                    claim,
+                    input.recorded_at,
+                )
+            })
+            .transpose()?;
+        transaction.execute(
+            "UPDATE sources SET origin_evidence_id = ?1, origin_claim_id = ?2 WHERE id = ?3 AND tenant_id = ?4 AND person_id = ?5",
+            params![evidence_id.0, claim_id.as_ref().map(|id| &id.0), source_id.0, input.tenant_id.0, input.person_id.0],
+        )?;
+        transaction.commit()?;
+        Ok(Remembered {
+            source_id,
+            evidence_id,
+            claim_id,
+        })
+    }
+
+    pub fn evidence_locator(
+        &self,
+        input: EvidenceLocatorInput,
+    ) -> Result<Option<TranscriptLocator>> {
+        require_scope(&input.tenant_id, &input.person_id)?;
+        let locator = self
+            .connection
+            .query_row(
+                "SELECT l.device_id, l.provider, l.stream_id, l.segment_id, l.start_ms, l.end_ms FROM evidence_locators l JOIN evidence e ON e.id = l.evidence_id AND e.tenant_id = l.tenant_id AND e.person_id = l.person_id WHERE l.tenant_id = ?1 AND l.person_id = ?2 AND l.evidence_id = ?3 AND e.deleted_at IS NULL",
+                params![input.tenant_id.0, input.person_id.0, input.evidence_id.0],
+                |row| {
+                    Ok(TranscriptLocator {
+                        device_id: row.get(0)?,
+                        provider: row.get(1)?,
+                        stream_id: row.get(2)?,
+                        segment_id: row.get(3)?,
+                        start_ms: row.get(4)?,
+                        end_ms: row.get(5)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(locator)
+    }
+
+    pub fn correct(&mut self, input: CorrectInput) -> Result<Corrected> {
+        require_scope(&input.tenant_id, &input.person_id)?;
+        require_text("correction text", &input.text)?;
+        require_text("value", &input.value)?;
+        let transaction = self.connection.transaction()?;
+        let old = transaction
+            .query_row(
+                "SELECT subject, predicate, kind, valid_from, recorded_from FROM claims WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND status = 'accepted'",
+                params![input.claim_id.0, input.tenant_id.0, input.person_id.0],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, i64>(3)?, row.get::<_, i64>(4)?)),
+            )
+            .optional()?
+            .ok_or(Error::NotFound)?;
+        if input.valid_at <= old.3 || input.recorded_at <= old.4 {
+            return Err(Error::Invalid(
+                "correction timestamps must advance the original valid and recorded intervals"
+                    .to_owned(),
+            ));
+        }
+        let source_id = SourceId(new_id(&transaction)?);
+        let evidence_id = EvidenceId(new_id(&transaction)?);
+        transaction.execute(
+            "INSERT INTO sources(id, tenant_id, person_id, revision, kind, content, captured_at, recorded_at) VALUES(?1, ?2, ?3, 1, '\"user_correction\"', ?4, ?5, ?6)",
+            params![source_id.0, input.tenant_id.0, input.person_id.0, input.text, input.valid_at, input.recorded_at],
+        )?;
+        transaction.execute(
+            "INSERT INTO source_fts(source_id, tenant_id, person_id, content) VALUES(?1, ?2, ?3, ?4)",
+            params![source_id.0, input.tenant_id.0, input.person_id.0, input.text],
+        )?;
+        transaction.execute(
+            "INSERT INTO evidence(id, tenant_id, person_id, source_id, source_revision, quote, recorded_at) VALUES(?1, ?2, ?3, ?4, 1, ?5, ?6)",
+            params![evidence_id.0, input.tenant_id.0, input.person_id.0, source_id.0, input.text, input.recorded_at],
+        )?;
+        transaction.execute(
+            "UPDATE claims SET status = 'superseded', valid_until = ?1, recorded_until = ?2 WHERE id = ?3 AND tenant_id = ?4 AND person_id = ?5",
+            params![input.valid_at, input.recorded_at, input.claim_id.0, input.tenant_id.0, input.person_id.0],
+        )?;
+        transaction.execute(
+            "DELETE FROM profile_entries WHERE tenant_id = ?1 AND person_id = ?2 AND claim_id = ?3",
+            params![input.tenant_id.0, input.person_id.0, input.claim_id.0],
+        )?;
+        let claim_id = insert_claim(
+            &transaction,
+            &input.tenant_id,
+            &input.person_id,
+            &evidence_id,
+            ClaimInput {
+                subject: old.0,
+                predicate: old.1,
+                value: input.value,
+                kind: claim_kind(&old.2)?,
+                valid_from: input.valid_at,
+            },
+            input.recorded_at,
+        )?;
+        transaction.execute(
+            "UPDATE sources SET origin_evidence_id = ?1, origin_claim_id = ?2 WHERE id = ?3 AND tenant_id = ?4 AND person_id = ?5",
+            params![evidence_id.0, claim_id.0, source_id.0, input.tenant_id.0, input.person_id.0],
+        )?;
+        transaction.commit()?;
+        Ok(Corrected {
+            source_id,
+            evidence_id,
+            claim_id,
+            superseded_claim_id: input.claim_id,
+        })
+    }
+
+    pub fn delete_source(&mut self, input: DeleteInput) -> Result<Deleted> {
+        require_scope(&input.tenant_id, &input.person_id)?;
+        let transaction = self.connection.transaction()?;
+        let recorded_at = transaction
+            .query_row(
+                "SELECT recorded_at FROM sources WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND deleted_at IS NULL",
+                params![input.source_id.0, input.tenant_id.0, input.person_id.0],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .ok_or(Error::NotFound)?;
+        if input.deleted_at < recorded_at {
+            return Err(Error::Invalid(
+                "deleted_at cannot predate source recording".to_owned(),
+            ));
+        }
+        let changed = transaction.execute(
+            "UPDATE sources SET deleted_at = ?1, revision = revision + 1 WHERE id = ?2 AND tenant_id = ?3 AND person_id = ?4 AND deleted_at IS NULL",
+            params![input.deleted_at, input.source_id.0, input.tenant_id.0, input.person_id.0],
+        )?;
+        if changed == 0 {
+            return Err(Error::NotFound);
+        }
+        transaction.execute(
+            "DELETE FROM source_fts WHERE source_id = ?1 AND tenant_id = ?2 AND person_id = ?3",
+            params![input.source_id.0, input.tenant_id.0, input.person_id.0],
+        )?;
+        let evidence_count = transaction.execute(
+            "UPDATE evidence SET deleted_at = ?1 WHERE source_id = ?2 AND tenant_id = ?3 AND person_id = ?4 AND deleted_at IS NULL",
+            params![input.deleted_at, input.source_id.0, input.tenant_id.0, input.person_id.0],
+        )? as u64;
+        let claim_count = transaction.execute(
+            "UPDATE claims SET status = 'retracted', recorded_until = ?1
+             WHERE tenant_id = ?2 AND person_id = ?3 AND status = 'accepted'
+             AND id IN (SELECT ce.claim_id FROM claim_evidence ce JOIN evidence e ON e.id = ce.evidence_id AND e.tenant_id = ce.tenant_id AND e.person_id = ce.person_id WHERE e.source_id = ?4)
+             AND NOT EXISTS (SELECT 1 FROM claim_evidence live_ce JOIN evidence live_e ON live_e.id = live_ce.evidence_id AND live_e.tenant_id = live_ce.tenant_id AND live_e.person_id = live_ce.person_id WHERE live_ce.claim_id = claims.id AND live_ce.relation = '\"supports\"' AND live_e.deleted_at IS NULL)",
+            params![input.deleted_at, input.tenant_id.0, input.person_id.0, input.source_id.0],
+        ).map_err(|error| match error {
+            rusqlite::Error::SqliteFailure(_, Some(message))
+                if message == schema::CLAIM_TIME_INTERVAL_ERROR =>
+            {
+                Error::Invalid(
+                    "deleted_at must advance affected claims' recorded intervals".to_owned(),
+                )
+            }
+            error => Error::Sql(error),
+        })? as u64;
+        transaction.execute(
+            "DELETE FROM embeddings WHERE tenant_id = ?1 AND person_id = ?2 AND ((target_kind = 'source' AND target_id = ?3) OR (target_kind = 'evidence' AND target_id IN (SELECT id FROM evidence WHERE source_id = ?3 AND tenant_id = ?1 AND person_id = ?2)) OR (target_kind = 'claim' AND target_id IN (SELECT c.id FROM claims c JOIN claim_evidence ce ON ce.claim_id = c.id AND ce.tenant_id = c.tenant_id AND ce.person_id = c.person_id JOIN evidence e ON e.id = ce.evidence_id AND e.tenant_id = ce.tenant_id AND e.person_id = ce.person_id WHERE c.tenant_id = ?1 AND c.person_id = ?2 AND c.status = 'retracted' AND e.source_id = ?3)))",
+            params![input.tenant_id.0, input.person_id.0, input.source_id.0],
+        )?;
+        transaction.execute(
+            "DELETE FROM profile_entries WHERE tenant_id = ?1 AND person_id = ?2 AND claim_id IN (SELECT id FROM claims WHERE tenant_id = ?1 AND person_id = ?2 AND status = 'retracted')",
+            params![input.tenant_id.0, input.person_id.0],
+        )?;
+        transaction.execute(
+            "DELETE FROM daily_reviews WHERE tenant_id = ?1 AND person_id = ?2 AND EXISTS (SELECT 1 FROM json_each(evidence_ids) citation JOIN evidence e ON e.id = citation.value WHERE e.source_id = ?3 AND e.tenant_id = ?1 AND e.person_id = ?2)",
+            params![input.tenant_id.0, input.person_id.0, input.source_id.0],
+        )?;
+        transaction.commit()?;
+        Ok(Deleted {
+            source_id: input.source_id,
+            evidence_count,
+            claim_count,
+        })
+    }
+
+    pub fn link_claim_evidence(&mut self, input: ClaimEvidence) -> Result<()> {
+        input
+            .validate()
+            .map_err(|error| Error::Invalid(error.to_string()))?;
+        require_scope(&input.tenant_id, &input.person_id)?;
+        let transaction = self.connection.transaction()?;
+        let claim_exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM claims WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND status = 'accepted')",
+            params![input.claim_id.0, input.tenant_id.0, input.person_id.0],
+            |row| row.get(0),
+        )?;
+        let evidence_exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM evidence WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND deleted_at IS NULL)",
+            params![input.evidence_id.0, input.tenant_id.0, input.person_id.0],
+            |row| row.get(0),
+        )?;
+        if !claim_exists || !evidence_exists {
+            return Err(Error::NotFound);
+        }
+        transaction.execute(
+            "INSERT INTO claim_evidence(tenant_id, person_id, claim_id, evidence_id, relation, confidence_basis_points) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+            params![input.tenant_id.0, input.person_id.0, input.claim_id.0, input.evidence_id.0, serde_json::to_string(&input.relation)?, input.confidence_basis_points],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn store_profile(&mut self, input: ProfileInput) -> Result<ProfileEntry> {
+        require_scope(&input.tenant_id, &input.person_id)?;
+        let transaction = self.connection.transaction()?;
+        let claim = transaction
+            .query_row(
+            "SELECT predicate, value, recorded_from FROM claims WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND kind = 'profile_fact' AND status = 'accepted' AND valid_until IS NULL AND recorded_until IS NULL",
+            params![input.claim_id.0, input.tenant_id.0, input.person_id.0],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Timestamp>(2)?)),
+        )
+            .optional()?;
+        let Some((key, value, claim_recorded_at)) = claim else {
+            return Err(Error::NotFound);
+        };
+        if input.recorded_at < claim_recorded_at {
+            return Err(Error::Invalid(
+                "profile entry cannot predate its backing claim".to_owned(),
+            ));
+        }
+        let existing = transaction
+            .query_row(
+                "SELECT id, value, stability, claim_id, recorded_at FROM profile_entries WHERE tenant_id = ?1 AND person_id = ?2 AND key = ?3",
+                params![input.tenant_id.0, input.person_id.0, key],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?, row.get::<_, Timestamp>(4)?)),
+            )
+            .optional()?;
+        let stability = serde_json::to_string(&input.stability)?;
+        if let Some((id, stored_value, stored_stability, stored_claim_id, stored_at)) = &existing {
+            if stored_value == &value
+                && stored_stability == &stability
+                && stored_claim_id == &input.claim_id.0
+                && *stored_at == input.recorded_at
+            {
+                transaction.commit()?;
+                return Ok(ProfileEntry {
+                    id: ProfileEntryId(id.clone()),
+                    tenant_id: input.tenant_id,
+                    person_id: input.person_id,
+                    key,
+                    value,
+                    stability: input.stability,
+                    claim_id: input.claim_id,
+                    recorded_at: input.recorded_at,
+                });
+            }
+            if input.recorded_at <= *stored_at {
+                return Err(Error::Invalid(
+                    "profile replacement must advance recorded_at".to_owned(),
+                ));
+            }
+        }
+        let profile = ProfileEntry {
+            id: existing
+                .as_ref()
+                .map(|existing| ProfileEntryId(existing.0.clone()))
+                .unwrap_or(ProfileEntryId(new_id(&transaction)?)),
+            tenant_id: input.tenant_id,
+            person_id: input.person_id,
+            key,
+            value,
+            stability: input.stability,
+            claim_id: input.claim_id,
+            recorded_at: input.recorded_at,
+        };
+        transaction.execute(
+            "INSERT INTO profile_entries(id, tenant_id, person_id, key, value, stability, claim_id, recorded_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) ON CONFLICT(tenant_id, person_id, key) DO UPDATE SET value = excluded.value, stability = excluded.stability, claim_id = excluded.claim_id, recorded_at = excluded.recorded_at",
+            params![profile.id.0, profile.tenant_id.0, profile.person_id.0, profile.key, profile.value, stability, profile.claim_id.0, profile.recorded_at],
+        )?;
+        transaction.commit()?;
+        Ok(profile)
+    }
+
+    pub fn profiles(&self, input: ProfilesInput) -> Result<Vec<ProfileEntry>> {
+        require_scope(&input.tenant_id, &input.person_id)?;
+        let mut statement = self.connection.prepare(
+            "SELECT p.id, p.key, p.value, p.stability, p.claim_id, p.recorded_at FROM profile_entries p JOIN claims c ON c.id = p.claim_id AND c.tenant_id = p.tenant_id AND c.person_id = p.person_id WHERE p.tenant_id = ?1 AND p.person_id = ?2 AND c.kind = 'profile_fact' AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL ORDER BY p.recorded_at DESC, p.id LIMIT ?3",
+        )?;
+        let rows = statement.query_map(
+            params![
+                input.tenant_id.0,
+                input.person_id.0,
+                bounded_limit(input.limit)
+            ],
+            |row| {
+                let stability: String = row.get(3)?;
+                let stability = serde_json::from_str(&stability).map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        3,
+                        rusqlite::types::Type::Text,
+                        Box::new(error),
+                    )
+                })?;
+                Ok(ProfileEntry {
+                    id: ProfileEntryId(row.get(0)?),
+                    tenant_id: input.tenant_id.clone(),
+                    person_id: input.person_id.clone(),
+                    key: row.get(1)?,
+                    value: row.get(2)?,
+                    stability,
+                    claim_id: ClaimId(row.get(4)?),
+                    recorded_at: row.get(5)?,
+                })
+            },
+        )?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    pub fn store_review(&mut self, input: ReviewInput) -> Result<StoredReview> {
+        require_scope(&input.tenant_id, &input.person_id)?;
+        require_text("day", &input.day)?;
+        require_text("summary", &input.summary)?;
+        if input.evidence_ids.is_empty() {
+            return Err(Error::Invalid("review needs evidence_ids".to_owned()));
+        }
+        let transaction = self.connection.transaction()?;
+        for evidence_id in &input.evidence_ids {
+            let found: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM evidence WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND deleted_at IS NULL)",
+                params![evidence_id.0, input.tenant_id.0, input.person_id.0],
+                |row| row.get(0),
+            )?;
+            if !found {
+                return Err(Error::Invalid(format!(
+                    "evidence {} is unavailable",
+                    evidence_id.0
+                )));
+            }
+        }
+        let id = DailyReviewId(new_id(&transaction)?);
+        transaction.execute(
+            "INSERT INTO daily_reviews(id, tenant_id, person_id, day, summary, evidence_ids, recorded_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![id.0, input.tenant_id.0, input.person_id.0, input.day, input.summary, serde_json::to_string(&input.evidence_ids)?, input.recorded_at],
+        )?;
+        transaction.commit()?;
+        Ok(StoredReview { id })
+    }
+
+    pub fn reviews(&self, input: ReviewsInput) -> Result<Vec<ReviewRecord>> {
+        require_scope(&input.tenant_id, &input.person_id)?;
+        let mut statement = self.connection.prepare(
+            "SELECT id, day, summary, evidence_ids, recorded_at FROM daily_reviews WHERE tenant_id = ?1 AND person_id = ?2 ORDER BY day DESC, recorded_at DESC LIMIT ?3",
+        )?;
+        let rows = statement.query_map(
+            params![
+                input.tenant_id.0,
+                input.person_id.0,
+                bounded_limit(input.limit)
+            ],
+            |row| {
+                let json: String = row.get(3)?;
+                let evidence_ids = serde_json::from_str(&json).map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        3,
+                        rusqlite::types::Type::Text,
+                        Box::new(error),
+                    )
+                })?;
+                Ok(ReviewRecord {
+                    id: DailyReviewId(row.get(0)?),
+                    day: row.get(1)?,
+                    summary: row.get(2)?,
+                    evidence_ids,
+                    recorded_at: row.get(4)?,
+                })
+            },
+        )?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+}
+
+fn insert_claim(
+    transaction: &Transaction<'_>,
+    tenant_id: &TenantId,
+    person_id: &PersonId,
+    evidence_id: &EvidenceId,
+    claim: ClaimInput,
+    recorded_at: Timestamp,
+) -> Result<ClaimId> {
+    require_text("claim subject", &claim.subject)?;
+    require_text("claim predicate", &claim.predicate)?;
+    require_text("claim value", &claim.value)?;
+    let id = ClaimId(new_id(transaction)?);
+    transaction.execute(
+        "INSERT INTO claims(id, tenant_id, person_id, subject, predicate, value, kind, valid_from, recorded_from, status) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'accepted')",
+        params![id.0, tenant_id.0, person_id.0, claim.subject, claim.predicate, claim.value, claim_kind_name(&claim.kind), claim.valid_from, recorded_at],
+    )?;
+    let relation = serde_json::to_string(&EvidenceRelation::Supports)?;
+    transaction.execute(
+        "INSERT INTO claim_evidence(tenant_id, person_id, claim_id, evidence_id, relation, confidence_basis_points) VALUES(?1, ?2, ?3, ?4, ?5, 10000)",
+        params![tenant_id.0, person_id.0, id.0, evidence_id.0, relation],
+    )?;
+    Ok(id)
+}
+
+fn claim_kind_name(kind: &ClaimKind) -> &'static str {
+    match kind {
+        ClaimKind::Fact => "fact",
+        ClaimKind::ProfileFact => "profile_fact",
+        ClaimKind::Preference => "preference",
+        ClaimKind::Task => "task",
+        ClaimKind::Skill => "skill",
+        ClaimKind::Recommendation => "recommendation",
+    }
+}
+
+fn claim_kind(value: &str) -> Result<ClaimKind> {
+    match value {
+        "fact" => Ok(ClaimKind::Fact),
+        "profile_fact" => Ok(ClaimKind::ProfileFact),
+        "preference" => Ok(ClaimKind::Preference),
+        "task" => Ok(ClaimKind::Task),
+        "skill" => Ok(ClaimKind::Skill),
+        "recommendation" => Ok(ClaimKind::Recommendation),
+        _ => Err(Error::Invalid("stored claim kind is invalid".to_owned())),
+    }
+}
+
+fn validate_transcript_locator(locator: &TranscriptLocator) -> Result<()> {
+    for (field, value) in [
+        ("locator.device_id", locator.device_id.as_str()),
+        ("locator.provider", locator.provider.as_str()),
+        ("locator.stream_id", locator.stream_id.as_str()),
+        ("locator.segment_id", locator.segment_id.as_str()),
+    ] {
+        require_text(field, value)?;
+    }
+    if locator.start_ms > locator.end_ms {
+        return Err(Error::Invalid(
+            "locator end_ms must not precede start_ms".to_owned(),
+        ));
+    }
+    if locator.end_ms > i64::MAX as u64 {
+        return Err(Error::Invalid(
+            "locator end_ms exceeds the storage range".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn new_id(transaction: &Transaction<'_>) -> Result<String> {
+    Ok(transaction.query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))?)
+}
