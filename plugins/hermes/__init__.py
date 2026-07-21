@@ -239,8 +239,9 @@ class ZkrMemoryProvider(MemoryProvider):
             else:
                 return tool_error(f"Unknown tool: {tool_name}")
             return json.dumps(result)
-        except (KeyError, TypeError, ValueError, RuntimeError) as error:
-            return tool_error(str(error))
+        except (KeyError, TypeError, ValueError, RuntimeError):
+            logger.debug("zkr tool call failed")
+            return tool_error("zkr operation failed")
 
     def backup_paths(self) -> list[str]:
         return [str(self._db), str(self._queue_path)]
@@ -349,25 +350,38 @@ class ZkrMemoryProvider(MemoryProvider):
                     item_id, payload, attempts = pending
                     try:
                         decoded = json.loads(payload)
-                    except json.JSONDecodeError as error:
+                    except json.JSONDecodeError:
                         logger.warning("quarantining invalid zkr queue payload")
                         with _connection(self._queue_path) as connection:
                             connection.execute(
                                 "INSERT OR REPLACE INTO failed_turns(id, payload, attempts, last_error, failed_at) VALUES(?, ?, 1, ?, ?)",
-                                (item_id, payload, str(error), int(time.time())),
+                                (item_id, payload, "invalid queued payload", int(time.time())),
+                            )
+                            connection.execute("DELETE FROM pending_turns WHERE id = ?", (item_id,))
+                        continue
+                    if (
+                        not isinstance(decoded, dict)
+                        or decoded.get("tenant_id") != self._tenant_id
+                        or decoded.get("person_id") != self._person_id
+                    ):
+                        logger.warning("quarantining zkr queue payload outside provider scope")
+                        with _connection(self._queue_path) as connection:
+                            connection.execute(
+                                "INSERT OR REPLACE INTO failed_turns(id, payload, attempts, last_error, failed_at) VALUES(?, ?, 1, ?, ?)",
+                                (item_id, payload, "queued payload outside provider scope", int(time.time())),
                             )
                             connection.execute("DELETE FROM pending_turns WHERE id = ?", (item_id,))
                         continue
                     try:
                         self._run_payload("remember", decoded)
-                    except RuntimeError as error:
-                        logger.debug("zkr turn capture failed", exc_info=True)
+                    except RuntimeError:
+                        logger.debug("zkr turn capture failed")
                         attempts += 1
                         with _connection(self._queue_path) as connection:
                             if attempts >= _MAX_QUEUE_ATTEMPTS:
                                 connection.execute(
                                     "INSERT OR REPLACE INTO failed_turns(id, payload, attempts, last_error, failed_at) VALUES(?, ?, ?, ?, ?)",
-                                    (item_id, payload, attempts, str(error), int(time.time())),
+                                    (item_id, payload, attempts, "zkr command failed", int(time.time())),
                                 )
                                 connection.execute(
                                     "DELETE FROM pending_turns WHERE id = ?", (item_id,)
@@ -375,7 +389,7 @@ class ZkrMemoryProvider(MemoryProvider):
                             else:
                                 connection.execute(
                                     "UPDATE pending_turns SET attempts = ?, last_error = ? WHERE id = ?",
-                                    (attempts, str(error), item_id),
+                                    (attempts, "zkr command failed", item_id),
                                 )
                         if attempts >= _MAX_QUEUE_ATTEMPTS:
                             continue

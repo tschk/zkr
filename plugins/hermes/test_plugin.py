@@ -73,6 +73,17 @@ class PluginTest(unittest.TestCase):
             },
         )
 
+    def test_tool_errors_are_redacted(self):
+        provider = plugin.ZkrMemoryProvider()
+
+        def run(command, payload):
+            raise RuntimeError("sensitive source evidence")
+
+        provider._run = run
+        result = json.loads(provider.handle_tool_call("zkr_search", {"query": "memory"}))
+        self.assertEqual(result, {"error": "zkr operation failed"})
+
+
     def test_compiled_cli_sqlite_round_trip(self):
         binary = Path(__file__).parents[2] / "target" / "debug" / "zkr"
         self.assertTrue(binary.is_file(), "run cargo build --bin zkr first")
@@ -239,8 +250,53 @@ class PluginTest(unittest.TestCase):
                 ).fetchone()
             self.assertEqual(json.loads(failed[0]), poison)
             self.assertEqual(failed[1], plugin._MAX_QUEUE_ATTEMPTS)
-            self.assertIn("text must not be empty", failed[2])
+            self.assertEqual(failed[2], "zkr command failed")
             self.assertIn("remember violet", provider.prefetch("violet"))
+
+    def test_foreign_scope_queue_payload_is_quarantined(self):
+        binary = Path(__file__).parents[2] / "target" / "debug" / "zkr"
+        with tempfile.TemporaryDirectory() as directory:
+            provider = plugin.ZkrMemoryProvider()
+            provider._binary = str(binary)
+            provider._db = Path(directory) / "memory.db"
+            provider._queue_path = Path(f"{provider._db}.queue")
+            provider._tenant_id = "tenant-a"
+            provider._person_id = "person-a"
+            provider._ensure_queue()
+            foreign = {
+                "tenant_id": "tenant-b",
+                "person_id": "person-b",
+                "kind": "conversation",
+                "text": "User: foreign\nAssistant: turn",
+                "captured_at": 1_700_000_000,
+                "ingestion_key": "hermes-turn:foreign",
+                "claim": None,
+            }
+            valid = provider._scope({
+                "kind": "conversation",
+                "text": "User: local\nAssistant: turn",
+                "captured_at": 1_700_000_001,
+                "ingestion_key": "hermes-turn:local",
+                "claim": None,
+            })
+            with plugin._connection(provider._queue_path) as connection:
+                connection.executemany(
+                    "INSERT INTO pending_turns(payload) VALUES(?)",
+                    [(json.dumps(foreign),), (json.dumps(valid),)],
+                )
+            provider._start_worker()
+            deadline = plugin.time.time() + 5
+            while plugin.time.time() < deadline:
+                with plugin._connection(provider._queue_path) as connection:
+                    if connection.execute("SELECT count(*) FROM pending_turns").fetchone()[0] == 0:
+                        break
+                plugin.time.sleep(0.05)
+            provider.shutdown()
+            with plugin._connection(provider._queue_path) as connection:
+                failed = connection.execute("SELECT last_error FROM failed_turns").fetchone()
+            self.assertEqual(failed, ("queued payload outside provider scope",))
+            self.assertIn("local", provider.prefetch("local"))
+            self.assertEqual(provider.prefetch("foreign"), "")
 
     def test_legacy_queue_schema_migrates_without_losing_pending_turns(self):
         with tempfile.TemporaryDirectory() as directory:

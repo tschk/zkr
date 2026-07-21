@@ -41,7 +41,7 @@ Native plugin sources are available from the repository checkout and are not inc
 
 ### OpenClaw
 
-Link or copy `plugins/openclaw` into an OpenClaw extension location, install it with Bun, then enable the `zkr` memory slot. It implements OpenClaw's native memory capability plus `memory_search` and `memory_get`, while preserving the explicit `zkr_*` tools. Its optional `command`, `database`, `tenant`, and `person` settings default to `zkr`, `~/.zkr/memory.db`, `openclaw`, and the active agent ID.
+Link or copy `plugins/openclaw` into an OpenClaw extension location, install it with Bun, then enable the `zkr` memory slot. It implements OpenClaw's native memory capability plus `memory_search` and `memory_get`, while preserving the explicit `zkr_*` tools. Its optional `command`, `database`, `tenant`, and `person` settings default to `zkr`, `~/.zkr/memory.db`, `openclaw`, and the active agent ID. The plugin is tested against OpenClaw `2026.7.1-2` (plugin API and gateway); its Bun ES module sources invoke only the local zkr CLI, so it does not provide an embedding service, telemetry, host scheduling, or agent lifecycle management.
 
 ### Hermes Agent
 
@@ -52,7 +52,7 @@ memory:
   provider: zkr
 ```
 
-Both plugins expose store, search, correction, deletion, and cited reflection through the neutral CLI. Hermes persists completed turns to a local write-behind queue before returning, recovers pending turns on startup, flushes on shutdown, and skips non-primary agent contexts. The plugins do not add framework dependencies to the Rust crate.
+Both plugins expose store, search, correction, deletion, and cited reflection through the neutral CLI. Hermes supports Hermes Agent 0.19.0 and Python 3.11–3.13 through its native Python `MemoryProvider` contract, persists completed turns to a local write-behind queue before returning, recovers pending turns on startup, flushes on shutdown, and skips non-primary agent contexts. Queue records outside the configured tenant and person are quarantined. The plugins do not add framework dependencies to the Rust crate.
 
 ## Development
 

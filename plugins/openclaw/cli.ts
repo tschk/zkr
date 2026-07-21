@@ -18,6 +18,8 @@ export type ZkrOptions = {
   person?: string;
 };
 
+export const ZKR_COMMAND_FAILED = "zkr command failed";
+
 export async function runZkr(
   operation: ZkrCommand,
   input: unknown,
@@ -33,27 +35,25 @@ export async function runZkr(
       windowsHide: true,
     });
     const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
     const timeout = setTimeout(() => child.kill(), 30_000);
 
     child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-    child.on("error", (error) => {
+    child.stderr.resume();
+    child.on("error", () => {
       clearTimeout(timeout);
-      reject(error);
+      reject(new Error(ZKR_COMMAND_FAILED));
     });
     child.on("close", (code) => {
       clearTimeout(timeout);
       const output = Buffer.concat(stdout).toString("utf8");
-      const error = Buffer.concat(stderr).toString("utf8").trim();
       if (code !== 0) {
-        reject(new Error(error || `zkr exited with status ${code}`));
+        reject(new Error(ZKR_COMMAND_FAILED));
         return;
       }
       try {
         resolve(JSON.parse(output));
       } catch {
-        reject(new Error("zkr returned invalid JSON"));
+        reject(new Error(ZKR_COMMAND_FAILED));
       }
     });
     child.stdin.end(JSON.stringify(input));
