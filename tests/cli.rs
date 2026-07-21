@@ -52,5 +52,49 @@ fn json_cli_remembers_and_returns_cited_search_results() {
         found["items"][0]["evidence_ids"][0],
         remembered["evidence_id"]
     );
+    let projections = run(
+        database,
+        "projections",
+        json!({ "tenant_id": "tenant", "person_id": "person", "model": "test/model", "version": "1", "limit": 1 }),
+    );
+    assert_eq!(projections[0]["state"], "missing");
+    assert!(
+        projections[0]["input"]["input_hash"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:")
+    );
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn json_cli_retrieves_raw_capture_without_a_claim() {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("zkr-raw-{nonce}.db"));
+    let database = path.to_str().unwrap();
+    let remembered = run(
+        database,
+        "remember",
+        json!({
+            "tenant_id": "tenant",
+            "person_id": "person",
+            "kind": "screen",
+            "text": "Roadmap review is Thursday",
+            "captured_at": 10
+        }),
+    );
+    let found = run(
+        database,
+        "search",
+        json!({ "tenant_id": "tenant", "person_id": "person", "query": "Thursday", "limit": 1 }),
+    );
+    assert_eq!(found["items"][0]["memory"]["kind"], "source");
+    assert_eq!(
+        found["items"][0]["evidence_ids"][0],
+        remembered["evidence_id"]
+    );
     std::fs::remove_file(path).unwrap();
 }

@@ -15,7 +15,7 @@ Deleting a source tombstones it. Derived records without remaining support are r
 
 ## Retrieval
 
-Keyword, vector, graph, and recency results are projections over durable records. A retrieval pack is bounded and contains citations plus explicit gaps. A caller can answer from the pack, request more evidence, or say the memory is insufficient.
+Keyword, vector, graph, and recency results are projections over durable records. A retrieval pack is bounded and contains citations plus explicit gaps. Before extraction, a pack can cite a live source or evidence record directly; after an accepted claim is linked, retrieval returns the claim without also emitting its supporting source. A caller can answer from the pack, request more evidence, or say the memory is insufficient.
 
 ## Reflection
 

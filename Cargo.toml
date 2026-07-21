@@ -1,6 +1,6 @@
 [package]
 name = "zkr"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.85"
 description = "Evidence-backed temporal memory for personal agents"
@@ -12,6 +12,7 @@ exclude = ["plugins/"]
 rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 thiserror = "2"
 
 [lints.rust]

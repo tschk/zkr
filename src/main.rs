@@ -2,10 +2,11 @@ use serde::de::DeserializeOwned;
 use serde_json::json;
 use std::{env, io::Read, process::ExitCode};
 use zkr::{
-    CorrectInput, DeleteInput, EmbeddingInput, MemoryDb, ReviewInput, ReviewsInput, SearchInput,
+    CorrectInput, DeleteInput, EmbeddingInput, MemoryDb, ProjectionAuditInput, ReviewInput,
+    ReviewsInput, SearchInput,
 };
 
-const HELP: &str = "zkr --db PATH COMMAND\n\nCommands (read one JSON object from stdin; write JSON to stdout):\n  remember  Store source evidence and an optional claim\n  search    Retrieve bounded, cited claim matches\n  correct   Supersede a claim using new correction evidence\n  delete    Tombstone a source and propagate unavailable evidence\n  review    Store a cited daily review without invoking an LLM\n  reviews   Retrieve bounded daily reviews\n  embed     Upsert a rebuildable embedding projection\n  help      Show this help\n";
+const HELP: &str = "zkr --db PATH COMMAND\n\nCommands (read one JSON object from stdin; write JSON to stdout):\n  remember     Store source evidence and an optional claim\n  search       Retrieve bounded, cited memory matches\n  correct      Supersede a claim using new correction evidence\n  delete       Tombstone a source and propagate unavailable evidence\n  review       Store a cited daily review without invoking an LLM\n  reviews      Retrieve bounded daily reviews\n  projections  List bounded stale or missing embedding inputs\n  embed        Upsert a rebuildable embedding projection\n  help         Show this help\n";
 
 fn main() -> ExitCode {
     match run() {
@@ -43,6 +44,9 @@ fn run() -> Result<Option<serde_json::Value>, Box<dyn std::error::Error>> {
         "delete" => serde_json::to_value(database.delete_source(read_json::<DeleteInput>()?)?)?,
         "review" => serde_json::to_value(database.store_review(read_json::<ReviewInput>()?)?)?,
         "reviews" => serde_json::to_value(database.reviews(read_json::<ReviewsInput>()?)?)?,
+        "projections" => {
+            serde_json::to_value(database.projection_issues(read_json::<ProjectionAuditInput>()?)?)?
+        }
         "embed" => {
             serde_json::to_value(database.upsert_embedding(read_json::<EmbeddingInput>()?)?)?
         }

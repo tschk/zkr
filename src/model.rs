@@ -379,6 +379,8 @@ impl RetrievalItem {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "id", rename_all = "snake_case")]
 pub enum MemoryRef {
+    Source(SourceId),
+    Evidence(EvidenceId),
     Claim(ClaimId),
     ProfileEntry(ProfileEntryId),
     DailyReview(DailyReviewId),
@@ -387,6 +389,8 @@ pub enum MemoryRef {
 impl MemoryRef {
     fn validate(&self) -> Result<(), ValidationError> {
         match self {
+            Self::Source(id) => validate_text("source id", &id.0),
+            Self::Evidence(id) => validate_text("evidence id", &id.0),
             Self::Claim(id) => validate_text("claim id", &id.0),
             Self::ProfileEntry(id) => validate_text("profile entry id", &id.0),
             Self::DailyReview(id) => validate_text("daily review id", &id.0),

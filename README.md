@@ -2,7 +2,7 @@
 
 Evidence-backed temporal memory for personal agents.
 
-`zkr` keeps source evidence authoritative, represents facts as temporal claims, and produces bounded retrieval packs with citations. Embeddings and search indexes are projections that can be rebuilt from the stored evidence.
+`zkr` keeps source evidence authoritative, represents facts as temporal claims, and produces bounded retrieval packs with citations. Raw captures remain searchable before a claim is extracted. Embeddings and search indexes are projections that can be rebuilt from the stored evidence.
 
 ## Principles
 
@@ -10,6 +10,7 @@ Evidence-backed temporal memory for personal agents.
 - Claims keep both when they were true and when they were recorded.
 - Corrections supersede history instead of silently rewriting it.
 - Retrieval is bounded, tenant-scoped, and cited.
+- Accepted claims replace their supporting raw capture in results instead of duplicating it.
 - Reflection proposes durable changes; it does not bypass evidence.
 
 See [the architecture](docs/architecture.md), [embedding design](docs/embeddings.md), and [memory-system research](docs/research.md).
@@ -30,7 +31,7 @@ printf '%s' '{"tenant_id":"local","person_id":"me","query":"plans","limit":5}' \
   | zkr --db ~/.zkr/memory.db search
 ```
 
-Run `zkr --help` for `correct`, `delete`, `review`, `reviews`, and `embed`.
+Run `zkr --help` for `correct`, `delete`, `review`, `reviews`, `projections`, and `embed`. `projections` returns bounded stale or missing work with the exact text, revision, and SHA-256 hash required by `embed`.
 
 ## Agent plugins
 
