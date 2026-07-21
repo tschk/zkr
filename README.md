@@ -17,7 +17,7 @@ See [the architecture](docs/architecture.md), [embedding design](docs/embeddings
 ## Install
 
 ```sh
-cargo install --git https://github.com/tschk/zkr
+cargo install zkr
 ```
 
 The library is consumed as the `zkr` crate. The CLI reads one JSON object from stdin and writes one JSON object to stdout.
