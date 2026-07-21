@@ -177,3 +177,45 @@ fn database_help_matches_the_documented_command() {
     assert!(String::from_utf8(output.stdout).unwrap().contains("get"));
     assert!(!database.exists());
 }
+
+#[test]
+fn json_cli_round_trips_transcript_evidence_locator() {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("zkr-locator-{nonce}.db"));
+    let database = path.to_str().unwrap();
+    let input = json!({
+        "tenant_id": "tenant",
+        "person_id": "person",
+        "ingestion_key": "transcript-1",
+        "kind": "audio",
+        "text": "Schedule the review tomorrow",
+        "captured_at": 10,
+        "locator": {
+            "device_id": "omi-1",
+            "provider": "deepgram",
+            "stream_id": "stream-1",
+            "segment_id": "segment-4",
+            "start_ms": 1200,
+            "end_ms": 2900
+        }
+    });
+    let remembered = run(database, "remember", input.clone());
+    assert_eq!(run(database, "remember", input), remembered);
+    let locator = run(
+        database,
+        "locator",
+        json!({
+            "tenant_id": "tenant",
+            "person_id": "person",
+            "evidence_id": remembered["evidence_id"]
+        }),
+    );
+    assert_eq!(locator["device_id"], "omi-1");
+    assert_eq!(locator["provider"], "deepgram");
+    assert_eq!(locator["start_ms"], 1200);
+    assert_eq!(locator["end_ms"], 2900);
+    std::fs::remove_file(path).unwrap();
+}

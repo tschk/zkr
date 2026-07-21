@@ -15,6 +15,8 @@ Evidence-backed temporal memory for personal agents.
 
 See [the architecture](docs/architecture.md), [embedding design](docs/embeddings.md), and [memory-system research](docs/research.md).
 
+Transcript captures can include an optional `locator` with `device_id`, `provider`, `stream_id`, `segment_id`, `start_ms`, and `end_ms`. The locator remains attached to its evidence citation and can be retrieved with the `locator` CLI command. Library callers can use `MemoryDb::remember_with_locator` without changing existing `RememberInput` code.
+
 ## Install
 
 ```sh

@@ -2,11 +2,11 @@ use serde::de::DeserializeOwned;
 use serde_json::json;
 use std::{env, io::Read, process::ExitCode};
 use zkr::{
-    CorrectInput, DeleteInput, EmbeddingInput, GetInput, MemoryDb, ProjectionAuditInput,
-    ReviewInput, ReviewsInput, SearchInput,
+    CorrectInput, DeleteInput, EmbeddingInput, EvidenceLocatorInput, GetInput, MemoryDb,
+    ProjectionAuditInput, RememberRequest, ReviewInput, ReviewsInput, SearchInput,
 };
 
-const HELP: &str = "zkr --db PATH COMMAND\n\nCommands (read one JSON object from stdin; write JSON to stdout):\n  remember     Store source evidence and an optional claim\n  search       Retrieve bounded, cited memory matches\n  get          Read one live cited memory by target\n  correct      Supersede a claim using new correction evidence\n  delete       Tombstone a source and propagate unavailable evidence\n  review       Store a cited daily review without invoking an LLM\n  reviews      Retrieve bounded daily reviews\n  projections  List bounded stale or missing embedding inputs\n  embed        Upsert a rebuildable embedding projection\n  help         Show this help\n";
+const HELP: &str = "zkr --db PATH COMMAND\n\nCommands (read one JSON object from stdin; write JSON to stdout):\n  remember     Store source evidence and an optional claim or transcript locator\n  locator      Read a live evidence transcript locator\n  search       Retrieve bounded, cited memory matches\n  get          Read one live cited memory by target\n  correct      Supersede a claim using new correction evidence\n  delete       Tombstone a source and propagate unavailable evidence\n  review       Store a cited daily review without invoking an LLM\n  reviews      Retrieve bounded daily reviews\n  projections  List bounded stale or missing embedding inputs\n  embed        Upsert a rebuildable embedding projection\n  help         Show this help\n";
 
 fn main() -> ExitCode {
     match run() {
@@ -42,7 +42,13 @@ fn run() -> Result<Option<serde_json::Value>, Box<dyn std::error::Error>> {
     }
     let mut database = MemoryDb::open(&arguments[1])?;
     let value = match arguments[2].as_str() {
-        "remember" => serde_json::to_value(database.remember(read_json()?)?)?,
+        "remember" => {
+            let request = read_json::<RememberRequest>()?;
+            serde_json::to_value(database.remember_with_locator(request.memory, request.locator)?)?
+        }
+        "locator" => {
+            serde_json::to_value(database.evidence_locator(read_json::<EvidenceLocatorInput>()?)?)?
+        }
         "search" => serde_json::to_value(database.search(read_json::<SearchInput>()?)?)?,
         "get" => serde_json::to_value(database.get(read_json::<GetInput>()?)?)?,
         "correct" => serde_json::to_value(database.correct(read_json::<CorrectInput>()?)?)?,

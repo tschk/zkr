@@ -133,6 +133,31 @@ pub struct RememberInput {
     pub claim: Option<ClaimInput>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct TranscriptLocator {
+    pub device_id: String,
+    pub provider: String,
+    pub stream_id: String,
+    pub segment_id: String,
+    pub start_ms: u64,
+    pub end_ms: u64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EvidenceLocatorInput {
+    pub tenant_id: TenantId,
+    pub person_id: PersonId,
+    pub evidence_id: EvidenceId,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RememberRequest {
+    #[serde(flatten)]
+    pub memory: RememberInput,
+    #[serde(default)]
+    pub locator: Option<TranscriptLocator>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ClaimInput {
     pub subject: String,
@@ -251,8 +276,19 @@ impl MemoryDb {
     }
 
     pub fn remember(&mut self, input: RememberInput) -> Result<Remembered> {
+        self.remember_with_locator(input, None)
+    }
+
+    pub fn remember_with_locator(
+        &mut self,
+        input: RememberInput,
+        locator: Option<TranscriptLocator>,
+    ) -> Result<Remembered> {
         require_scope(&input.tenant_id, &input.person_id)?;
         require_text("text", &input.text)?;
+        if let Some(locator) = &locator {
+            validate_transcript_locator(locator)?;
+        }
         if let Some(key) = &input.ingestion_key {
             require_text("ingestion_key", key)?;
         }
@@ -290,6 +326,22 @@ impl MemoryDb {
             if replay.4.is_some() || replay.5.is_some() {
                 return Err(Error::NotFound);
             }
+            let stored_locator = transaction
+                .query_row(
+                    "SELECT device_id, provider, stream_id, segment_id, start_ms, end_ms FROM evidence_locators WHERE tenant_id = ?1 AND person_id = ?2 AND evidence_id = ?3",
+                    params![input.tenant_id.0, input.person_id.0, replay.0.evidence_id.0],
+                    |row| {
+                        Ok(TranscriptLocator {
+                            device_id: row.get(0)?,
+                            provider: row.get(1)?,
+                            stream_id: row.get(2)?,
+                            segment_id: row.get(3)?,
+                            start_ms: row.get(4)?,
+                            end_ms: row.get(5)?,
+                        })
+                    },
+                )
+                .optional()?;
             let stored_claim = match (&replay.6, &replay.7, &replay.8, replay.9) {
                 (Some(subject), Some(predicate), Some(value), Some(valid_from)) => {
                     Some((subject, predicate, value, valid_from))
@@ -309,6 +361,7 @@ impl MemoryDb {
                 || replay.2 != input.text
                 || replay.3 != input.captured_at
                 || stored_claim != input_claim
+                || stored_locator.as_ref() != locator.as_ref()
             {
                 return Err(Error::Invalid(
                     "ingestion_key conflicts with different memory payload".to_owned(),
@@ -325,6 +378,12 @@ impl MemoryDb {
             "INSERT INTO evidence(id, tenant_id, person_id, source_id, source_revision, quote, recorded_at) VALUES(?1, ?2, ?3, ?4, 1, ?5, ?6)",
             params![evidence_id.0, input.tenant_id.0, input.person_id.0, source_id.0, input.text, input.captured_at],
         )?;
+        if let Some(locator) = locator {
+            transaction.execute(
+                "INSERT INTO evidence_locators(tenant_id, person_id, evidence_id, device_id, provider, stream_id, segment_id, start_ms, end_ms) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![input.tenant_id.0, input.person_id.0, evidence_id.0, locator.device_id, locator.provider, locator.stream_id, locator.segment_id, locator.start_ms, locator.end_ms],
+            )?;
+        }
         let claim_id = input
             .claim
             .map(|claim| {
@@ -344,6 +403,31 @@ impl MemoryDb {
             evidence_id,
             claim_id,
         })
+    }
+
+    pub fn evidence_locator(
+        &self,
+        input: EvidenceLocatorInput,
+    ) -> Result<Option<TranscriptLocator>> {
+        require_scope(&input.tenant_id, &input.person_id)?;
+        let locator = self
+            .connection
+            .query_row(
+                "SELECT l.device_id, l.provider, l.stream_id, l.segment_id, l.start_ms, l.end_ms FROM evidence_locators l JOIN evidence e ON e.id = l.evidence_id AND e.tenant_id = l.tenant_id AND e.person_id = l.person_id WHERE l.tenant_id = ?1 AND l.person_id = ?2 AND l.evidence_id = ?3 AND e.deleted_at IS NULL",
+                params![input.tenant_id.0, input.person_id.0, input.evidence_id.0],
+                |row| {
+                    Ok(TranscriptLocator {
+                        device_id: row.get(0)?,
+                        provider: row.get(1)?,
+                        stream_id: row.get(2)?,
+                        segment_id: row.get(3)?,
+                        start_ms: row.get(4)?,
+                        end_ms: row.get(5)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(locator)
     }
 
     pub fn search(&self, input: SearchInput) -> Result<RetrievalPack> {
@@ -937,6 +1021,7 @@ impl MemoryDb {
              CREATE VIRTUAL TABLE IF NOT EXISTS source_fts USING fts5(source_id UNINDEXED, tenant_id UNINDEXED, person_id UNINDEXED, content, tokenize='unicode61');
              CREATE TABLE IF NOT EXISTS evidence(id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, source_id TEXT NOT NULL REFERENCES sources(id), source_revision INTEGER NOT NULL, quote TEXT NOT NULL, recorded_at INTEGER NOT NULL, deleted_at INTEGER);
              CREATE INDEX IF NOT EXISTS evidence_scope ON evidence(tenant_id, person_id, source_id);
+             CREATE TABLE IF NOT EXISTS evidence_locators(tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, evidence_id TEXT NOT NULL REFERENCES evidence(id), device_id TEXT NOT NULL, provider TEXT NOT NULL, stream_id TEXT NOT NULL, segment_id TEXT NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, PRIMARY KEY(tenant_id, person_id, evidence_id));
              CREATE TABLE IF NOT EXISTS claims(id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, subject TEXT NOT NULL, predicate TEXT NOT NULL, value TEXT NOT NULL, valid_from INTEGER NOT NULL, valid_until INTEGER, recorded_from INTEGER NOT NULL, recorded_until INTEGER, status TEXT NOT NULL);
              CREATE INDEX IF NOT EXISTS claims_scope ON claims(tenant_id, person_id, status);
              CREATE TABLE IF NOT EXISTS claim_evidence(tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, claim_id TEXT NOT NULL REFERENCES claims(id), evidence_id TEXT NOT NULL REFERENCES evidence(id), relation TEXT NOT NULL, confidence_basis_points INTEGER NOT NULL, PRIMARY KEY(tenant_id, person_id, claim_id, evidence_id));
@@ -1002,6 +1087,28 @@ fn insert_claim(
         params![tenant_id.0, person_id.0, id.0, evidence_id.0, relation],
     )?;
     Ok(id)
+}
+
+fn validate_transcript_locator(locator: &TranscriptLocator) -> Result<()> {
+    for (field, value) in [
+        ("locator.device_id", locator.device_id.as_str()),
+        ("locator.provider", locator.provider.as_str()),
+        ("locator.stream_id", locator.stream_id.as_str()),
+        ("locator.segment_id", locator.segment_id.as_str()),
+    ] {
+        require_text(field, value)?;
+    }
+    if locator.start_ms >= locator.end_ms {
+        return Err(Error::Invalid(
+            "locator end_ms must be greater than start_ms".to_owned(),
+        ));
+    }
+    if locator.end_ms > i64::MAX as u64 {
+        return Err(Error::Invalid(
+            "locator end_ms exceeds the storage range".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 fn new_id(transaction: &Transaction<'_>) -> Result<String> {
