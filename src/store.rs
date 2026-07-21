@@ -4,7 +4,10 @@ use crate::{
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+};
 
 pub trait Embedder {
     type Error: std::error::Error + Send + Sync + 'static;
@@ -105,6 +108,15 @@ pub struct SearchInput {
     pub query: String,
     #[serde(default = "default_limit")]
     pub limit: u32,
+    #[serde(default)]
+    pub query_embedding: Option<DenseQuery>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DenseQuery {
+    pub vector: Vec<f32>,
+    pub model: String,
+    pub version: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -228,29 +240,39 @@ impl MemoryDb {
         require_scope(&input.tenant_id, &input.person_id)?;
         require_text("query", &input.query)?;
         let limit = bounded_limit(input.limit);
+        let candidate_limit = limit * 4;
         let query = format!("\"{}\"", input.query.replace('"', "\"\""));
         let mut statement = self.connection.prepare(
-            "SELECT c.id, c.subject || ' ' || c.predicate || ' ' || c.value, ce.evidence_id, CAST(max(0, 10000 - (bm25(source_fts) * 1000)) AS INTEGER)
+            "SELECT c.id
              FROM source_fts
              JOIN sources s ON s.id = source_fts.source_id AND s.tenant_id = source_fts.tenant_id AND s.person_id = source_fts.person_id
              JOIN evidence e ON e.source_id = s.id AND e.tenant_id = s.tenant_id AND e.person_id = s.person_id AND e.deleted_at IS NULL
              JOIN claim_evidence ce ON ce.evidence_id = e.id AND ce.tenant_id = e.tenant_id AND ce.person_id = e.person_id
              JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id
              WHERE source_fts MATCH ?1 AND source_fts.tenant_id = ?2 AND source_fts.person_id = ?3 AND s.deleted_at IS NULL AND c.status = 'accepted'
-             ORDER BY bm25(source_fts) LIMIT ?4",
+             ORDER BY bm25(source_fts), c.id LIMIT ?4",
         )?;
         let rows = statement.query_map(
-            params![query, input.tenant_id.0, input.person_id.0, limit],
-            |row| {
-                Ok(RetrievalItem {
-                    memory: MemoryRef::Claim(ClaimId(row.get(0)?)),
-                    excerpt: row.get(1)?,
-                    relevance_basis_points: row.get::<_, i64>(3)?.clamp(0, 10_000) as u16,
-                    evidence_ids: vec![EvidenceId(row.get(2)?)],
-                })
-            },
+            params![query, input.tenant_id.0, input.person_id.0, candidate_limit],
+            |row| row.get::<_, String>(0),
         )?;
-        let items = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        let lexical = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        let dense = input
+            .query_embedding
+            .as_ref()
+            .map(|query| self.dense_claims(&input.tenant_id, &input.person_id, query))
+            .transpose()?
+            .unwrap_or_default();
+        let ranked = reciprocal_rank_fusion(&lexical, &dense, limit as usize);
+        let mut items = Vec::with_capacity(ranked.len());
+        for (claim_id, relevance_basis_points) in ranked {
+            items.push(self.retrieval_item(
+                &input.tenant_id,
+                &input.person_id,
+                claim_id,
+                relevance_basis_points,
+            )?);
+        }
         let gaps = if items.is_empty() {
             vec!["no cited memory matched".to_owned()]
         } else {
@@ -261,6 +283,134 @@ impl MemoryDb {
             items,
             gaps,
         })
+    }
+
+    fn dense_claims(
+        &self,
+        tenant_id: &TenantId,
+        person_id: &PersonId,
+        query: &DenseQuery,
+    ) -> Result<Vec<String>> {
+        validate_dense_query(query)?;
+        let mut statement = self.connection.prepare(
+            "SELECT embeddings.target_kind, embeddings.target_id, embeddings.dimension, embeddings.normalization, embeddings.distance, embeddings.vector
+             FROM embeddings
+             WHERE embeddings.tenant_id = ?1 AND embeddings.person_id = ?2 AND embeddings.model = ?3 AND embeddings.version = ?4",
+        )?;
+        let rows = statement.query_map(
+            params![tenant_id.0, person_id.0, query.model, query.version],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, usize>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            },
+        )?;
+        let mut scores = HashMap::<String, f32>::new();
+        let mut lane = None;
+        for row in rows {
+            let (target_kind, target_id, dimension, normalization, distance, vector) = row?;
+            if dimension != query.vector.len() {
+                return Err(Error::Invalid(format!(
+                    "query embedding dimension {} does not match stored dimension {dimension}",
+                    query.vector.len()
+                )));
+            }
+            let normalization: VectorNormalization = serde_json::from_str(&normalization)?;
+            let distance: VectorDistance = serde_json::from_str(&distance)?;
+            let configuration = (normalization, distance, dimension);
+            if lane.as_ref().is_some_and(|lane| lane != &configuration) {
+                return Err(Error::Invalid(
+                    "stored embeddings mix incompatible vector configurations".to_owned(),
+                ));
+            }
+            lane = Some(configuration.clone());
+            let vector: Vec<f32> = serde_json::from_str(&vector)?;
+            if vector.len() != dimension || vector.iter().any(|value| !value.is_finite()) {
+                return Err(Error::Invalid("stored embedding is invalid".to_owned()));
+            }
+            let score = vector_score(&query.vector, &vector, &configuration.1)?;
+            for claim_id in
+                self.claims_for_embedding_target(tenant_id, person_id, &target_kind, &target_id)?
+            {
+                scores
+                    .entry(claim_id)
+                    .and_modify(|existing| *existing = existing.max(score))
+                    .or_insert(score);
+            }
+        }
+        let mut ranked = scores.into_iter().collect::<Vec<_>>();
+        ranked.sort_by(|left, right| {
+            right
+                .1
+                .total_cmp(&left.1)
+                .then_with(|| left.0.cmp(&right.0))
+        });
+        Ok(ranked.into_iter().map(|(id, _)| id).collect())
+    }
+
+    fn claims_for_embedding_target(
+        &self,
+        tenant_id: &TenantId,
+        person_id: &PersonId,
+        target_kind: &str,
+        target_id: &str,
+    ) -> Result<Vec<String>> {
+        let sql = match target_kind {
+            "claim" => {
+                "SELECT id FROM claims WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND status = 'accepted'"
+            }
+            "evidence" => {
+                "SELECT c.id FROM evidence e JOIN claim_evidence ce ON ce.evidence_id = e.id AND ce.tenant_id = e.tenant_id AND ce.person_id = e.person_id JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id WHERE e.id = ?1 AND e.tenant_id = ?2 AND e.person_id = ?3 AND e.deleted_at IS NULL AND c.status = 'accepted' ORDER BY c.id"
+            }
+            "source" => {
+                "SELECT DISTINCT c.id FROM sources s JOIN evidence e ON e.source_id = s.id AND e.tenant_id = s.tenant_id AND e.person_id = s.person_id JOIN claim_evidence ce ON ce.evidence_id = e.id AND ce.tenant_id = e.tenant_id AND ce.person_id = e.person_id JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id WHERE s.id = ?1 AND s.tenant_id = ?2 AND s.person_id = ?3 AND s.deleted_at IS NULL AND e.deleted_at IS NULL AND c.status = 'accepted' ORDER BY c.id"
+            }
+            _ => {
+                return Err(Error::Invalid(
+                    "stored embedding target is invalid".to_owned(),
+                ));
+            }
+        };
+        let mut statement = self.connection.prepare(sql)?;
+        let rows = statement.query_map(params![target_id, tenant_id.0, person_id.0], |row| {
+            row.get::<_, String>(0)
+        })?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    fn retrieval_item(
+        &self,
+        tenant_id: &TenantId,
+        person_id: &PersonId,
+        claim_id: String,
+        relevance_basis_points: u16,
+    ) -> Result<RetrievalItem> {
+        self.connection
+            .query_row(
+                "SELECT c.subject || ' ' || c.predicate || ' ' || c.value, ce.evidence_id
+                 FROM claims c
+                 JOIN claim_evidence ce ON ce.claim_id = c.id AND ce.tenant_id = c.tenant_id AND ce.person_id = c.person_id
+                 JOIN evidence e ON e.id = ce.evidence_id AND e.tenant_id = ce.tenant_id AND e.person_id = ce.person_id
+                 JOIN sources s ON s.id = e.source_id AND s.tenant_id = e.tenant_id AND s.person_id = e.person_id
+                 WHERE c.id = ?1 AND c.tenant_id = ?2 AND c.person_id = ?3 AND c.status = 'accepted' AND e.deleted_at IS NULL AND s.deleted_at IS NULL
+                 ORDER BY ce.evidence_id LIMIT 1",
+                params![claim_id, tenant_id.0, person_id.0],
+                |row| {
+                    Ok(RetrievalItem {
+                        memory: MemoryRef::Claim(ClaimId(claim_id.clone())),
+                        excerpt: row.get(0)?,
+                        relevance_basis_points,
+                        evidence_ids: vec![EvidenceId(row.get(1)?)],
+                    })
+                },
+            )
+            .optional()?
+            .ok_or(Error::NotFound)
     }
 
     pub fn correct(&mut self, input: CorrectInput) -> Result<Corrected> {
@@ -576,6 +726,74 @@ fn validate_embedding(embedding: &Embedding) -> Result<()> {
     Ok(())
 }
 
+fn validate_dense_query(query: &DenseQuery) -> Result<()> {
+    require_text("query embedding model", &query.model)?;
+    require_text("query embedding version", &query.version)?;
+    if query.vector.is_empty() || query.vector.iter().any(|value| !value.is_finite()) {
+        return Err(Error::Invalid(
+            "query embedding vector must contain finite values".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn vector_score(query: &[f32], stored: &[f32], distance: &VectorDistance) -> Result<f32> {
+    let dot = query
+        .iter()
+        .zip(stored)
+        .map(|(left, right)| left * right)
+        .sum::<f32>();
+    let score = match distance {
+        VectorDistance::Dot => dot,
+        VectorDistance::Euclidean => -query
+            .iter()
+            .zip(stored)
+            .map(|(left, right)| (left - right).powi(2))
+            .sum::<f32>()
+            .sqrt(),
+        VectorDistance::Cosine => {
+            let query_norm = query.iter().map(|value| value * value).sum::<f32>().sqrt();
+            let stored_norm = stored.iter().map(|value| value * value).sum::<f32>().sqrt();
+            if query_norm == 0.0 || stored_norm == 0.0 {
+                return Err(Error::Invalid(
+                    "cosine embeddings must have non-zero magnitude".to_owned(),
+                ));
+            }
+            dot / (query_norm * stored_norm)
+        }
+    };
+    if !score.is_finite() {
+        return Err(Error::Invalid(
+            "embedding similarity is not finite".to_owned(),
+        ));
+    }
+    Ok(score)
+}
+
+fn reciprocal_rank_fusion(
+    lexical: &[String],
+    dense: &[String],
+    limit: usize,
+) -> Vec<(String, u16)> {
+    let mut scores = HashMap::<String, u32>::new();
+    for ranking in [lexical, dense] {
+        let mut seen = HashSet::new();
+        for (offset, id) in ranking.iter().enumerate() {
+            if seen.insert(id) {
+                *scores.entry(id.clone()).or_default() += 1_000_000 / (61 + offset as u32);
+            }
+        }
+    }
+    let maximum = scores.values().copied().max().unwrap_or(1);
+    let mut ranked = scores
+        .into_iter()
+        .map(|(id, score)| (id, ((score as u64 * 10_000) / maximum as u64) as u16))
+        .collect::<Vec<_>>();
+    ranked.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+    ranked.truncate(limit);
+    ranked
+}
+
 fn embedding_target_parts(target: &EmbeddingTarget) -> (&'static str, &str) {
     match target {
         EmbeddingTarget::Source(id) => ("source", &id.0),
@@ -631,6 +849,7 @@ mod tests {
                 person_id: PersonId("sam".into()),
                 query: "Acme".into(),
                 limit: 5,
+                query_embedding: None,
             })
             .unwrap();
         assert_eq!(found.items.len(), 1);
@@ -659,7 +878,8 @@ mod tests {
                 tenant_id: TenantId("a".into()),
                 person_id: PersonId("sam".into()),
                 query: "Beta".into(),
-                limit: 5
+                limit: 5,
+                query_embedding: None,
             })
             .unwrap()
             .items
@@ -744,5 +964,55 @@ mod tests {
             }),
             Err(Error::NotFound)
         ));
+    }
+
+    #[test]
+    fn search_fuses_lexical_and_real_dense_ranks_deterministically() {
+        let mut db = MemoryDb {
+            connection: Connection::open_in_memory().unwrap(),
+        };
+        db.migrate().unwrap();
+        let lexical = db.remember(remember("a", "sam", "Jazz Club")).unwrap();
+        let dense = db.remember(remember("a", "sam", "Music Venue")).unwrap();
+        for (claim_id, vector) in [
+            (lexical.claim_id.clone().unwrap(), vec![0.9, 0.1]),
+            (dense.claim_id.unwrap(), vec![1.0, 0.0]),
+        ] {
+            db.upsert_embedding(EmbeddingInput {
+                tenant_id: TenantId("a".into()),
+                person_id: PersonId("sam".into()),
+                target: EmbeddingTarget::Claim(claim_id),
+                embedding: Embedding {
+                    vector,
+                    model: "test/model".into(),
+                    version: "1".into(),
+                    input_hash: "sha256:test".into(),
+                    normalization: VectorNormalization::L2,
+                    distance: VectorDistance::Cosine,
+                },
+            })
+            .unwrap();
+        }
+
+        let found = db
+            .search(SearchInput {
+                tenant_id: TenantId("a".into()),
+                person_id: PersonId("sam".into()),
+                query: "Jazz Club".into(),
+                limit: 2,
+                query_embedding: Some(DenseQuery {
+                    vector: vec![1.0, 0.0],
+                    model: "test/model".into(),
+                    version: "1".into(),
+                }),
+            })
+            .unwrap();
+
+        assert_eq!(
+            found.items[0].memory,
+            MemoryRef::Claim(lexical.claim_id.unwrap())
+        );
+        assert_eq!(found.items.len(), 2);
+        assert!(!found.items[0].evidence_ids.is_empty());
     }
 }
