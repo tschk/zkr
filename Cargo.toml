@@ -1,0 +1,21 @@
+[package]
+name = "kr-memory"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Evidence-backed temporal memory for personal agents"
+repository = "https://github.com/tschk/kr"
+license = "MPL-2.0"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+
+[dev-dependencies]
+serde_json = "1"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "deny"
