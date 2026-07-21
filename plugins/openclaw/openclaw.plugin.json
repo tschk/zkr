@@ -2,13 +2,16 @@
   "id": "zkr",
   "name": "zkr Memory",
   "description": "Evidence-backed temporal memory tools powered by zkr",
+  "kind": "memory",
   "contracts": {
     "tools": [
       "zkr_store",
       "zkr_search",
       "zkr_correct",
       "zkr_delete",
-      "zkr_reflect"
+      "zkr_reflect",
+      "memory_search",
+      "memory_get"
     ]
   },
   "activation": {
@@ -23,6 +26,14 @@
         "minLength": 1
       },
       "database": {
+        "type": "string",
+        "minLength": 1
+      },
+      "tenant": {
+        "type": "string",
+        "minLength": 1
+      },
+      "person": {
         "type": "string",
         "minLength": 1
       }

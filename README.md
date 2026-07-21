@@ -37,7 +37,7 @@ Run `zkr --help` for `correct`, `delete`, `review`, `reviews`, `projections`, an
 
 ### OpenClaw
 
-Link or copy `plugins/openclaw` into an OpenClaw extension location, install it with Bun, then enable the `zkr` plugin. Its optional `command` and `database` settings default to `zkr` and `~/.zkr/memory.db`.
+Link or copy `plugins/openclaw` into an OpenClaw extension location, install it with Bun, then enable the `zkr` memory slot. It implements OpenClaw's native memory capability plus `memory_search` and `memory_get`, while preserving the explicit `zkr_*` tools. Its optional `command`, `database`, `tenant`, and `person` settings default to `zkr`, `~/.zkr/memory.db`, `openclaw`, and the active agent ID.
 
 ### Hermes Agent
 
@@ -48,9 +48,11 @@ memory:
   provider: zkr
 ```
 
-Both plugins expose store, search, correction, deletion, and cited reflection through the neutral CLI. They do not add framework dependencies to the Rust crate.
+Both plugins expose store, search, correction, deletion, and cited reflection through the neutral CLI. Hermes persists completed turns to a local write-behind queue before returning, recovers pending turns on startup, flushes on shutdown, and skips non-primary agent contexts. The plugins do not add framework dependencies to the Rust crate.
 
 ## Development
+
+OpenClaw's real loader requires Node's `node:sqlite`, so it cannot run under this repository's Bun-only JavaScript gates. The plugin tests compile against the installed SDK, exercise capability registration and runtime search/read behavior, and build the distributable; run `openclaw plugins inspect zkr --runtime` in a supported OpenClaw Node runtime for the external loader check.
 
 ```sh
 cargo fmt --check

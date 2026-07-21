@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 export type ZkrCommand =
   | "remember"
   | "search"
+  | "get"
   | "correct"
   | "delete"
   | "review";
@@ -13,6 +14,8 @@ export type ZkrCommand =
 export type ZkrOptions = {
   command?: string;
   database?: string;
+  tenant?: string;
+  person?: string;
 };
 
 export async function runZkr(

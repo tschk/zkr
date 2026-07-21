@@ -4,16 +4,32 @@ import json
 import logging
 import os
 import shutil
+import sqlite3
 import subprocess
 import threading
 import time
+import uuid
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from agent.memory_provider import MemoryProvider
 from tools.registry import tool_error
 
 logger = logging.getLogger(__name__)
+_MAX_QUEUE_ATTEMPTS = 3
+_QUEUE_LOCKS: dict[Path, threading.Lock] = {}
+_QUEUE_LOCKS_GUARD = threading.Lock()
+
+
+@contextmanager
+def _connection(path: Path) -> Iterator[sqlite3.Connection]:
+    connection = sqlite3.connect(path)
+    try:
+        with connection:
+            yield connection
+    finally:
+        connection.close()
 
 
 def _schema(name: str, description: str, properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
@@ -95,6 +111,11 @@ class ZkrMemoryProvider(MemoryProvider):
         self._db = Path(os.environ.get("ZKR_DB", "zkr.db"))
         self._tenant_id = os.environ.get("ZKR_TENANT_ID", "hermes")
         self._person_id = os.environ.get("ZKR_PERSON_ID", "default")
+        self._queue_path = Path(f"{self._db}.queue")
+        self._wake = threading.Event()
+        self._stop = threading.Event()
+        self._worker: threading.Thread | None = None
+        self._write_enabled = True
 
     @property
     def name(self) -> str:
@@ -107,6 +128,7 @@ class ZkrMemoryProvider(MemoryProvider):
         hermes_home = Path(str(kwargs.get("hermes_home") or Path.home() / ".hermes"))
         if "ZKR_DB" not in os.environ:
             self._db = hermes_home / "zkr.db"
+        self._queue_path = Path(f"{self._db}.queue")
         self._db.parent.mkdir(parents=True, exist_ok=True)
         self._tenant_id = os.environ.get(
             "ZKR_TENANT_ID", str(kwargs.get("agent_workspace") or "hermes")
@@ -120,6 +142,9 @@ class ZkrMemoryProvider(MemoryProvider):
                 or "default"
             ),
         )
+        self._write_enabled = kwargs.get("agent_context", "primary") == "primary"
+        self._ensure_queue()
+        self._start_worker()
 
     def system_prompt_block(self) -> str:
         return (
@@ -153,15 +178,10 @@ class ZkrMemoryProvider(MemoryProvider):
         session_id: str = "",
         messages: list[dict[str, Any]] | None = None,
     ) -> None:
-        if not user_content.strip():
+        if not self._write_enabled or not user_content.strip():
             return
         text = f"User: {user_content.strip()}\nAssistant: {assistant_content.strip()}"
-        threading.Thread(
-            target=self._store_turn,
-            args=(text,),
-            name="zkr-hermes-store",
-            daemon=True,
-        ).start()
+        self._enqueue_turn(text)
 
     def get_tool_schemas(self) -> list[dict[str, Any]]:
         return SCHEMAS
@@ -223,24 +243,38 @@ class ZkrMemoryProvider(MemoryProvider):
             return tool_error(str(error))
 
     def backup_paths(self) -> list[str]:
-        return [str(self._db)]
+        return [str(self._db), str(self._queue_path)]
+
+    def shutdown(self) -> None:
+        self._stop.set()
+        self._wake.set()
+        if self._worker is not None:
+            self._worker.join(timeout=10)
+            if not self._worker.is_alive():
+                self._worker = None
 
     def _scope(self, payload: dict[str, Any]) -> dict[str, Any]:
         return {
+            **payload,
             "tenant_id": self._tenant_id,
             "person_id": self._person_id,
-            **payload,
         }
 
     def _run(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
-        completed = subprocess.run(
-            [self._binary, "--db", str(self._db), command],
-            input=json.dumps(self._scope(payload)),
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
+        return self._run_payload(command, self._scope(payload))
+
+    def _run_payload(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            completed = subprocess.run(
+                [self._binary, "--db", str(self._db), command],
+                input=json.dumps(payload),
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise RuntimeError(str(error)) from error
         if completed.returncode:
             detail = completed.stderr.strip() or completed.stdout.strip() or "zkr command failed"
             raise RuntimeError(detail)
@@ -249,19 +283,116 @@ class ZkrMemoryProvider(MemoryProvider):
             raise RuntimeError("zkr returned a non-object result")
         return result
 
-    def _store_turn(self, text: str) -> None:
-        try:
-            self._run(
-                "remember",
-                {
-                    "kind": "conversation",
-                    "text": text,
-                    "captured_at": int(time.time()),
-                    "claim": None,
-                },
+    def _ensure_queue(self) -> None:
+        with _connection(self._queue_path) as connection:
+            connection.execute("PRAGMA journal_mode = DELETE")
+            connection.execute("PRAGMA synchronous = FULL")
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS pending_turns(id INTEGER PRIMARY KEY AUTOINCREMENT, payload TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT)"
             )
-        except RuntimeError:
-            logger.debug("zkr turn capture failed", exc_info=True)
+            columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(pending_turns)")
+            }
+            if "attempts" not in columns:
+                connection.execute(
+                    "ALTER TABLE pending_turns ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0"
+                )
+            if "last_error" not in columns:
+                connection.execute("ALTER TABLE pending_turns ADD COLUMN last_error TEXT")
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS failed_turns(id INTEGER PRIMARY KEY, payload TEXT NOT NULL, attempts INTEGER NOT NULL, last_error TEXT NOT NULL, failed_at INTEGER NOT NULL)"
+            )
+
+    def _start_worker(self) -> None:
+        if self._worker is not None and self._worker.is_alive():
+            if self._stop.is_set():
+                raise RuntimeError("zkr queue worker is still shutting down")
+            return
+        self._stop.clear()
+        self._worker = threading.Thread(
+            target=self._drain_queue,
+            name="zkr-hermes-store",
+            daemon=True,
+        )
+        self._worker.start()
+        self._wake.set()
+
+    def _enqueue_turn(self, text: str) -> None:
+        self._ensure_queue()
+        payload = self._scope(
+            {
+                "kind": "conversation",
+                "text": text,
+                "captured_at": int(time.time()),
+                "ingestion_key": f"hermes-turn:{uuid.uuid4()}",
+                "claim": None,
+            }
+        )
+        with _connection(self._queue_path) as connection:
+            connection.execute(
+                "INSERT INTO pending_turns(payload) VALUES(?)",
+                (json.dumps(payload),),
+            )
+        self._start_worker()
+        self._wake.set()
+
+    def _drain_queue(self) -> None:
+        with _QUEUE_LOCKS_GUARD:
+            queue_lock = _QUEUE_LOCKS.setdefault(self._queue_path.resolve(), threading.Lock())
+        while True:
+            with queue_lock:
+                with _connection(self._queue_path) as connection:
+                    pending = connection.execute(
+                        "SELECT id, payload, attempts FROM pending_turns ORDER BY id LIMIT 1"
+                    ).fetchone()
+                if pending is not None:
+                    item_id, payload, attempts = pending
+                    try:
+                        decoded = json.loads(payload)
+                    except json.JSONDecodeError as error:
+                        logger.warning("quarantining invalid zkr queue payload")
+                        with _connection(self._queue_path) as connection:
+                            connection.execute(
+                                "INSERT OR REPLACE INTO failed_turns(id, payload, attempts, last_error, failed_at) VALUES(?, ?, 1, ?, ?)",
+                                (item_id, payload, str(error), int(time.time())),
+                            )
+                            connection.execute("DELETE FROM pending_turns WHERE id = ?", (item_id,))
+                        continue
+                    try:
+                        self._run_payload("remember", decoded)
+                    except RuntimeError as error:
+                        logger.debug("zkr turn capture failed", exc_info=True)
+                        attempts += 1
+                        with _connection(self._queue_path) as connection:
+                            if attempts >= _MAX_QUEUE_ATTEMPTS:
+                                connection.execute(
+                                    "INSERT OR REPLACE INTO failed_turns(id, payload, attempts, last_error, failed_at) VALUES(?, ?, ?, ?, ?)",
+                                    (item_id, payload, attempts, str(error), int(time.time())),
+                                )
+                                connection.execute(
+                                    "DELETE FROM pending_turns WHERE id = ?", (item_id,)
+                                )
+                            else:
+                                connection.execute(
+                                    "UPDATE pending_turns SET attempts = ?, last_error = ? WHERE id = ?",
+                                    (attempts, str(error), item_id),
+                                )
+                        if attempts >= _MAX_QUEUE_ATTEMPTS:
+                            continue
+                        if self._stop.is_set():
+                            return
+                    else:
+                        with _connection(self._queue_path) as connection:
+                            connection.execute("DELETE FROM pending_turns WHERE id = ?", (item_id,))
+                        continue
+            if pending is None:
+                if self._stop.is_set():
+                    return
+                self._wake.wait(timeout=1)
+                self._wake.clear()
+                continue
+            self._wake.wait(timeout=1)
+            self._wake.clear()
 
 
 def register(ctx: Any) -> None:

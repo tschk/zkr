@@ -60,6 +60,19 @@ class PluginTest(unittest.TestCase):
             "zkr_search", "zkr_store", "zkr_correct", "zkr_delete", "zkr_reflect"
         })
 
+    def test_configured_scope_cannot_be_overridden_by_tool_payload(self):
+        provider = plugin.ZkrMemoryProvider()
+        provider._tenant_id = "configured-tenant"
+        provider._person_id = "configured-person"
+        self.assertEqual(
+            provider._scope({"tenant_id": "other", "person_id": "other", "query": "memory"}),
+            {
+                "tenant_id": "configured-tenant",
+                "person_id": "configured-person",
+                "query": "memory",
+            },
+        )
+
     def test_compiled_cli_sqlite_round_trip(self):
         binary = Path(__file__).parents[2] / "target" / "debug" / "zkr"
         self.assertTrue(binary.is_file(), "run cargo build --bin zkr first")
@@ -103,6 +116,155 @@ class PluginTest(unittest.TestCase):
                 json.loads(provider.handle_tool_call("zkr_search", {"query": "detailed"}))["items"],
                 [],
             )
+
+    def test_turn_queue_recovers_and_flushes_without_crossing_contexts(self):
+        binary = Path(__file__).parents[2] / "target" / "debug" / "zkr"
+        self.assertTrue(binary.is_file(), "run cargo build --bin zkr first")
+        with tempfile.TemporaryDirectory() as directory:
+            failed = plugin.ZkrMemoryProvider()
+            failed._binary = str(Path(directory) / "missing-zkr")
+            failed.initialize("session", hermes_home=directory, agent_context="primary")
+            failed.sync_turn("Remember amber", "I will")
+            failed.shutdown()
+            with plugin._connection(failed._queue_path) as connection:
+                self.assertEqual(
+                    connection.execute("SELECT count(*) FROM pending_turns").fetchone()[0],
+                    1,
+                )
+
+            recovered = plugin.ZkrMemoryProvider()
+            recovered._binary = str(binary)
+            recovered.initialize("session", hermes_home=directory, agent_context="primary")
+            recovered.shutdown()
+            self.assertIn("Remember amber", recovered.prefetch("amber"))
+            with plugin._connection(recovered._queue_path) as connection:
+                self.assertEqual(
+                    connection.execute("SELECT count(*) FROM pending_turns").fetchone()[0],
+                    0,
+                )
+
+    def test_queue_replay_is_idempotent_and_poison_does_not_block(self):
+        binary = Path(__file__).parents[2] / "target" / "debug" / "zkr"
+        with tempfile.TemporaryDirectory() as directory:
+            provider = plugin.ZkrMemoryProvider()
+            provider._binary = str(binary)
+            provider._db = Path(directory) / "memory.db"
+            provider._queue_path = Path(f"{provider._db}.queue")
+            provider._ensure_queue()
+            payload = provider._scope({
+                "kind": "conversation",
+                "text": "User: replay me\nAssistant: done",
+                "captured_at": 1_700_000_000,
+                "ingestion_key": "hermes-turn:stable",
+                "claim": None,
+            })
+            with plugin._connection(provider._queue_path) as connection:
+                connection.execute("INSERT INTO pending_turns(payload) VALUES('not json')")
+                connection.execute(
+                    "INSERT INTO pending_turns(payload) VALUES(?)", (json.dumps(payload),)
+                )
+                connection.execute(
+                    "INSERT INTO pending_turns(payload) VALUES(?)", (json.dumps(payload),)
+                )
+            other = plugin.ZkrMemoryProvider()
+            other._binary = str(binary)
+            other._db = provider._db
+            other._queue_path = provider._queue_path
+            provider._start_worker()
+            other._start_worker()
+            provider.shutdown()
+            other.shutdown()
+            with plugin._connection(provider._queue_path) as connection:
+                self.assertEqual(
+                    connection.execute("SELECT count(*) FROM pending_turns").fetchone()[0], 0
+                )
+                self.assertEqual(
+                    connection.execute("SELECT count(*) FROM failed_turns").fetchone()[0], 1
+                )
+            with plugin._connection(provider._db) as connection:
+                self.assertEqual(connection.execute("SELECT count(*) FROM sources").fetchone()[0], 1)
+
+            cron = plugin.ZkrMemoryProvider()
+            cron._binary = str(binary)
+            cron.initialize("cron", hermes_home=directory, agent_context="cron")
+            cron.sync_turn("Do not save", "Skipped")
+            cron.shutdown()
+            with plugin._connection(cron._queue_path) as connection:
+                self.assertEqual(
+                    connection.execute("SELECT count(*) FROM pending_turns").fetchone()[0],
+                    0,
+                )
+
+    def test_valid_poison_is_quarantined_without_blocking_later_turns(self):
+        binary = Path(__file__).parents[2] / "target" / "debug" / "zkr"
+        with tempfile.TemporaryDirectory() as directory:
+            provider = plugin.ZkrMemoryProvider()
+            provider._binary = str(binary)
+            provider._db = Path(directory) / "memory.db"
+            provider._queue_path = Path(f"{provider._db}.queue")
+            provider._ensure_queue()
+            poison = provider._scope({
+                "kind": "conversation",
+                "text": "",
+                "captured_at": 1_700_000_000,
+                "ingestion_key": "hermes-turn:poison",
+                "claim": None,
+            })
+            valid = provider._scope({
+                "kind": "conversation",
+                "text": "User: remember violet\nAssistant: done",
+                "captured_at": 1_700_000_001,
+                "ingestion_key": "hermes-turn:after-poison",
+                "claim": None,
+            })
+            with plugin._connection(provider._queue_path) as connection:
+                connection.executemany(
+                    "INSERT INTO pending_turns(payload) VALUES(?)",
+                    [(json.dumps(poison),), (json.dumps(valid),)],
+                )
+            provider._start_worker()
+            deadline = plugin.time.time() + 5
+            while plugin.time.time() < deadline:
+                with plugin._connection(provider._queue_path) as connection:
+                    if connection.execute("SELECT count(*) FROM pending_turns").fetchone()[0] == 0:
+                        break
+                plugin.time.sleep(0.05)
+            provider.shutdown()
+            with plugin._connection(provider._queue_path) as connection:
+                self.assertEqual(
+                    connection.execute("SELECT count(*) FROM pending_turns").fetchone()[0], 0
+                )
+                failed = connection.execute(
+                    "SELECT payload, attempts, last_error FROM failed_turns"
+                ).fetchone()
+            self.assertEqual(json.loads(failed[0]), poison)
+            self.assertEqual(failed[1], plugin._MAX_QUEUE_ATTEMPTS)
+            self.assertIn("text must not be empty", failed[2])
+            self.assertIn("remember violet", provider.prefetch("violet"))
+
+    def test_legacy_queue_schema_migrates_without_losing_pending_turns(self):
+        with tempfile.TemporaryDirectory() as directory:
+            provider = plugin.ZkrMemoryProvider()
+            provider._queue_path = Path(directory) / "legacy.queue"
+            with plugin._connection(provider._queue_path) as connection:
+                connection.execute(
+                    "CREATE TABLE pending_turns(id INTEGER PRIMARY KEY AUTOINCREMENT, payload TEXT NOT NULL)"
+                )
+                connection.execute("INSERT INTO pending_turns(payload) VALUES('legacy')")
+            provider._ensure_queue()
+            with plugin._connection(provider._queue_path) as connection:
+                columns = {
+                    row[1] for row in connection.execute("PRAGMA table_info(pending_turns)")
+                }
+                pending = connection.execute(
+                    "SELECT payload, attempts, last_error FROM pending_turns"
+                ).fetchone()
+                failed_table = connection.execute(
+                    "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'failed_turns'"
+                ).fetchone()[0]
+            self.assertEqual(columns, {"id", "payload", "attempts", "last_error"})
+            self.assertEqual(pending, ("legacy", 0, None))
+            self.assertEqual(failed_table, 1)
 
 
 if __name__ == "__main__":
