@@ -2,11 +2,14 @@ use serde::de::DeserializeOwned;
 use serde_json::json;
 use std::{env, io::Read, process::ExitCode};
 use zkr::{
-    CorrectInput, DeleteInput, EmbeddingInput, EvidenceLocatorInput, GetInput, MemoryDb,
-    ProjectionAuditInput, RememberRequest, ReviewInput, ReviewsInput, SearchInput,
+    ClaimEvidence, CorrectInput, DeleteInput, EmbeddingInput, EvidenceLocatorInput, GetInput,
+    MemoryDb, ProfileInput, ProfilesInput, ProjectionAuditInput, RememberRequest, ReviewInput,
+    ReviewsInput, SearchInput,
 };
 
-const HELP: &str = "zkr --db PATH COMMAND\n\nCommands (read one JSON object from stdin; write JSON to stdout):\n  remember     Store source evidence and an optional claim or transcript locator\n  locator      Read a live evidence transcript locator\n  search       Retrieve bounded, cited memory matches\n  get          Read one live cited memory by target\n  correct      Supersede a claim using new correction evidence\n  delete       Tombstone a source and propagate unavailable evidence\n  review       Store a cited daily review without invoking an LLM\n  reviews      Retrieve bounded daily reviews\n  projections  List bounded stale or missing embedding inputs\n  embed        Upsert a rebuildable embedding projection\n  help         Show this help\n";
+const MAX_REQUEST_BYTES: u64 = 1024 * 1024;
+
+const HELP: &str = "zkr --db PATH COMMAND\n\nCommands (read one JSON object from stdin; write JSON to stdout):\n  remember     Store source evidence and an optional typed claim or transcript locator\n  locator      Read a live evidence transcript locator\n  search       Retrieve bounded, cited memory matches\n  get          Read one live cited memory by target\n  correct      Supersede a claim using new correction evidence\n  link         Attach supporting or contradicting evidence to a claim\n  delete       Tombstone a source and propagate unavailable evidence\n  profile      Project a live profile-fact claim into the current profile\n  profiles     Retrieve bounded live profile entries\n  review       Store a cited daily review without invoking an LLM\n  reviews      Retrieve bounded daily reviews\n  projections  List bounded stale or missing embedding inputs\n  embed        Upsert a rebuildable embedding projection\n  help         Show this help\n";
 
 fn main() -> ExitCode {
     match run() {
@@ -52,7 +55,13 @@ fn run() -> Result<Option<serde_json::Value>, Box<dyn std::error::Error>> {
         "search" => serde_json::to_value(database.search(read_json::<SearchInput>()?)?)?,
         "get" => serde_json::to_value(database.get(read_json::<GetInput>()?)?)?,
         "correct" => serde_json::to_value(database.correct(read_json::<CorrectInput>()?)?)?,
+        "link" => {
+            database.link_claim_evidence(read_json::<ClaimEvidence>()?)?;
+            serde_json::json!({"ok": true})
+        }
         "delete" => serde_json::to_value(database.delete_source(read_json::<DeleteInput>()?)?)?,
+        "profile" => serde_json::to_value(database.store_profile(read_json::<ProfileInput>()?)?)?,
+        "profiles" => serde_json::to_value(database.profiles(read_json::<ProfilesInput>()?)?)?,
         "review" => serde_json::to_value(database.store_review(read_json::<ReviewInput>()?)?)?,
         "reviews" => serde_json::to_value(database.reviews(read_json::<ReviewsInput>()?)?)?,
         "projections" => {
@@ -67,7 +76,12 @@ fn run() -> Result<Option<serde_json::Value>, Box<dyn std::error::Error>> {
 }
 
 fn read_json<T: DeserializeOwned>() -> Result<T, Box<dyn std::error::Error>> {
-    let mut input = String::new();
-    std::io::stdin().read_to_string(&mut input)?;
-    Ok(serde_json::from_str(&input)?)
+    let mut input = Vec::new();
+    std::io::stdin()
+        .take(MAX_REQUEST_BYTES + 1)
+        .read_to_end(&mut input)?;
+    if input.len() as u64 > MAX_REQUEST_BYTES {
+        return Err("request exceeds 1048576 bytes".into());
+    }
+    Ok(serde_json::from_slice(&input)?)
 }

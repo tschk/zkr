@@ -94,7 +94,6 @@ impl Source {
                 .revision
                 .checked_add(1)
                 .ok_or(ValidationError::RevisionOverflow)?,
-            recorded_at: deleted_at,
             deleted_at: Some(deleted_at),
             ..self.clone()
         })
@@ -169,6 +168,7 @@ pub struct Claim {
     pub subject: String,
     pub predicate: String,
     pub value: String,
+    pub kind: ClaimKind,
     pub valid_time: TimeRange,
     pub recorded_time: TimeRange,
     pub status: ClaimStatus,
@@ -189,51 +189,55 @@ impl Claim {
         Ok(())
     }
 
-    pub fn accept(&mut self) -> Result<(), ValidationError> {
-        if self.status != ClaimStatus::Proposed {
-            return Err(ValidationError::InvalidClaimTransition {
-                from: self.status.clone(),
-                to: ClaimStatus::Accepted,
-            });
-        }
-        self.status = ClaimStatus::Accepted;
-        Ok(())
-    }
-
-    pub fn supersede(&mut self, at: Timestamp) -> Result<(), ValidationError> {
+    pub fn supersede(
+        &mut self,
+        valid_at: Timestamp,
+        recorded_at: Timestamp,
+    ) -> Result<(), ValidationError> {
         if self.status != ClaimStatus::Accepted {
             return Err(ValidationError::InvalidClaimTransition {
                 from: self.status.clone(),
                 to: ClaimStatus::Superseded,
             });
         }
-        let valid_time = TimeRange::new(self.valid_time.from, Some(at))?;
-        let recorded_time = TimeRange::new(self.recorded_time.from, Some(at))?;
+        let valid_time = TimeRange::new(self.valid_time.from, Some(valid_at))?;
+        let recorded_time = TimeRange::new(self.recorded_time.from, Some(recorded_at))?;
         self.valid_time = valid_time;
         self.recorded_time = recorded_time;
         self.status = ClaimStatus::Superseded;
         Ok(())
     }
 
-    pub fn reject(&mut self) -> Result<(), ValidationError> {
-        if self.status != ClaimStatus::Proposed {
+    pub fn retract(&mut self, recorded_at: Timestamp) -> Result<(), ValidationError> {
+        if self.status != ClaimStatus::Accepted {
             return Err(ValidationError::InvalidClaimTransition {
                 from: self.status.clone(),
-                to: ClaimStatus::Rejected,
+                to: ClaimStatus::Retracted,
             });
         }
-        self.status = ClaimStatus::Rejected;
+        self.recorded_time = TimeRange::new(self.recorded_time.from, Some(recorded_at))?;
+        self.status = ClaimStatus::Retracted;
         Ok(())
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum ClaimKind {
+    Fact,
+    ProfileFact,
+    Preference,
+    Task,
+    Skill,
+    Recommendation,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ClaimStatus {
-    Proposed,
     Accepted,
     Superseded,
-    Rejected,
+    Retracted,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -454,6 +458,7 @@ mod tests {
             subject: "person-1".into(),
             predicate: "employer".into(),
             value: "Example Corp".into(),
+            kind: ClaimKind::Fact,
             valid_time: TimeRange::new(100, None).expect("valid time"),
             recorded_time: TimeRange::new(110, None).expect("recorded time"),
             status,
@@ -471,33 +476,37 @@ mod tests {
 
     #[test]
     fn accepted_claim_can_be_superseded_without_losing_history() {
-        let mut old = claim(ClaimStatus::Proposed);
-        old.accept().expect("proposed claim can be accepted");
-        old.supersede(200)
+        let mut old = claim(ClaimStatus::Accepted);
+        old.supersede(200, 250)
             .expect("accepted claim can be superseded");
 
         assert_eq!(old.status, ClaimStatus::Superseded);
         assert_eq!(old.valid_time.until, Some(200));
         assert!(old.valid_time.contains(199));
         assert!(!old.valid_time.contains(200));
-        assert_eq!(old.recorded_time.until, Some(200));
-        assert!(old.recorded_time.contains(199));
-        assert!(!old.recorded_time.contains(200));
+        assert_eq!(old.recorded_time.until, Some(250));
+        assert!(old.recorded_time.contains(249));
+        assert!(!old.recorded_time.contains(250));
     }
 
     #[test]
     fn invalid_claim_transitions_are_rejected() {
-        let mut accepted = claim(ClaimStatus::Accepted);
+        let mut accepted = claim(ClaimStatus::Retracted);
         assert!(matches!(
-            accepted.reject(),
+            accepted.supersede(200, 250),
             Err(ValidationError::InvalidClaimTransition { .. })
         ));
+    }
 
-        let mut proposed = claim(ClaimStatus::Proposed);
-        assert!(matches!(
-            proposed.supersede(200),
-            Err(ValidationError::InvalidClaimTransition { .. })
-        ));
+    #[test]
+    fn accepted_claim_can_be_retracted_without_rewriting_valid_time() {
+        let mut accepted = claim(ClaimStatus::Accepted);
+
+        accepted.retract(200).expect("accepted claim can retract");
+
+        assert_eq!(accepted.status, ClaimStatus::Retracted);
+        assert_eq!(accepted.valid_time.until, None);
+        assert_eq!(accepted.recorded_time.until, Some(200));
     }
 
     #[test]
@@ -544,6 +553,7 @@ mod tests {
         assert_eq!(source.revision, 1);
         assert_eq!(source.deleted_at, None);
         assert_eq!(tombstone.revision, 2);
+        assert_eq!(tombstone.recorded_at, 100);
         assert_eq!(tombstone.deleted_at, Some(101));
     }
 

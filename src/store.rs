@@ -1,14 +1,16 @@
 use crate::{
-    ClaimId, DailyReviewId, EvidenceId, EvidenceRelation, MemoryRef, PersonId, RetrievalItem,
-    RetrievalPack, SourceId, SourceKind, TenantId, Timestamp,
+    ClaimEvidence, ClaimId, ClaimKind, DailyReviewId, EvidenceId, EvidenceRelation, MemoryRef,
+    PersonId, ProfileEntry, ProfileEntryId, ProfileStability, RetrievalItem, RetrievalPack,
+    SourceId, SourceKind, TenantId, Timestamp,
 };
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use std::{
-    collections::{HashMap, HashSet},
-    path::Path,
-};
+use std::path::Path;
+
+mod embeddings;
+mod schema;
+
+use embeddings::*;
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 enum RetrievalTarget {
@@ -33,14 +35,14 @@ pub struct Embedding {
     pub distance: VectorDistance,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VectorNormalization {
     None,
     L2,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VectorDistance {
     Cosine,
@@ -130,6 +132,7 @@ pub struct RememberInput {
     pub kind: SourceKind,
     pub text: String,
     pub captured_at: Timestamp,
+    pub recorded_at: Timestamp,
     pub claim: Option<ClaimInput>,
 }
 
@@ -163,6 +166,7 @@ pub struct ClaimInput {
     pub subject: String,
     pub predicate: String,
     pub value: String,
+    pub kind: ClaimKind,
     pub valid_from: Timestamp,
 }
 
@@ -182,6 +186,14 @@ pub struct SearchInput {
     pub limit: u32,
     #[serde(default)]
     pub query_embedding: Option<DenseQuery>,
+    #[serde(default)]
+    pub as_of: Option<TemporalQuery>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct TemporalQuery {
+    pub valid_at: Timestamp,
+    pub recorded_at: Timestamp,
 }
 
 #[derive(Debug, Deserialize)]
@@ -205,7 +217,8 @@ pub struct CorrectInput {
     pub claim_id: ClaimId,
     pub text: String,
     pub value: String,
-    pub occurred_at: Timestamp,
+    pub valid_at: Timestamp,
+    pub recorded_at: Timestamp,
 }
 
 #[derive(Debug, Serialize)]
@@ -222,6 +235,24 @@ pub struct DeleteInput {
     pub person_id: PersonId,
     pub source_id: SourceId,
     pub deleted_at: Timestamp,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileInput {
+    pub tenant_id: TenantId,
+    pub person_id: PersonId,
+    pub stability: ProfileStability,
+    pub claim_id: ClaimId,
+    pub recorded_at: Timestamp,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProfilesInput {
+    pub tenant_id: TenantId,
+    pub person_id: PersonId,
+    #[serde(default = "default_limit")]
+    pub limit: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -297,12 +328,12 @@ impl MemoryDb {
         let evidence_id = EvidenceId(new_id(&transaction)?);
         let kind = serde_json::to_string(&input.kind)?;
         let inserted = transaction.execute(
-            "INSERT OR IGNORE INTO sources(id, tenant_id, person_id, ingestion_key, revision, kind, content, captured_at, recorded_at) VALUES(?1, ?2, ?3, ?4, 1, ?5, ?6, ?7, ?7)",
-            params![source_id.0, input.tenant_id.0, input.person_id.0, input.ingestion_key, kind, input.text, input.captured_at],
+            "INSERT OR IGNORE INTO sources(id, tenant_id, person_id, ingestion_key, revision, kind, content, captured_at, recorded_at) VALUES(?1, ?2, ?3, ?4, 1, ?5, ?6, ?7, ?8)",
+            params![source_id.0, input.tenant_id.0, input.person_id.0, input.ingestion_key, kind, input.text, input.captured_at, input.recorded_at],
         )?;
         if inserted == 0 {
             let replay = transaction.query_row(
-                "SELECT s.id, e.id, c.id, s.kind, s.content, s.captured_at, s.deleted_at, e.deleted_at, c.subject, c.predicate, c.value, c.valid_from FROM sources s JOIN evidence e ON e.source_id = s.id AND e.tenant_id = s.tenant_id AND e.person_id = s.person_id LEFT JOIN claim_evidence ce ON ce.evidence_id = e.id AND ce.tenant_id = e.tenant_id AND ce.person_id = e.person_id LEFT JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id WHERE s.tenant_id = ?1 AND s.person_id = ?2 AND s.ingestion_key = ?3 ORDER BY e.id, c.id LIMIT 1",
+                "SELECT s.id, e.id, c.id, s.kind, s.content, s.captured_at, s.recorded_at, s.deleted_at, e.deleted_at, c.subject, c.predicate, c.value, c.valid_from, c.kind FROM sources s JOIN evidence e ON e.id = s.origin_evidence_id AND e.tenant_id = s.tenant_id AND e.person_id = s.person_id LEFT JOIN claims c ON c.id = s.origin_claim_id AND c.tenant_id = s.tenant_id AND c.person_id = s.person_id WHERE s.tenant_id = ?1 AND s.person_id = ?2 AND s.ingestion_key = ?3",
                 params![input.tenant_id.0, input.person_id.0, input.ingestion_key],
                 |row| {
                     Ok((
@@ -314,16 +345,18 @@ impl MemoryDb {
                         row.get::<_, String>(3)?,
                         row.get::<_, String>(4)?,
                         row.get::<_, i64>(5)?,
-                        row.get::<_, Option<i64>>(6)?,
+                        row.get::<_, i64>(6)?,
                         row.get::<_, Option<i64>>(7)?,
-                        row.get::<_, Option<String>>(8)?,
+                        row.get::<_, Option<i64>>(8)?,
                         row.get::<_, Option<String>>(9)?,
                         row.get::<_, Option<String>>(10)?,
-                        row.get::<_, Option<i64>>(11)?,
+                        row.get::<_, Option<String>>(11)?,
+                        row.get::<_, Option<i64>>(12)?,
+                        row.get::<_, Option<String>>(13)?,
                     ))
                 },
             ).optional()?.ok_or(Error::NotFound)?;
-            if replay.4.is_some() || replay.5.is_some() {
+            if replay.5.is_some() || replay.6.is_some() {
                 return Err(Error::NotFound);
             }
             let stored_locator = transaction
@@ -342,11 +375,11 @@ impl MemoryDb {
                     },
                 )
                 .optional()?;
-            let stored_claim = match (&replay.6, &replay.7, &replay.8, replay.9) {
-                (Some(subject), Some(predicate), Some(value), Some(valid_from)) => {
-                    Some((subject, predicate, value, valid_from))
+            let stored_claim = match (&replay.7, &replay.8, &replay.9, replay.10, &replay.11) {
+                (Some(subject), Some(predicate), Some(value), Some(valid_from), Some(kind)) => {
+                    Some((subject, predicate, value, valid_from, kind.as_str()))
                 }
-                (None, None, None, None) => None,
+                (None, None, None, None, None) => None,
                 _ => return Err(Error::NotFound),
             };
             let input_claim = input.claim.as_ref().map(|claim| {
@@ -355,11 +388,13 @@ impl MemoryDb {
                     &claim.predicate,
                     &claim.value,
                     claim.valid_from,
+                    claim_kind_name(&claim.kind),
                 )
             });
             if replay.1 != kind
                 || replay.2 != input.text
                 || replay.3 != input.captured_at
+                || replay.4 != input.recorded_at
                 || stored_claim != input_claim
                 || stored_locator.as_ref() != locator.as_ref()
             {
@@ -376,7 +411,7 @@ impl MemoryDb {
         )?;
         transaction.execute(
             "INSERT INTO evidence(id, tenant_id, person_id, source_id, source_revision, quote, recorded_at) VALUES(?1, ?2, ?3, ?4, 1, ?5, ?6)",
-            params![evidence_id.0, input.tenant_id.0, input.person_id.0, source_id.0, input.text, input.captured_at],
+            params![evidence_id.0, input.tenant_id.0, input.person_id.0, source_id.0, input.text, input.recorded_at],
         )?;
         if let Some(locator) = locator {
             transaction.execute(
@@ -393,10 +428,14 @@ impl MemoryDb {
                     &input.person_id,
                     &evidence_id,
                     claim,
-                    input.captured_at,
+                    input.recorded_at,
                 )
             })
             .transpose()?;
+        transaction.execute(
+            "UPDATE sources SET origin_evidence_id = ?1, origin_claim_id = ?2 WHERE id = ?3 AND tenant_id = ?4 AND person_id = ?5",
+            params![evidence_id.0, claim_id.as_ref().map(|id| &id.0), source_id.0, input.tenant_id.0, input.person_id.0],
+        )?;
         transaction.commit()?;
         Ok(Remembered {
             source_id,
@@ -436,35 +475,17 @@ impl MemoryDb {
         let limit = bounded_limit(input.limit);
         let candidate_limit = limit * 4;
         let query = format!("\"{}\"", input.query.replace('"', "\"\""));
-        let mut statement = self.connection.prepare(
-            "SELECT s.id, c.id
-             FROM source_fts
-             JOIN sources s ON s.id = source_fts.source_id AND s.tenant_id = source_fts.tenant_id AND s.person_id = source_fts.person_id
-             JOIN evidence e ON e.source_id = s.id AND e.tenant_id = s.tenant_id AND e.person_id = s.person_id AND e.deleted_at IS NULL
-             LEFT JOIN claim_evidence ce ON ce.evidence_id = e.id AND ce.tenant_id = e.tenant_id AND ce.person_id = e.person_id
-             LEFT JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL
-             WHERE source_fts MATCH ?1 AND source_fts.tenant_id = ?2 AND source_fts.person_id = ?3 AND s.deleted_at IS NULL
-             AND (c.id IS NOT NULL OR NOT EXISTS (
-                 SELECT 1 FROM evidence live_e
-                 JOIN claim_evidence live_ce ON live_ce.evidence_id = live_e.id AND live_ce.tenant_id = live_e.tenant_id AND live_ce.person_id = live_e.person_id
-                 WHERE live_e.source_id = s.id AND live_e.tenant_id = s.tenant_id AND live_e.person_id = s.person_id AND live_e.deleted_at IS NULL
-             ))
-             ORDER BY bm25(source_fts), s.id, c.id LIMIT ?4",
+        let lexical = self.lexical_targets(
+            &input.tenant_id,
+            &input.person_id,
+            &query,
+            candidate_limit,
+            input.as_of.as_ref(),
         )?;
-        let rows = statement.query_map(
-            params![query, input.tenant_id.0, input.person_id.0, candidate_limit],
-            |row| {
-                let source_id = row.get::<_, String>(0)?;
-                Ok(match row.get::<_, Option<String>>(1)? {
-                    Some(claim_id) => RetrievalTarget::Claim(ClaimId(claim_id)),
-                    None => RetrievalTarget::Source(SourceId(source_id)),
-                })
-            },
-        )?;
-        let lexical = rows.collect::<std::result::Result<Vec<_>, _>>()?;
         let dense = input
             .query_embedding
             .as_ref()
+            .filter(|_| input.as_of.is_none())
             .map(|query| self.dense_claims(&input.tenant_id, &input.person_id, query))
             .transpose()?
             .unwrap_or_default();
@@ -476,6 +497,7 @@ impl MemoryDb {
                 &input.person_id,
                 target,
                 relevance_basis_points,
+                input.as_of.as_ref(),
             )?);
         }
         let gaps = if items.is_empty() {
@@ -490,6 +512,60 @@ impl MemoryDb {
         })
     }
 
+    fn lexical_targets(
+        &self,
+        tenant_id: &TenantId,
+        person_id: &PersonId,
+        query: &str,
+        candidate_limit: u32,
+        as_of: Option<&TemporalQuery>,
+    ) -> Result<Vec<RetrievalTarget>> {
+        let (sql, values): (&str, Vec<&dyn rusqlite::ToSql>) = match as_of {
+            None => (
+                "SELECT s.id, c.id
+                 FROM source_fts
+                 JOIN sources s ON s.id = source_fts.source_id AND s.tenant_id = source_fts.tenant_id AND s.person_id = source_fts.person_id
+                 JOIN evidence e ON e.source_id = s.id AND e.tenant_id = s.tenant_id AND e.person_id = s.person_id AND e.deleted_at IS NULL
+                 LEFT JOIN claim_evidence ce ON ce.evidence_id = e.id AND ce.tenant_id = e.tenant_id AND ce.person_id = e.person_id AND ce.relation = '\"supports\"'
+                 LEFT JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL
+                 WHERE source_fts MATCH ?1 AND source_fts.tenant_id = ?2 AND source_fts.person_id = ?3 AND s.deleted_at IS NULL
+                 AND (c.id IS NOT NULL OR NOT EXISTS (
+                     SELECT 1 FROM evidence live_e
+                     JOIN claim_evidence live_ce ON live_ce.evidence_id = live_e.id AND live_ce.tenant_id = live_e.tenant_id AND live_ce.person_id = live_e.person_id AND live_ce.relation = '\"supports\"'
+                     WHERE live_e.source_id = s.id AND live_e.tenant_id = s.tenant_id AND live_e.person_id = s.person_id AND live_e.deleted_at IS NULL
+                 ))
+                 ORDER BY bm25(source_fts), s.id, c.id LIMIT ?4",
+                vec![&query, &tenant_id.0, &person_id.0, &candidate_limit],
+            ),
+            Some(as_of) => (
+                "SELECT s.id, c.id
+                 FROM source_fts
+                 JOIN sources s ON s.id = source_fts.source_id AND s.tenant_id = source_fts.tenant_id AND s.person_id = source_fts.person_id
+                 JOIN evidence e ON e.source_id = s.id AND e.tenant_id = s.tenant_id AND e.person_id = s.person_id AND e.deleted_at IS NULL AND e.recorded_at <= ?5
+                 LEFT JOIN claim_evidence ce ON ce.evidence_id = e.id AND ce.tenant_id = e.tenant_id AND ce.person_id = e.person_id AND ce.relation = '\"supports\"'
+                 LEFT JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id AND c.status IN ('accepted', 'superseded') AND c.valid_from <= ?4 AND (c.valid_until IS NULL OR c.valid_until > ?4) AND c.recorded_from <= ?5 AND (c.recorded_until IS NULL OR c.recorded_until > ?5)
+                 WHERE source_fts MATCH ?1 AND source_fts.tenant_id = ?2 AND source_fts.person_id = ?3 AND s.deleted_at IS NULL AND s.captured_at <= ?4 AND s.recorded_at <= ?5
+                 AND (c.id IS NOT NULL OR NOT EXISTS (
+                     SELECT 1 FROM evidence live_e
+                     JOIN claim_evidence live_ce ON live_ce.evidence_id = live_e.id AND live_ce.tenant_id = live_e.tenant_id AND live_ce.person_id = live_e.person_id AND live_ce.relation = '\"supports\"'
+                     JOIN claims live_c ON live_c.id = live_ce.claim_id AND live_c.tenant_id = live_ce.tenant_id AND live_c.person_id = live_ce.person_id
+                     WHERE live_e.source_id = s.id AND live_e.tenant_id = s.tenant_id AND live_e.person_id = s.person_id AND live_e.deleted_at IS NULL AND live_e.recorded_at <= ?5 AND live_c.status IN ('accepted', 'superseded') AND live_c.valid_from <= ?4 AND (live_c.valid_until IS NULL OR live_c.valid_until > ?4) AND live_c.recorded_from <= ?5 AND (live_c.recorded_until IS NULL OR live_c.recorded_until > ?5)
+                 ))
+                 ORDER BY bm25(source_fts), s.id, c.id LIMIT ?6",
+                vec![&query, &tenant_id.0, &person_id.0, &as_of.valid_at, &as_of.recorded_at, &candidate_limit],
+            ),
+        };
+        let mut statement = self.connection.prepare(sql)?;
+        let rows = statement.query_map(rusqlite::params_from_iter(values), |row| {
+            let source_id = row.get::<_, String>(0)?;
+            Ok(match row.get::<_, Option<String>>(1)? {
+                Some(claim_id) => RetrievalTarget::Claim(ClaimId(claim_id)),
+                None => RetrievalTarget::Source(SourceId(source_id)),
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
     pub fn get(&self, input: GetInput) -> Result<RetrievalItem> {
         require_scope(&input.tenant_id, &input.person_id)?;
         let target = match input.target {
@@ -497,98 +573,7 @@ impl MemoryDb {
             EmbeddingTarget::Evidence(id) => RetrievalTarget::Evidence(id),
             EmbeddingTarget::Claim(id) => RetrievalTarget::Claim(id),
         };
-        self.retrieval_item(&input.tenant_id, &input.person_id, target, 10_000)
-    }
-
-    fn dense_claims(
-        &self,
-        tenant_id: &TenantId,
-        person_id: &PersonId,
-        query: &DenseQuery,
-    ) -> Result<Vec<RetrievalTarget>> {
-        validate_dense_query(query)?;
-        let mut statement = self.connection.prepare(
-            "SELECT embeddings.target_kind, embeddings.target_id, embeddings.dimension, embeddings.normalization, embeddings.distance, embeddings.vector, embeddings.target_revision, embeddings.input_hash
-             FROM embeddings
-             WHERE embeddings.tenant_id = ?1 AND embeddings.person_id = ?2 AND embeddings.model = ?3 AND embeddings.version = ?4",
-        )?;
-        let rows = statement.query_map(
-            params![tenant_id.0, person_id.0, query.model, query.version],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, usize>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, String>(5)?,
-                    row.get::<_, i64>(6)?,
-                    row.get::<_, String>(7)?,
-                ))
-            },
-        )?;
-        let mut scores = HashMap::<RetrievalTarget, f32>::new();
-        let mut lane = None;
-        for row in rows {
-            let (
-                target_kind,
-                target_id,
-                dimension,
-                normalization,
-                distance,
-                vector,
-                target_revision,
-                input_hash,
-            ) = row?;
-            let target = embedding_target(&target_kind, &target_id)?;
-            let current = match self.projection_input(tenant_id, person_id, target) {
-                Ok(current) => current,
-                Err(Error::NotFound) => continue,
-                Err(error) => return Err(error),
-            };
-            if current.target_revision != target_revision || current.input_hash != input_hash {
-                continue;
-            }
-            if dimension != query.vector.len() {
-                return Err(Error::Invalid(format!(
-                    "query embedding dimension {} does not match stored dimension {dimension}",
-                    query.vector.len()
-                )));
-            }
-            let normalization: VectorNormalization = serde_json::from_str(&normalization)?;
-            let distance: VectorDistance = serde_json::from_str(&distance)?;
-            let configuration = (normalization, distance, dimension);
-            if lane.as_ref().is_some_and(|lane| lane != &configuration) {
-                return Err(Error::Invalid(
-                    "stored embeddings mix incompatible vector configurations".to_owned(),
-                ));
-            }
-            lane = Some(configuration.clone());
-            let vector: Vec<f32> = serde_json::from_str(&vector)?;
-            if vector.len() != dimension || vector.iter().any(|value| !value.is_finite()) {
-                return Err(Error::Invalid("stored embedding is invalid".to_owned()));
-            }
-            let score = vector_score(&query.vector, &vector, &configuration.1)?;
-            for target in self.retrieval_targets_for_embedding(
-                tenant_id,
-                person_id,
-                &target_kind,
-                &target_id,
-            )? {
-                scores
-                    .entry(target)
-                    .and_modify(|existing| *existing = existing.max(score))
-                    .or_insert(score);
-            }
-        }
-        let mut ranked = scores.into_iter().collect::<Vec<_>>();
-        ranked.sort_by(|left, right| {
-            right
-                .1
-                .total_cmp(&left.1)
-                .then_with(|| left.0.cmp(&right.0))
-        });
-        Ok(ranked.into_iter().map(|(target, _)| target).collect())
+        self.retrieval_item(&input.tenant_id, &input.person_id, target, 10_000, None)
     }
 
     fn retrieval_targets_for_embedding(
@@ -603,10 +588,10 @@ impl MemoryDb {
                 "SELECT id FROM claims WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND status = 'accepted' AND valid_until IS NULL AND recorded_until IS NULL"
             }
             "evidence" => {
-                "SELECT c.id FROM evidence e JOIN sources s ON s.id = e.source_id AND s.tenant_id = e.tenant_id AND s.person_id = e.person_id LEFT JOIN claim_evidence ce ON ce.evidence_id = e.id AND ce.tenant_id = e.tenant_id AND ce.person_id = e.person_id LEFT JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL WHERE e.id = ?1 AND e.tenant_id = ?2 AND e.person_id = ?3 AND e.deleted_at IS NULL AND s.deleted_at IS NULL ORDER BY c.id"
+                "SELECT c.id FROM evidence e JOIN sources s ON s.id = e.source_id AND s.tenant_id = e.tenant_id AND s.person_id = e.person_id LEFT JOIN claim_evidence ce ON ce.evidence_id = e.id AND ce.tenant_id = e.tenant_id AND ce.person_id = e.person_id AND ce.relation = '\"supports\"' LEFT JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL WHERE e.id = ?1 AND e.tenant_id = ?2 AND e.person_id = ?3 AND e.deleted_at IS NULL AND s.deleted_at IS NULL ORDER BY c.id"
             }
             "source" => {
-                "SELECT DISTINCT c.id FROM sources s JOIN evidence e ON e.source_id = s.id AND e.tenant_id = s.tenant_id AND e.person_id = s.person_id LEFT JOIN claim_evidence ce ON ce.evidence_id = e.id AND ce.tenant_id = e.tenant_id AND ce.person_id = e.person_id LEFT JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL WHERE s.id = ?1 AND s.tenant_id = ?2 AND s.person_id = ?3 AND s.deleted_at IS NULL AND e.deleted_at IS NULL ORDER BY c.id"
+                "SELECT DISTINCT c.id FROM sources s JOIN evidence e ON e.source_id = s.id AND e.tenant_id = s.tenant_id AND e.person_id = s.person_id LEFT JOIN claim_evidence ce ON ce.evidence_id = e.id AND ce.tenant_id = e.tenant_id AND ce.person_id = e.person_id AND ce.relation = '\"supports\"' LEFT JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL WHERE s.id = ?1 AND s.tenant_id = ?2 AND s.person_id = ?3 AND s.deleted_at IS NULL AND e.deleted_at IS NULL ORDER BY c.id"
             }
             _ => {
                 return Err(Error::Invalid(
@@ -650,10 +635,10 @@ impl MemoryDb {
     ) -> Result<bool> {
         let sql = match target_kind {
             "source" => {
-                "SELECT EXISTS(SELECT 1 FROM claim_evidence ce JOIN evidence e ON e.id = ce.evidence_id AND e.tenant_id = ce.tenant_id AND e.person_id = ce.person_id WHERE e.source_id = ?1 AND e.tenant_id = ?2 AND e.person_id = ?3)"
+                "SELECT EXISTS(SELECT 1 FROM claim_evidence ce JOIN evidence e ON e.id = ce.evidence_id AND e.tenant_id = ce.tenant_id AND e.person_id = ce.person_id WHERE ce.relation = '\"supports\"' AND e.source_id = ?1 AND e.tenant_id = ?2 AND e.person_id = ?3)"
             }
             "evidence" => {
-                "SELECT EXISTS(SELECT 1 FROM claim_evidence WHERE evidence_id = ?1 AND tenant_id = ?2 AND person_id = ?3)"
+                "SELECT EXISTS(SELECT 1 FROM claim_evidence WHERE relation = '\"supports\"' AND evidence_id = ?1 AND tenant_id = ?2 AND person_id = ?3)"
             }
             "claim" => return Ok(true),
             _ => {
@@ -675,25 +660,38 @@ impl MemoryDb {
         person_id: &PersonId,
         target: RetrievalTarget,
         relevance_basis_points: u16,
+        as_of: Option<&TemporalQuery>,
     ) -> Result<RetrievalItem> {
-        let (sql, id) = match &target {
-            RetrievalTarget::Claim(id) => (
-                "SELECT c.subject || ' ' || c.predicate || ' ' || c.value, ce.evidence_id
+        let (sql, values): (&str, Vec<&dyn rusqlite::ToSql>) = match &target {
+            RetrievalTarget::Claim(id) => match as_of {
+                None => (
+                    "SELECT c.subject || ' ' || c.predicate || ' ' || c.value, ce.evidence_id
                  FROM claims c
-                 JOIN claim_evidence ce ON ce.claim_id = c.id AND ce.tenant_id = c.tenant_id AND ce.person_id = c.person_id
+                 JOIN claim_evidence ce ON ce.claim_id = c.id AND ce.tenant_id = c.tenant_id AND ce.person_id = c.person_id AND ce.relation = '\"supports\"'
                  JOIN evidence e ON e.id = ce.evidence_id AND e.tenant_id = ce.tenant_id AND e.person_id = ce.person_id
                  JOIN sources s ON s.id = e.source_id AND s.tenant_id = e.tenant_id AND s.person_id = e.person_id
                  WHERE c.id = ?1 AND c.tenant_id = ?2 AND c.person_id = ?3 AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL AND e.deleted_at IS NULL AND s.deleted_at IS NULL
                  ORDER BY ce.evidence_id LIMIT 1",
-                &id.0,
-            ),
+                    vec![&id.0, &tenant_id.0, &person_id.0],
+                ),
+                Some(as_of) => (
+                    "SELECT c.subject || ' ' || c.predicate || ' ' || c.value, ce.evidence_id
+                 FROM claims c
+                 JOIN claim_evidence ce ON ce.claim_id = c.id AND ce.tenant_id = c.tenant_id AND ce.person_id = c.person_id AND ce.relation = '\"supports\"'
+                 JOIN evidence e ON e.id = ce.evidence_id AND e.tenant_id = ce.tenant_id AND e.person_id = ce.person_id
+                 JOIN sources s ON s.id = e.source_id AND s.tenant_id = e.tenant_id AND s.person_id = e.person_id
+                 WHERE c.id = ?1 AND c.tenant_id = ?2 AND c.person_id = ?3 AND c.status IN ('accepted', 'superseded') AND c.valid_from <= ?4 AND (c.valid_until IS NULL OR c.valid_until > ?4) AND c.recorded_from <= ?5 AND (c.recorded_until IS NULL OR c.recorded_until > ?5) AND e.deleted_at IS NULL AND e.recorded_at <= ?5 AND s.deleted_at IS NULL AND s.captured_at <= ?4 AND s.recorded_at <= ?5
+                 ORDER BY ce.evidence_id LIMIT 1",
+                    vec![&id.0, &tenant_id.0, &person_id.0, &as_of.valid_at, &as_of.recorded_at],
+                ),
+            },
             RetrievalTarget::Source(id) => (
                 "SELECT s.content, e.id FROM sources s JOIN evidence e ON e.source_id = s.id AND e.tenant_id = s.tenant_id AND e.person_id = s.person_id WHERE s.id = ?1 AND s.tenant_id = ?2 AND s.person_id = ?3 AND s.deleted_at IS NULL AND e.deleted_at IS NULL ORDER BY e.id LIMIT 1",
-                &id.0,
+                vec![&id.0, &tenant_id.0, &person_id.0],
             ),
             RetrievalTarget::Evidence(id) => (
                 "SELECT e.quote, e.id FROM evidence e JOIN sources s ON s.id = e.source_id AND s.tenant_id = e.tenant_id AND s.person_id = e.person_id WHERE e.id = ?1 AND e.tenant_id = ?2 AND e.person_id = ?3 AND e.deleted_at IS NULL AND s.deleted_at IS NULL",
-                &id.0,
+                vec![&id.0, &tenant_id.0, &person_id.0],
             ),
         };
         let memory = match &target {
@@ -701,17 +699,19 @@ impl MemoryDb {
             RetrievalTarget::Source(id) => MemoryRef::Source(id.clone()),
             RetrievalTarget::Evidence(id) => MemoryRef::Evidence(id.clone()),
         };
-        self.connection
-            .query_row(sql, params![id, tenant_id.0, person_id.0], |row| {
-                Ok(RetrievalItem {
-                    memory,
-                    excerpt: row.get(0)?,
-                    relevance_basis_points,
-                    evidence_ids: vec![EvidenceId(row.get(1)?)],
-                })
+        let (excerpt, evidence_id) = self
+            .connection
+            .query_row(sql, rusqlite::params_from_iter(values), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })
             .optional()?
-            .ok_or(Error::NotFound)
+            .ok_or(Error::NotFound)?;
+        Ok(RetrievalItem {
+            memory,
+            excerpt: bounded_excerpt(excerpt),
+            relevance_basis_points,
+            evidence_ids: vec![EvidenceId(evidence_id)],
+        })
     }
 
     pub fn correct(&mut self, input: CorrectInput) -> Result<Corrected> {
@@ -721,23 +721,23 @@ impl MemoryDb {
         let transaction = self.connection.transaction()?;
         let old = transaction
             .query_row(
-                "SELECT subject, predicate, valid_from, recorded_from FROM claims WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND status = 'accepted'",
+                "SELECT subject, predicate, kind, valid_from, recorded_from FROM claims WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND status = 'accepted'",
                 params![input.claim_id.0, input.tenant_id.0, input.person_id.0],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?, row.get::<_, i64>(3)?)),
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, i64>(3)?, row.get::<_, i64>(4)?)),
             )
             .optional()?
             .ok_or(Error::NotFound)?;
-        if input.occurred_at <= old.2 || input.occurred_at <= old.3 {
+        if input.valid_at <= old.3 || input.recorded_at <= old.4 {
             return Err(Error::Invalid(
-                "occurred_at must be after the original claim became valid and was recorded"
+                "correction timestamps must advance the original valid and recorded intervals"
                     .to_owned(),
             ));
         }
         let source_id = SourceId(new_id(&transaction)?);
         let evidence_id = EvidenceId(new_id(&transaction)?);
         transaction.execute(
-            "INSERT INTO sources(id, tenant_id, person_id, revision, kind, content, captured_at, recorded_at) VALUES(?1, ?2, ?3, 1, '\"user_correction\"', ?4, ?5, ?5)",
-            params![source_id.0, input.tenant_id.0, input.person_id.0, input.text, input.occurred_at],
+            "INSERT INTO sources(id, tenant_id, person_id, revision, kind, content, captured_at, recorded_at) VALUES(?1, ?2, ?3, 1, '\"user_correction\"', ?4, ?5, ?6)",
+            params![source_id.0, input.tenant_id.0, input.person_id.0, input.text, input.valid_at, input.recorded_at],
         )?;
         transaction.execute(
             "INSERT INTO source_fts(source_id, tenant_id, person_id, content) VALUES(?1, ?2, ?3, ?4)",
@@ -745,11 +745,15 @@ impl MemoryDb {
         )?;
         transaction.execute(
             "INSERT INTO evidence(id, tenant_id, person_id, source_id, source_revision, quote, recorded_at) VALUES(?1, ?2, ?3, ?4, 1, ?5, ?6)",
-            params![evidence_id.0, input.tenant_id.0, input.person_id.0, source_id.0, input.text, input.occurred_at],
+            params![evidence_id.0, input.tenant_id.0, input.person_id.0, source_id.0, input.text, input.recorded_at],
         )?;
         transaction.execute(
-            "UPDATE claims SET status = 'superseded', valid_until = ?1, recorded_until = ?1 WHERE id = ?2 AND tenant_id = ?3 AND person_id = ?4",
-            params![input.occurred_at, input.claim_id.0, input.tenant_id.0, input.person_id.0],
+            "UPDATE claims SET status = 'superseded', valid_until = ?1, recorded_until = ?2 WHERE id = ?3 AND tenant_id = ?4 AND person_id = ?5",
+            params![input.valid_at, input.recorded_at, input.claim_id.0, input.tenant_id.0, input.person_id.0],
+        )?;
+        transaction.execute(
+            "DELETE FROM profile_entries WHERE tenant_id = ?1 AND person_id = ?2 AND claim_id = ?3",
+            params![input.tenant_id.0, input.person_id.0, input.claim_id.0],
         )?;
         let claim_id = insert_claim(
             &transaction,
@@ -760,9 +764,14 @@ impl MemoryDb {
                 subject: old.0,
                 predicate: old.1,
                 value: input.value,
-                valid_from: input.occurred_at.max(old.2),
+                kind: claim_kind(&old.2)?,
+                valid_from: input.valid_at,
             },
-            input.occurred_at,
+            input.recorded_at,
+        )?;
+        transaction.execute(
+            "UPDATE sources SET origin_evidence_id = ?1, origin_claim_id = ?2 WHERE id = ?3 AND tenant_id = ?4 AND person_id = ?5",
+            params![evidence_id.0, claim_id.0, source_id.0, input.tenant_id.0, input.person_id.0],
         )?;
         transaction.commit()?;
         Ok(Corrected {
@@ -805,15 +814,19 @@ impl MemoryDb {
             params![input.deleted_at, input.source_id.0, input.tenant_id.0, input.person_id.0],
         )? as u64;
         let claim_count = transaction.execute(
-            "UPDATE claims SET status = 'rejected', recorded_until = ?1
+            "UPDATE claims SET status = 'retracted', recorded_until = ?1
              WHERE tenant_id = ?2 AND person_id = ?3 AND status = 'accepted'
              AND id IN (SELECT ce.claim_id FROM claim_evidence ce JOIN evidence e ON e.id = ce.evidence_id AND e.tenant_id = ce.tenant_id AND e.person_id = ce.person_id WHERE e.source_id = ?4)
-             AND NOT EXISTS (SELECT 1 FROM claim_evidence live_ce JOIN evidence live_e ON live_e.id = live_ce.evidence_id AND live_e.tenant_id = live_ce.tenant_id AND live_e.person_id = live_ce.person_id WHERE live_ce.claim_id = claims.id AND live_e.deleted_at IS NULL)",
+             AND NOT EXISTS (SELECT 1 FROM claim_evidence live_ce JOIN evidence live_e ON live_e.id = live_ce.evidence_id AND live_e.tenant_id = live_ce.tenant_id AND live_e.person_id = live_ce.person_id WHERE live_ce.claim_id = claims.id AND live_ce.relation = '\"supports\"' AND live_e.deleted_at IS NULL)",
             params![input.deleted_at, input.tenant_id.0, input.person_id.0, input.source_id.0],
         )? as u64;
         transaction.execute(
-            "DELETE FROM embeddings WHERE tenant_id = ?1 AND person_id = ?2 AND ((target_kind = 'source' AND target_id = ?3) OR (target_kind = 'evidence' AND target_id IN (SELECT id FROM evidence WHERE source_id = ?3 AND tenant_id = ?1 AND person_id = ?2)) OR (target_kind = 'claim' AND target_id IN (SELECT id FROM claims WHERE tenant_id = ?1 AND person_id = ?2 AND status = 'rejected')))",
+            "DELETE FROM embeddings WHERE tenant_id = ?1 AND person_id = ?2 AND ((target_kind = 'source' AND target_id = ?3) OR (target_kind = 'evidence' AND target_id IN (SELECT id FROM evidence WHERE source_id = ?3 AND tenant_id = ?1 AND person_id = ?2)) OR (target_kind = 'claim' AND target_id IN (SELECT c.id FROM claims c JOIN claim_evidence ce ON ce.claim_id = c.id AND ce.tenant_id = c.tenant_id AND ce.person_id = c.person_id JOIN evidence e ON e.id = ce.evidence_id AND e.tenant_id = ce.tenant_id AND e.person_id = ce.person_id WHERE c.tenant_id = ?1 AND c.person_id = ?2 AND c.status = 'retracted' AND e.source_id = ?3)))",
             params![input.tenant_id.0, input.person_id.0, input.source_id.0],
+        )?;
+        transaction.execute(
+            "DELETE FROM profile_entries WHERE tenant_id = ?1 AND person_id = ?2 AND claim_id IN (SELECT id FROM claims WHERE tenant_id = ?1 AND person_id = ?2 AND status = 'retracted')",
+            params![input.tenant_id.0, input.person_id.0],
         )?;
         transaction.execute(
             "DELETE FROM daily_reviews WHERE tenant_id = ?1 AND person_id = ?2 AND EXISTS (SELECT 1 FROM json_each(evidence_ids) citation JOIN evidence e ON e.id = citation.value WHERE e.source_id = ?3 AND e.tenant_id = ?1 AND e.person_id = ?2)",
@@ -825,6 +838,139 @@ impl MemoryDb {
             evidence_count,
             claim_count,
         })
+    }
+
+    pub fn link_claim_evidence(&mut self, input: ClaimEvidence) -> Result<()> {
+        input
+            .validate()
+            .map_err(|error| Error::Invalid(error.to_string()))?;
+        require_scope(&input.tenant_id, &input.person_id)?;
+        let transaction = self.connection.transaction()?;
+        let claim_exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM claims WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND status = 'accepted')",
+            params![input.claim_id.0, input.tenant_id.0, input.person_id.0],
+            |row| row.get(0),
+        )?;
+        let evidence_exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM evidence WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND deleted_at IS NULL)",
+            params![input.evidence_id.0, input.tenant_id.0, input.person_id.0],
+            |row| row.get(0),
+        )?;
+        if !claim_exists || !evidence_exists {
+            return Err(Error::NotFound);
+        }
+        transaction.execute(
+            "INSERT INTO claim_evidence(tenant_id, person_id, claim_id, evidence_id, relation, confidence_basis_points) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+            params![input.tenant_id.0, input.person_id.0, input.claim_id.0, input.evidence_id.0, serde_json::to_string(&input.relation)?, input.confidence_basis_points],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn store_profile(&mut self, input: ProfileInput) -> Result<ProfileEntry> {
+        require_scope(&input.tenant_id, &input.person_id)?;
+        let transaction = self.connection.transaction()?;
+        let claim = transaction
+            .query_row(
+            "SELECT predicate, value, recorded_from FROM claims WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND kind = 'profile_fact' AND status = 'accepted' AND valid_until IS NULL AND recorded_until IS NULL",
+            params![input.claim_id.0, input.tenant_id.0, input.person_id.0],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Timestamp>(2)?)),
+        )
+            .optional()?;
+        let Some((key, value, claim_recorded_at)) = claim else {
+            return Err(Error::NotFound);
+        };
+        if input.recorded_at < claim_recorded_at {
+            return Err(Error::Invalid(
+                "profile entry cannot predate its backing claim".to_owned(),
+            ));
+        }
+        let existing = transaction
+            .query_row(
+                "SELECT id, value, stability, claim_id, recorded_at FROM profile_entries WHERE tenant_id = ?1 AND person_id = ?2 AND key = ?3",
+                params![input.tenant_id.0, input.person_id.0, key],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?, row.get::<_, Timestamp>(4)?)),
+            )
+            .optional()?;
+        let stability = serde_json::to_string(&input.stability)?;
+        if let Some((id, stored_value, stored_stability, stored_claim_id, stored_at)) = &existing {
+            if stored_value == &value
+                && stored_stability == &stability
+                && stored_claim_id == &input.claim_id.0
+                && *stored_at == input.recorded_at
+            {
+                transaction.commit()?;
+                return Ok(ProfileEntry {
+                    id: ProfileEntryId(id.clone()),
+                    tenant_id: input.tenant_id,
+                    person_id: input.person_id,
+                    key,
+                    value,
+                    stability: input.stability,
+                    claim_id: input.claim_id,
+                    recorded_at: input.recorded_at,
+                });
+            }
+            if input.recorded_at <= *stored_at {
+                return Err(Error::Invalid(
+                    "profile replacement must advance recorded_at".to_owned(),
+                ));
+            }
+        }
+        let profile = ProfileEntry {
+            id: existing
+                .as_ref()
+                .map(|existing| ProfileEntryId(existing.0.clone()))
+                .unwrap_or(ProfileEntryId(new_id(&transaction)?)),
+            tenant_id: input.tenant_id,
+            person_id: input.person_id,
+            key,
+            value,
+            stability: input.stability,
+            claim_id: input.claim_id,
+            recorded_at: input.recorded_at,
+        };
+        transaction.execute(
+            "INSERT INTO profile_entries(id, tenant_id, person_id, key, value, stability, claim_id, recorded_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) ON CONFLICT(tenant_id, person_id, key) DO UPDATE SET value = excluded.value, stability = excluded.stability, claim_id = excluded.claim_id, recorded_at = excluded.recorded_at",
+            params![profile.id.0, profile.tenant_id.0, profile.person_id.0, profile.key, profile.value, stability, profile.claim_id.0, profile.recorded_at],
+        )?;
+        transaction.commit()?;
+        Ok(profile)
+    }
+
+    pub fn profiles(&self, input: ProfilesInput) -> Result<Vec<ProfileEntry>> {
+        require_scope(&input.tenant_id, &input.person_id)?;
+        let mut statement = self.connection.prepare(
+            "SELECT p.id, p.key, p.value, p.stability, p.claim_id, p.recorded_at FROM profile_entries p JOIN claims c ON c.id = p.claim_id AND c.tenant_id = p.tenant_id AND c.person_id = p.person_id WHERE p.tenant_id = ?1 AND p.person_id = ?2 AND c.kind = 'profile_fact' AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL ORDER BY p.recorded_at DESC, p.id LIMIT ?3",
+        )?;
+        let rows = statement.query_map(
+            params![
+                input.tenant_id.0,
+                input.person_id.0,
+                bounded_limit(input.limit)
+            ],
+            |row| {
+                let stability: String = row.get(3)?;
+                let stability = serde_json::from_str(&stability).map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        3,
+                        rusqlite::types::Type::Text,
+                        Box::new(error),
+                    )
+                })?;
+                Ok(ProfileEntry {
+                    id: ProfileEntryId(row.get(0)?),
+                    tenant_id: input.tenant_id.clone(),
+                    person_id: input.person_id.clone(),
+                    key: row.get(1)?,
+                    value: row.get(2)?,
+                    stability,
+                    claim_id: ClaimId(row.get(4)?),
+                    recorded_at: row.get(5)?,
+                })
+            },
+        )?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
     pub fn store_review(&mut self, input: ReviewInput) -> Result<StoredReview> {
@@ -889,254 +1035,8 @@ impl MemoryDb {
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
-    pub fn rebuild_embedding<E: Embedder>(
-        &mut self,
-        tenant_id: TenantId,
-        person_id: PersonId,
-        target: EmbeddingTarget,
-        embedder: &E,
-    ) -> Result<StoredEmbedding> {
-        require_scope(&tenant_id, &person_id)?;
-        let projection = self.projection_input(&tenant_id, &person_id, target.clone())?;
-        let embedding = embedder
-            .embed(&projection.text)
-            .map_err(|error| Error::Invalid(format!("embedder failed: {error}")))?;
-        self.upsert_embedding(EmbeddingInput {
-            tenant_id,
-            person_id,
-            target,
-            embedding,
-        })
-    }
-
-    pub fn upsert_embedding(&mut self, input: EmbeddingInput) -> Result<StoredEmbedding> {
-        require_scope(&input.tenant_id, &input.person_id)?;
-        validate_embedding(&input.embedding)?;
-        let projection =
-            self.projection_input(&input.tenant_id, &input.person_id, input.target.clone())?;
-        if input.embedding.input_hash != projection.input_hash {
-            return Err(Error::Invalid(format!(
-                "embedding input_hash does not match current target input; expected {}",
-                projection.input_hash
-            )));
-        }
-        let (target_kind, target_id) = embedding_target_parts(&input.target);
-        let dimension = input.embedding.vector.len();
-        let created_at = self
-            .connection
-            .query_row("SELECT unixepoch()", [], |row| row.get(0))?;
-        self.connection.execute(
-            "INSERT INTO embeddings(tenant_id, person_id, target_kind, target_id, model, version, dimension, input_hash, target_revision, created_at, normalization, distance, vector)
-             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
-             ON CONFLICT(tenant_id, person_id, target_kind, target_id, model, version) DO UPDATE SET dimension = excluded.dimension, input_hash = excluded.input_hash, target_revision = excluded.target_revision, created_at = excluded.created_at, normalization = excluded.normalization, distance = excluded.distance, vector = excluded.vector",
-            params![input.tenant_id.0, input.person_id.0, target_kind, target_id, input.embedding.model, input.embedding.version, dimension, projection.input_hash, projection.target_revision, created_at, serde_json::to_string(&input.embedding.normalization)?, serde_json::to_string(&input.embedding.distance)?, serde_json::to_string(&input.embedding.vector)?],
-        )?;
-        Ok(StoredEmbedding {
-            target: input.target,
-            dimension,
-            target_revision: projection.target_revision,
-            input_hash: projection.input_hash,
-            created_at,
-        })
-    }
-
-    pub fn projection_input(
-        &self,
-        tenant_id: &TenantId,
-        person_id: &PersonId,
-        target: EmbeddingTarget,
-    ) -> Result<ProjectionInput> {
-        require_scope(tenant_id, person_id)?;
-        let (table, id, expression, revision, live) = match &target {
-            EmbeddingTarget::Source(id) => (
-                "sources",
-                &id.0,
-                "content",
-                "revision",
-                "deleted_at IS NULL",
-            ),
-            EmbeddingTarget::Evidence(id) => (
-                "evidence",
-                &id.0,
-                "quote",
-                "source_revision",
-                "deleted_at IS NULL",
-            ),
-            EmbeddingTarget::Claim(id) => (
-                "claims",
-                &id.0,
-                "subject || ' ' || predicate || ' ' || value",
-                "recorded_from",
-                "status = 'accepted' AND valid_until IS NULL AND recorded_until IS NULL",
-            ),
-        };
-        let (text, target_revision) = self
-            .connection
-            .query_row(
-                &format!("SELECT {expression}, {revision} FROM {table} WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND {live}"),
-                params![id, tenant_id.0, person_id.0],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
-            )
-            .optional()?
-            .ok_or(Error::NotFound)?;
-        Ok(ProjectionInput {
-            target,
-            input_hash: input_hash(&text),
-            text,
-            target_revision,
-        })
-    }
-
-    pub fn projection_issues(&self, input: ProjectionAuditInput) -> Result<Vec<ProjectionIssue>> {
-        require_scope(&input.tenant_id, &input.person_id)?;
-        require_text("embedding model", &input.model)?;
-        require_text("embedding version", &input.version)?;
-        let mut statement = self.connection.prepare(
-            "SELECT target_kind, target_id FROM (
-                SELECT 'source' AS target_kind, id AS target_id FROM sources WHERE tenant_id = ?1 AND person_id = ?2 AND deleted_at IS NULL
-                UNION ALL SELECT 'evidence', e.id FROM evidence e JOIN sources s ON s.id = e.source_id AND s.tenant_id = e.tenant_id AND s.person_id = e.person_id WHERE e.tenant_id = ?1 AND e.person_id = ?2 AND e.deleted_at IS NULL AND s.deleted_at IS NULL
-                UNION ALL SELECT 'claim', c.id FROM claims c WHERE c.tenant_id = ?1 AND c.person_id = ?2 AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL
-             ) ORDER BY target_kind, target_id",
-        )?;
-        let targets = statement
-            .query_map(params![input.tenant_id.0, input.person_id.0], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        let mut issues = Vec::new();
-        let limit = bounded_limit(input.limit) as usize;
-        for (kind, id) in targets {
-            let projection = self.projection_input(
-                &input.tenant_id,
-                &input.person_id,
-                embedding_target(&kind, &id)?,
-            )?;
-            let stored = self
-                .connection
-                .query_row(
-                    "SELECT target_revision, input_hash, created_at FROM embeddings WHERE tenant_id = ?1 AND person_id = ?2 AND target_kind = ?3 AND target_id = ?4 AND model = ?5 AND version = ?6",
-                    params![input.tenant_id.0, input.person_id.0, kind, embedding_target_parts(&projection.target).1, input.model, input.version],
-                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?)),
-                )
-                .optional()?;
-            let state = match &stored {
-                None => ProjectionState::Missing,
-                Some((revision, hash, _))
-                    if *revision != projection.target_revision
-                        || hash != &projection.input_hash =>
-                {
-                    ProjectionState::Stale
-                }
-                Some(_) => continue,
-            };
-            issues.push(ProjectionIssue {
-                state,
-                input: projection,
-                stored_target_revision: stored.as_ref().map(|value| value.0),
-                stored_input_hash: stored.as_ref().map(|value| value.1.clone()),
-                stored_created_at: stored.map(|value| value.2),
-            });
-            if issues.len() == limit {
-                break;
-            }
-        }
-        Ok(issues)
-    }
-
     fn migrate(&mut self) -> Result<()> {
-        const SCHEMA_VERSION: i64 = 4;
-        self.connection.execute_batch("PRAGMA foreign_keys = ON;")?;
-        let version: i64 = self
-            .connection
-            .query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > SCHEMA_VERSION {
-            return Err(Error::Invalid(format!(
-                "database schema version {version} is newer than supported version {SCHEMA_VERSION}"
-            )));
-        }
-        let transaction = self.connection.transaction()?;
-        transaction.execute_batch(
-            "
-             CREATE TABLE IF NOT EXISTS sources(id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, ingestion_key TEXT, revision INTEGER NOT NULL, kind TEXT NOT NULL, content TEXT NOT NULL, captured_at INTEGER NOT NULL, recorded_at INTEGER NOT NULL, deleted_at INTEGER);
-             CREATE INDEX IF NOT EXISTS sources_scope ON sources(tenant_id, person_id, id);
-             CREATE VIRTUAL TABLE IF NOT EXISTS source_fts USING fts5(source_id UNINDEXED, tenant_id UNINDEXED, person_id UNINDEXED, content, tokenize='unicode61');
-             CREATE TABLE IF NOT EXISTS evidence(id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, source_id TEXT NOT NULL REFERENCES sources(id), source_revision INTEGER NOT NULL, quote TEXT NOT NULL, recorded_at INTEGER NOT NULL, deleted_at INTEGER);
-             CREATE INDEX IF NOT EXISTS evidence_scope ON evidence(tenant_id, person_id, source_id);
-             CREATE TABLE IF NOT EXISTS evidence_locators(tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, evidence_id TEXT NOT NULL REFERENCES evidence(id), device_id TEXT NOT NULL, provider TEXT NOT NULL, stream_id TEXT NOT NULL, segment_id TEXT NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, PRIMARY KEY(tenant_id, person_id, evidence_id));
-             CREATE TABLE IF NOT EXISTS claims(id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, subject TEXT NOT NULL, predicate TEXT NOT NULL, value TEXT NOT NULL, valid_from INTEGER NOT NULL, valid_until INTEGER, recorded_from INTEGER NOT NULL, recorded_until INTEGER, status TEXT NOT NULL);
-             CREATE INDEX IF NOT EXISTS claims_scope ON claims(tenant_id, person_id, status);
-             CREATE TABLE IF NOT EXISTS claim_evidence(tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, claim_id TEXT NOT NULL REFERENCES claims(id), evidence_id TEXT NOT NULL REFERENCES evidence(id), relation TEXT NOT NULL, confidence_basis_points INTEGER NOT NULL, PRIMARY KEY(tenant_id, person_id, claim_id, evidence_id));
-             CREATE TABLE IF NOT EXISTS daily_reviews(id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, day TEXT NOT NULL, summary TEXT NOT NULL, evidence_ids TEXT NOT NULL, recorded_at INTEGER NOT NULL);
-             CREATE INDEX IF NOT EXISTS reviews_scope ON daily_reviews(tenant_id, person_id, day);
-             CREATE TABLE IF NOT EXISTS embeddings(tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, target_kind TEXT NOT NULL, target_id TEXT NOT NULL, model TEXT NOT NULL, version TEXT NOT NULL, dimension INTEGER NOT NULL, input_hash TEXT NOT NULL, target_revision INTEGER NOT NULL, created_at INTEGER NOT NULL, normalization TEXT NOT NULL, distance TEXT NOT NULL, vector TEXT NOT NULL, PRIMARY KEY(tenant_id, person_id, target_kind, target_id, model, version));
-             CREATE INDEX IF NOT EXISTS embeddings_scope ON embeddings(tenant_id, person_id, target_kind, target_id);
-            ",
-        )?;
-        for (column, definition) in [
-            ("target_revision", "INTEGER NOT NULL DEFAULT 0"),
-            ("created_at", "INTEGER NOT NULL DEFAULT 0"),
-        ] {
-            let exists: bool = transaction.query_row(
-                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('embeddings') WHERE name = ?1)",
-                [column],
-                |row| row.get(0),
-            )?;
-            if !exists {
-                transaction.execute(
-                    &format!("ALTER TABLE embeddings ADD COLUMN {column} {definition}"),
-                    [],
-                )?;
-            }
-        }
-        let has_ingestion_key: bool = transaction.query_row(
-            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('sources') WHERE name = 'ingestion_key')",
-            [],
-            |row| row.get(0),
-        )?;
-        if !has_ingestion_key {
-            transaction.execute("ALTER TABLE sources ADD COLUMN ingestion_key TEXT", [])?;
-        }
-        for (name, query) in [
-            (
-                "evidence",
-                "SELECT EXISTS(SELECT 1 FROM evidence e LEFT JOIN sources s ON s.id = e.source_id AND s.tenant_id = e.tenant_id AND s.person_id = e.person_id WHERE s.id IS NULL)",
-            ),
-            (
-                "evidence locator",
-                "SELECT EXISTS(SELECT 1 FROM evidence_locators l LEFT JOIN evidence e ON e.id = l.evidence_id AND e.tenant_id = l.tenant_id AND e.person_id = l.person_id WHERE e.id IS NULL)",
-            ),
-            (
-                "claim evidence",
-                "SELECT EXISTS(SELECT 1 FROM claim_evidence ce LEFT JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id LEFT JOIN evidence e ON e.id = ce.evidence_id AND e.tenant_id = ce.tenant_id AND e.person_id = ce.person_id WHERE c.id IS NULL OR e.id IS NULL)",
-            ),
-            (
-                "daily review",
-                "SELECT EXISTS(SELECT 1 FROM daily_reviews r, json_each(r.evidence_ids) citation LEFT JOIN evidence e ON e.id = citation.value AND e.tenant_id = r.tenant_id AND e.person_id = r.person_id WHERE json_valid(r.evidence_ids) = 0 OR e.id IS NULL)",
-            ),
-        ] {
-            let inconsistent: bool = transaction.query_row(query, [], |row| row.get(0))?;
-            if inconsistent {
-                return Err(Error::Invalid(format!(
-                    "legacy {name} references cross tenant or person scope"
-                )));
-            }
-        }
-        transaction.execute_batch(
-            "CREATE UNIQUE INDEX IF NOT EXISTS sources_ingestion_key ON sources(tenant_id, person_id, ingestion_key) WHERE ingestion_key IS NOT NULL;
-             CREATE TRIGGER IF NOT EXISTS evidence_scope_insert BEFORE INSERT ON evidence FOR EACH ROW WHEN NOT EXISTS (SELECT 1 FROM sources WHERE id = NEW.source_id AND tenant_id = NEW.tenant_id AND person_id = NEW.person_id) BEGIN SELECT RAISE(ABORT, 'evidence source scope mismatch'); END;
-             CREATE TRIGGER IF NOT EXISTS evidence_scope_update BEFORE UPDATE OF source_id, tenant_id, person_id ON evidence FOR EACH ROW WHEN NOT EXISTS (SELECT 1 FROM sources WHERE id = NEW.source_id AND tenant_id = NEW.tenant_id AND person_id = NEW.person_id) BEGIN SELECT RAISE(ABORT, 'evidence source scope mismatch'); END;
-             CREATE TRIGGER IF NOT EXISTS locator_scope_insert BEFORE INSERT ON evidence_locators FOR EACH ROW WHEN NOT EXISTS (SELECT 1 FROM evidence WHERE id = NEW.evidence_id AND tenant_id = NEW.tenant_id AND person_id = NEW.person_id) BEGIN SELECT RAISE(ABORT, 'evidence locator scope mismatch'); END;
-             CREATE TRIGGER IF NOT EXISTS locator_scope_update BEFORE UPDATE OF evidence_id, tenant_id, person_id ON evidence_locators FOR EACH ROW WHEN NOT EXISTS (SELECT 1 FROM evidence WHERE id = NEW.evidence_id AND tenant_id = NEW.tenant_id AND person_id = NEW.person_id) BEGIN SELECT RAISE(ABORT, 'evidence locator scope mismatch'); END;
-             CREATE TRIGGER IF NOT EXISTS claim_evidence_scope_insert BEFORE INSERT ON claim_evidence FOR EACH ROW WHEN NOT EXISTS (SELECT 1 FROM claims WHERE id = NEW.claim_id AND tenant_id = NEW.tenant_id AND person_id = NEW.person_id) OR NOT EXISTS (SELECT 1 FROM evidence WHERE id = NEW.evidence_id AND tenant_id = NEW.tenant_id AND person_id = NEW.person_id) BEGIN SELECT RAISE(ABORT, 'claim evidence scope mismatch'); END;
-             CREATE TRIGGER IF NOT EXISTS claim_evidence_scope_update BEFORE UPDATE OF claim_id, evidence_id, tenant_id, person_id ON claim_evidence FOR EACH ROW WHEN NOT EXISTS (SELECT 1 FROM claims WHERE id = NEW.claim_id AND tenant_id = NEW.tenant_id AND person_id = NEW.person_id) OR NOT EXISTS (SELECT 1 FROM evidence WHERE id = NEW.evidence_id AND tenant_id = NEW.tenant_id AND person_id = NEW.person_id) BEGIN SELECT RAISE(ABORT, 'claim evidence scope mismatch'); END;
-             CREATE TRIGGER IF NOT EXISTS embedding_scope_insert BEFORE INSERT ON embeddings FOR EACH ROW WHEN NEW.target_kind NOT IN ('source', 'evidence', 'claim') OR (NEW.target_kind = 'source' AND NOT EXISTS (SELECT 1 FROM sources WHERE id = NEW.target_id AND tenant_id = NEW.tenant_id AND person_id = NEW.person_id)) OR (NEW.target_kind = 'evidence' AND NOT EXISTS (SELECT 1 FROM evidence WHERE id = NEW.target_id AND tenant_id = NEW.tenant_id AND person_id = NEW.person_id)) OR (NEW.target_kind = 'claim' AND NOT EXISTS (SELECT 1 FROM claims WHERE id = NEW.target_id AND tenant_id = NEW.tenant_id AND person_id = NEW.person_id)) BEGIN SELECT RAISE(ABORT, 'embedding target scope mismatch'); END;
-             CREATE TRIGGER IF NOT EXISTS embedding_scope_update BEFORE UPDATE OF target_kind, target_id, tenant_id, person_id ON embeddings FOR EACH ROW WHEN NEW.target_kind NOT IN ('source', 'evidence', 'claim') OR (NEW.target_kind = 'source' AND NOT EXISTS (SELECT 1 FROM sources WHERE id = NEW.target_id AND tenant_id = NEW.tenant_id AND person_id = NEW.person_id)) OR (NEW.target_kind = 'evidence' AND NOT EXISTS (SELECT 1 FROM evidence WHERE id = NEW.target_id AND tenant_id = NEW.tenant_id AND person_id = NEW.person_id)) OR (NEW.target_kind = 'claim' AND NOT EXISTS (SELECT 1 FROM claims WHERE id = NEW.target_id AND tenant_id = NEW.tenant_id AND person_id = NEW.person_id)) BEGIN SELECT RAISE(ABORT, 'embedding target scope mismatch'); END;
-             CREATE TRIGGER IF NOT EXISTS review_scope_insert BEFORE INSERT ON daily_reviews FOR EACH ROW WHEN json_valid(NEW.evidence_ids) = 0 OR EXISTS (SELECT 1 FROM json_each(NEW.evidence_ids) citation LEFT JOIN evidence e ON e.id = citation.value AND e.tenant_id = NEW.tenant_id AND e.person_id = NEW.person_id WHERE e.id IS NULL) BEGIN SELECT RAISE(ABORT, 'daily review evidence scope mismatch'); END;
-             CREATE TRIGGER IF NOT EXISTS review_scope_update BEFORE UPDATE OF tenant_id, person_id, evidence_ids ON daily_reviews FOR EACH ROW WHEN json_valid(NEW.evidence_ids) = 0 OR EXISTS (SELECT 1 FROM json_each(NEW.evidence_ids) citation LEFT JOIN evidence e ON e.id = citation.value AND e.tenant_id = NEW.tenant_id AND e.person_id = NEW.person_id WHERE e.id IS NULL) BEGIN SELECT RAISE(ABORT, 'daily review evidence scope mismatch'); END;
-             PRAGMA user_version = 4;",
-        )?;
-        transaction.commit()?;
-        Ok(())
+        schema::migrate(&mut self.connection)
     }
 }
 
@@ -1153,8 +1053,8 @@ fn insert_claim(
     require_text("claim value", &claim.value)?;
     let id = ClaimId(new_id(transaction)?);
     transaction.execute(
-        "INSERT INTO claims(id, tenant_id, person_id, subject, predicate, value, valid_from, recorded_from, status) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'accepted')",
-        params![id.0, tenant_id.0, person_id.0, claim.subject, claim.predicate, claim.value, claim.valid_from, recorded_at],
+        "INSERT INTO claims(id, tenant_id, person_id, subject, predicate, value, kind, valid_from, recorded_from, status) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'accepted')",
+        params![id.0, tenant_id.0, person_id.0, claim.subject, claim.predicate, claim.value, claim_kind_name(&claim.kind), claim.valid_from, recorded_at],
     )?;
     let relation = serde_json::to_string(&EvidenceRelation::Supports)?;
     transaction.execute(
@@ -1162,6 +1062,29 @@ fn insert_claim(
         params![tenant_id.0, person_id.0, id.0, evidence_id.0, relation],
     )?;
     Ok(id)
+}
+
+fn claim_kind_name(kind: &ClaimKind) -> &'static str {
+    match kind {
+        ClaimKind::Fact => "fact",
+        ClaimKind::ProfileFact => "profile_fact",
+        ClaimKind::Preference => "preference",
+        ClaimKind::Task => "task",
+        ClaimKind::Skill => "skill",
+        ClaimKind::Recommendation => "recommendation",
+    }
+}
+
+fn claim_kind(value: &str) -> Result<ClaimKind> {
+    match value {
+        "fact" => Ok(ClaimKind::Fact),
+        "profile_fact" => Ok(ClaimKind::ProfileFact),
+        "preference" => Ok(ClaimKind::Preference),
+        "task" => Ok(ClaimKind::Task),
+        "skill" => Ok(ClaimKind::Skill),
+        "recommendation" => Ok(ClaimKind::Recommendation),
+        _ => Err(Error::Invalid("stored claim kind is invalid".to_owned())),
+    }
 }
 
 fn validate_transcript_locator(locator: &TranscriptLocator) -> Result<()> {
@@ -1202,109 +1125,18 @@ fn require_text(field: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_embedding(embedding: &Embedding) -> Result<()> {
-    require_text("embedding model", &embedding.model)?;
-    require_text("embedding version", &embedding.version)?;
-    require_text("embedding input_hash", &embedding.input_hash)?;
-    if embedding.vector.is_empty() || embedding.vector.iter().any(|value| !value.is_finite()) {
-        return Err(Error::Invalid(
-            "embedding vector must contain finite values".to_owned(),
-        ));
+const MAX_EXCERPT_BYTES: usize = 4096;
+
+fn bounded_excerpt(mut excerpt: String) -> String {
+    if excerpt.len() <= MAX_EXCERPT_BYTES {
+        return excerpt;
     }
-    Ok(())
-}
-
-fn input_hash(text: &str) -> String {
-    format!("sha256:{:x}", Sha256::digest(text.as_bytes()))
-}
-
-fn validate_dense_query(query: &DenseQuery) -> Result<()> {
-    require_text("query embedding model", &query.model)?;
-    require_text("query embedding version", &query.version)?;
-    if query.vector.is_empty() || query.vector.iter().any(|value| !value.is_finite()) {
-        return Err(Error::Invalid(
-            "query embedding vector must contain finite values".to_owned(),
-        ));
+    let mut end = MAX_EXCERPT_BYTES;
+    while !excerpt.is_char_boundary(end) {
+        end -= 1;
     }
-    Ok(())
-}
-
-fn vector_score(query: &[f32], stored: &[f32], distance: &VectorDistance) -> Result<f32> {
-    let dot = query
-        .iter()
-        .zip(stored)
-        .map(|(left, right)| left * right)
-        .sum::<f32>();
-    let score = match distance {
-        VectorDistance::Dot => dot,
-        VectorDistance::Euclidean => -query
-            .iter()
-            .zip(stored)
-            .map(|(left, right)| (left - right).powi(2))
-            .sum::<f32>()
-            .sqrt(),
-        VectorDistance::Cosine => {
-            let query_norm = query.iter().map(|value| value * value).sum::<f32>().sqrt();
-            let stored_norm = stored.iter().map(|value| value * value).sum::<f32>().sqrt();
-            if query_norm == 0.0 || stored_norm == 0.0 {
-                return Err(Error::Invalid(
-                    "cosine embeddings must have non-zero magnitude".to_owned(),
-                ));
-            }
-            dot / (query_norm * stored_norm)
-        }
-    };
-    if !score.is_finite() {
-        return Err(Error::Invalid(
-            "embedding similarity is not finite".to_owned(),
-        ));
-    }
-    Ok(score)
-}
-
-fn reciprocal_rank_fusion(
-    lexical: &[RetrievalTarget],
-    dense: &[RetrievalTarget],
-    limit: usize,
-) -> Vec<(RetrievalTarget, u16)> {
-    let mut scores = HashMap::<RetrievalTarget, u32>::new();
-    for ranking in [lexical, dense] {
-        let mut seen = HashSet::new();
-        for (offset, id) in ranking.iter().enumerate() {
-            if seen.insert(id) {
-                *scores.entry(id.clone()).or_default() += 1_000_000 / (61 + offset as u32);
-            }
-        }
-    }
-    let maximum = scores.values().copied().max().unwrap_or(1);
-    let mut ranked = scores
-        .into_iter()
-        .map(|(id, score)| (id, ((score as u64 * 10_000) / maximum as u64) as u16))
-        .collect::<Vec<_>>();
-    ranked.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
-    ranked.truncate(limit);
-    ranked
-}
-
-fn embedding_target_parts(target: &EmbeddingTarget) -> (&'static str, &str) {
-    match target {
-        EmbeddingTarget::Source(id) => ("source", &id.0),
-        EmbeddingTarget::Evidence(id) => ("evidence", &id.0),
-        EmbeddingTarget::Claim(id) => ("claim", &id.0),
-    }
-}
-
-fn embedding_target(kind: &str, id: &str) -> Result<EmbeddingTarget> {
-    Ok(match kind {
-        "source" => EmbeddingTarget::Source(SourceId(id.to_owned())),
-        "evidence" => EmbeddingTarget::Evidence(EvidenceId(id.to_owned())),
-        "claim" => EmbeddingTarget::Claim(ClaimId(id.to_owned())),
-        _ => {
-            return Err(Error::Invalid(
-                "stored embedding target is invalid".to_owned(),
-            ));
-        }
-    })
+    excerpt.truncate(end);
+    excerpt
 }
 
 const fn default_limit() -> u32 {
@@ -1321,836 +1153,4 @@ const fn bounded_limit(limit: u32) -> u32 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn remember(tenant: &str, person: &str, value: &str) -> RememberInput {
-        RememberInput {
-            tenant_id: TenantId(tenant.into()),
-            person_id: PersonId(person.into()),
-            ingestion_key: None,
-            kind: SourceKind::Conversation,
-            text: format!("Sam works at {value}"),
-            captured_at: 10,
-            claim: Some(ClaimInput {
-                subject: "Sam".into(),
-                predicate: "employer".into(),
-                value: value.into(),
-                valid_from: 10,
-            }),
-        }
-    }
-
-    fn remember_raw(tenant: &str, person: &str, text: &str) -> RememberInput {
-        RememberInput {
-            tenant_id: TenantId(tenant.into()),
-            person_id: PersonId(person.into()),
-            ingestion_key: None,
-            kind: SourceKind::Conversation,
-            text: text.into(),
-            captured_at: 10,
-            claim: None,
-        }
-    }
-
-    fn hash_for(db: &MemoryDb, target: EmbeddingTarget) -> String {
-        db.projection_input(&TenantId("a".into()), &PersonId("sam".into()), target)
-            .unwrap()
-            .input_hash
-    }
-
-    #[test]
-    fn ingestion_keys_are_idempotent_within_scope() {
-        let mut db = MemoryDb {
-            connection: Connection::open_in_memory().unwrap(),
-        };
-        db.migrate().unwrap();
-        let mut first = remember_raw("a", "sam", "Remember once");
-        first.ingestion_key = Some("turn-1".into());
-        let stored = db.remember(first).unwrap();
-        let mut replay = remember_raw("a", "sam", "Remember once");
-        replay.ingestion_key = Some("turn-1".into());
-        let replayed = db.remember(replay).unwrap();
-        assert_eq!(stored.source_id, replayed.source_id);
-        assert_eq!(stored.evidence_id, replayed.evidence_id);
-        assert_eq!(
-            db.connection
-                .query_row("SELECT count(*) FROM sources", [], |row| row
-                    .get::<_, u64>(0))
-                .unwrap(),
-            1
-        );
-        let mut other_scope = remember_raw("b", "sam", "Remember once");
-        other_scope.ingestion_key = Some("turn-1".into());
-        assert_ne!(
-            stored.source_id,
-            db.remember(other_scope).unwrap().source_id
-        );
-    }
-
-    #[test]
-    fn ingestion_key_rejects_changed_payload() {
-        let mut db = MemoryDb {
-            connection: Connection::open_in_memory().unwrap(),
-        };
-        db.migrate().unwrap();
-        let mut first = remember_raw("a", "sam", "Remember once");
-        first.ingestion_key = Some("turn-1".into());
-        db.remember(first).unwrap();
-        let changed_text = remember_raw("a", "sam", "Changed replay content");
-        let mut changed_kind = remember_raw("a", "sam", "Remember once");
-        changed_kind.kind = SourceKind::Screen;
-        let mut changed_time = remember_raw("a", "sam", "Remember once");
-        changed_time.captured_at = 11;
-        let mut changed_claim = remember_raw("a", "sam", "Remember once");
-        changed_claim.claim = Some(ClaimInput {
-            subject: "Sam".into(),
-            predicate: "status".into(),
-            value: "focused".into(),
-            valid_from: 10,
-        });
-        for mut changed in [changed_text, changed_kind, changed_time, changed_claim] {
-            changed.ingestion_key = Some("turn-1".into());
-            assert!(matches!(db.remember(changed), Err(Error::Invalid(_))));
-        }
-        let with_claim = |value: &str| {
-            let mut input = remember_raw("a", "sam", "Claim capture");
-            input.ingestion_key = Some("claim-turn".into());
-            input.claim = Some(ClaimInput {
-                subject: "Sam".into(),
-                predicate: "status".into(),
-                value: value.into(),
-                valid_from: 10,
-            });
-            input
-        };
-        let stored = db.remember(with_claim("focused")).unwrap();
-        assert_eq!(
-            stored.claim_id,
-            db.remember(with_claim("focused")).unwrap().claim_id
-        );
-        assert!(matches!(
-            db.remember(with_claim("distracted")),
-            Err(Error::Invalid(_))
-        ));
-    }
-
-    #[test]
-    fn ingestion_key_rejects_deleted_memory() {
-        let mut db = MemoryDb {
-            connection: Connection::open_in_memory().unwrap(),
-        };
-        db.migrate().unwrap();
-        let mut first = remember_raw("a", "sam", "Remember once");
-        first.ingestion_key = Some("turn-1".into());
-        let stored = db.remember(first).unwrap();
-        db.delete_source(DeleteInput {
-            tenant_id: TenantId("a".into()),
-            person_id: PersonId("sam".into()),
-            source_id: stored.source_id,
-            deleted_at: 20,
-        })
-        .unwrap();
-        let mut replay = remember_raw("a", "sam", "Remember once");
-        replay.ingestion_key = Some("turn-1".into());
-        assert!(matches!(db.remember(replay), Err(Error::NotFound)));
-    }
-
-    #[test]
-    fn raw_sources_are_scoped_cited_and_deleted_from_retrieval() {
-        let mut db = MemoryDb {
-            connection: Connection::open_in_memory().unwrap(),
-        };
-        db.migrate().unwrap();
-        let raw = db
-            .remember(remember_raw("a", "sam", "The launch code is marigold"))
-            .unwrap();
-        db.remember(remember_raw("b", "sam", "Marigold belongs elsewhere"))
-            .unwrap();
-
-        let found = db
-            .search(SearchInput {
-                tenant_id: TenantId("a".into()),
-                person_id: PersonId("sam".into()),
-                query: "marigold".into(),
-                limit: 5,
-                query_embedding: None,
-            })
-            .unwrap();
-        assert_eq!(found.items.len(), 1);
-        assert_eq!(
-            found.items[0].memory,
-            MemoryRef::Source(raw.source_id.clone())
-        );
-        assert_eq!(found.items[0].evidence_ids, vec![raw.evidence_id]);
-
-        db.delete_source(DeleteInput {
-            tenant_id: TenantId("a".into()),
-            person_id: PersonId("sam".into()),
-            source_id: raw.source_id.clone(),
-            deleted_at: 20,
-        })
-        .unwrap();
-        assert!(matches!(
-            db.get(GetInput {
-                tenant_id: TenantId("a".into()),
-                person_id: PersonId("sam".into()),
-                target: EmbeddingTarget::Source(raw.source_id),
-            }),
-            Err(Error::NotFound)
-        ));
-        assert!(
-            db.search(SearchInput {
-                tenant_id: TenantId("a".into()),
-                person_id: PersonId("sam".into()),
-                query: "marigold".into(),
-                limit: 5,
-                query_embedding: None,
-            })
-            .unwrap()
-            .items
-            .is_empty()
-        );
-    }
-
-    #[test]
-    fn accepted_claim_replaces_its_source_in_retrieval() {
-        let mut db = MemoryDb {
-            connection: Connection::open_in_memory().unwrap(),
-        };
-        db.migrate().unwrap();
-        let remembered = db.remember(remember("a", "sam", "Acme")).unwrap();
-        let target = EmbeddingTarget::Source(remembered.source_id);
-        let input_hash = hash_for(&db, target.clone());
-        db.upsert_embedding(EmbeddingInput {
-            tenant_id: TenantId("a".into()),
-            person_id: PersonId("sam".into()),
-            target,
-            embedding: Embedding {
-                vector: vec![1.0, 0.0],
-                model: "test/model".into(),
-                version: "1".into(),
-                input_hash,
-                normalization: VectorNormalization::L2,
-                distance: VectorDistance::Cosine,
-            },
-        })
-        .unwrap();
-        let found = db
-            .search(SearchInput {
-                tenant_id: TenantId("a".into()),
-                person_id: PersonId("sam".into()),
-                query: "Acme".into(),
-                limit: 5,
-                query_embedding: Some(DenseQuery {
-                    vector: vec![1.0, 0.0],
-                    model: "test/model".into(),
-                    version: "1".into(),
-                }),
-            })
-            .unwrap();
-        assert_eq!(found.items.len(), 1);
-        assert_eq!(
-            found.items[0].memory,
-            MemoryRef::Claim(remembered.claim_id.unwrap())
-        );
-    }
-
-    #[test]
-    fn dense_evidence_without_a_claim_is_retrievable() {
-        let mut db = MemoryDb {
-            connection: Connection::open_in_memory().unwrap(),
-        };
-        db.migrate().unwrap();
-        let raw = db
-            .remember(remember_raw("a", "sam", "Quiet desk near a window"))
-            .unwrap();
-        let target = EmbeddingTarget::Evidence(raw.evidence_id.clone());
-        let input_hash = hash_for(&db, target.clone());
-        db.upsert_embedding(EmbeddingInput {
-            tenant_id: TenantId("a".into()),
-            person_id: PersonId("sam".into()),
-            target,
-            embedding: Embedding {
-                vector: vec![1.0, 0.0],
-                model: "test/model".into(),
-                version: "1".into(),
-                input_hash,
-                normalization: VectorNormalization::L2,
-                distance: VectorDistance::Cosine,
-            },
-        })
-        .unwrap();
-        let found = db
-            .search(SearchInput {
-                tenant_id: TenantId("a".into()),
-                person_id: PersonId("sam".into()),
-                query: "unmatched lexical phrase".into(),
-                limit: 5,
-                query_embedding: Some(DenseQuery {
-                    vector: vec![1.0, 0.0],
-                    model: "test/model".into(),
-                    version: "1".into(),
-                }),
-            })
-            .unwrap();
-        assert_eq!(found.items.len(), 1);
-        assert_eq!(found.items[0].memory, MemoryRef::Evidence(raw.evidence_id));
-
-        db.delete_source(DeleteInput {
-            tenant_id: TenantId("a".into()),
-            person_id: PersonId("sam".into()),
-            source_id: raw.source_id,
-            deleted_at: 20,
-        })
-        .unwrap();
-        assert!(
-            db.search(SearchInput {
-                tenant_id: TenantId("a".into()),
-                person_id: PersonId("sam".into()),
-                query: "unmatched lexical phrase".into(),
-                limit: 5,
-                query_embedding: Some(DenseQuery {
-                    vector: vec![1.0, 0.0],
-                    model: "test/model".into(),
-                    version: "1".into(),
-                }),
-            })
-            .unwrap()
-            .items
-            .is_empty()
-        );
-    }
-
-    #[test]
-    fn expired_claims_do_not_fall_back_to_stale_raw_evidence() {
-        let mut db = MemoryDb {
-            connection: Connection::open_in_memory().unwrap(),
-        };
-        db.migrate().unwrap();
-        let remembered = db.remember(remember("a", "sam", "Acme")).unwrap();
-        let target = EmbeddingTarget::Claim(remembered.claim_id.clone().unwrap());
-        db.upsert_embedding(EmbeddingInput {
-            tenant_id: TenantId("a".into()),
-            person_id: PersonId("sam".into()),
-            target,
-            embedding: Embedding {
-                vector: vec![1.0, 0.0],
-                model: "test/model".into(),
-                version: "1".into(),
-                input_hash: hash_for(
-                    &db,
-                    EmbeddingTarget::Claim(remembered.claim_id.clone().unwrap()),
-                ),
-                normalization: VectorNormalization::L2,
-                distance: VectorDistance::Cosine,
-            },
-        })
-        .unwrap();
-        db.connection
-            .execute(
-                "UPDATE claims SET valid_until = 20, recorded_until = 20 WHERE id = ?1",
-                [&remembered.claim_id.unwrap().0],
-            )
-            .unwrap();
-
-        let found = db
-            .search(SearchInput {
-                tenant_id: TenantId("a".into()),
-                person_id: PersonId("sam".into()),
-                query: "Acme".into(),
-                limit: 5,
-                query_embedding: Some(DenseQuery {
-                    vector: vec![1.0, 0.0],
-                    model: "test/model".into(),
-                    version: "1".into(),
-                }),
-            })
-            .unwrap();
-        assert!(found.items.is_empty());
-    }
-
-    #[test]
-    fn lifecycle_is_scoped_cited_and_propagates_deletion() {
-        let mut db = MemoryDb {
-            connection: Connection::open_in_memory().unwrap(),
-        };
-        db.migrate().unwrap();
-        let first = db.remember(remember("a", "sam", "Acme")).unwrap();
-        db.remember(remember("b", "sam", "Other")).unwrap();
-        let found = db
-            .search(SearchInput {
-                tenant_id: TenantId("a".into()),
-                person_id: PersonId("sam".into()),
-                query: "Acme".into(),
-                limit: 5,
-                query_embedding: None,
-            })
-            .unwrap();
-        assert_eq!(found.items.len(), 1);
-        assert_eq!(found.items[0].evidence_ids, vec![first.evidence_id.clone()]);
-        let corrected = db
-            .correct(CorrectInput {
-                tenant_id: TenantId("a".into()),
-                person_id: PersonId("sam".into()),
-                claim_id: first.claim_id.unwrap(),
-                text: "I moved to Beta".into(),
-                value: "Beta".into(),
-                occurred_at: 20,
-            })
-            .unwrap();
-        let old_intervals = db
-            .connection
-            .query_row(
-                "SELECT valid_until, recorded_until FROM claims WHERE id = ?1",
-                [&corrected.superseded_claim_id.0],
-                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
-            )
-            .unwrap();
-        assert_eq!(old_intervals, (20, 20));
-        let deleted = db
-            .delete_source(DeleteInput {
-                tenant_id: TenantId("a".into()),
-                person_id: PersonId("sam".into()),
-                source_id: corrected.source_id,
-                deleted_at: 30,
-            })
-            .unwrap();
-        assert_eq!((deleted.evidence_count, deleted.claim_count), (1, 1));
-        assert!(
-            db.search(SearchInput {
-                tenant_id: TenantId("a".into()),
-                person_id: PersonId("sam".into()),
-                query: "Beta".into(),
-                limit: 5,
-                query_embedding: None,
-            })
-            .unwrap()
-            .items
-            .is_empty()
-        );
-    }
-
-    #[test]
-    fn reviews_require_live_same_scope_evidence() {
-        let mut db = MemoryDb {
-            connection: Connection::open_in_memory().unwrap(),
-        };
-        db.migrate().unwrap();
-        let remembered = db.remember(remember("a", "sam", "Acme")).unwrap();
-        db.store_review(ReviewInput {
-            tenant_id: TenantId("a".into()),
-            person_id: PersonId("sam".into()),
-            day: "2026-07-21".into(),
-            summary: "Worked at Acme".into(),
-            evidence_ids: vec![remembered.evidence_id.clone()],
-            recorded_at: 20,
-        })
-        .unwrap();
-        assert_eq!(
-            db.reviews(ReviewsInput {
-                tenant_id: TenantId("a".into()),
-                person_id: PersonId("sam".into()),
-                limit: 1
-            })
-            .unwrap()
-            .len(),
-            1
-        );
-        db.delete_source(DeleteInput {
-            tenant_id: TenantId("a".into()),
-            person_id: PersonId("sam".into()),
-            source_id: remembered.source_id,
-            deleted_at: 30,
-        })
-        .unwrap();
-        assert!(
-            db.reviews(ReviewsInput {
-                tenant_id: TenantId("a".into()),
-                person_id: PersonId("sam".into()),
-                limit: 1
-            })
-            .unwrap()
-            .is_empty()
-        );
-    }
-
-    #[test]
-    fn embedding_projection_is_validated_and_scoped() {
-        let mut db = MemoryDb {
-            connection: Connection::open_in_memory().unwrap(),
-        };
-        db.migrate().unwrap();
-        let remembered = db.remember(remember("a", "sam", "Acme")).unwrap();
-        let target = EmbeddingTarget::Evidence(remembered.evidence_id.clone());
-        let embedding = Embedding {
-            vector: vec![0.1, 0.2],
-            model: "provider/model".into(),
-            version: "1".into(),
-            input_hash: hash_for(&db, target.clone()),
-            normalization: VectorNormalization::L2,
-            distance: VectorDistance::Cosine,
-        };
-        let stored = db
-            .upsert_embedding(EmbeddingInput {
-                tenant_id: TenantId("a".into()),
-                person_id: PersonId("sam".into()),
-                target,
-                embedding: embedding.clone(),
-            })
-            .unwrap();
-        assert_eq!(stored.dimension, 2);
-        assert!(matches!(
-            db.upsert_embedding(EmbeddingInput {
-                tenant_id: TenantId("b".into()),
-                person_id: PersonId("sam".into()),
-                target: EmbeddingTarget::Evidence(remembered.evidence_id),
-                embedding,
-            }),
-            Err(Error::NotFound)
-        ));
-    }
-
-    #[test]
-    fn search_fuses_lexical_and_real_dense_ranks_deterministically() {
-        let mut db = MemoryDb {
-            connection: Connection::open_in_memory().unwrap(),
-        };
-        db.migrate().unwrap();
-        let lexical = db.remember(remember("a", "sam", "Jazz Club")).unwrap();
-        let dense = db.remember(remember("a", "sam", "Music Venue")).unwrap();
-        for (claim_id, vector) in [
-            (lexical.claim_id.clone().unwrap(), vec![0.9, 0.1]),
-            (dense.claim_id.unwrap(), vec![1.0, 0.0]),
-        ] {
-            let target = EmbeddingTarget::Claim(claim_id);
-            let input_hash = hash_for(&db, target.clone());
-            db.upsert_embedding(EmbeddingInput {
-                tenant_id: TenantId("a".into()),
-                person_id: PersonId("sam".into()),
-                target,
-                embedding: Embedding {
-                    vector,
-                    model: "test/model".into(),
-                    version: "1".into(),
-                    input_hash,
-                    normalization: VectorNormalization::L2,
-                    distance: VectorDistance::Cosine,
-                },
-            })
-            .unwrap();
-        }
-
-        let found = db
-            .search(SearchInput {
-                tenant_id: TenantId("a".into()),
-                person_id: PersonId("sam".into()),
-                query: "Jazz Club".into(),
-                limit: 2,
-                query_embedding: Some(DenseQuery {
-                    vector: vec![1.0, 0.0],
-                    model: "test/model".into(),
-                    version: "1".into(),
-                }),
-            })
-            .unwrap();
-
-        assert_eq!(
-            found.items[0].memory,
-            MemoryRef::Claim(lexical.claim_id.unwrap())
-        );
-        assert_eq!(found.items.len(), 2);
-        assert!(!found.items[0].evidence_ids.is_empty());
-    }
-
-    #[test]
-    fn stale_projections_are_excluded_and_reported_with_current_inputs() {
-        let mut db = MemoryDb {
-            connection: Connection::open_in_memory().unwrap(),
-        };
-        db.migrate().unwrap();
-        let raw = db
-            .remember(remember_raw("a", "sam", "A quiet desk"))
-            .unwrap();
-        let claimed = db.remember(remember("a", "sam", "Acme")).unwrap();
-        let other = db.remember(remember("b", "sam", "Other")).unwrap();
-        let targets = [
-            EmbeddingTarget::Source(raw.source_id.clone()),
-            EmbeddingTarget::Evidence(raw.evidence_id.clone()),
-            EmbeddingTarget::Claim(claimed.claim_id.clone().unwrap()),
-        ];
-        for target in &targets {
-            db.upsert_embedding(EmbeddingInput {
-                tenant_id: TenantId("a".into()),
-                person_id: PersonId("sam".into()),
-                target: target.clone(),
-                embedding: Embedding {
-                    vector: vec![1.0, 0.0],
-                    model: "test/model".into(),
-                    version: "1".into(),
-                    input_hash: hash_for(&db, target.clone()),
-                    normalization: VectorNormalization::L2,
-                    distance: VectorDistance::Cosine,
-                },
-            })
-            .unwrap();
-        }
-        db.connection
-            .execute(
-                "UPDATE sources SET content = 'A changed desk', revision = revision + 1 WHERE id = ?1",
-                [&raw.source_id.0],
-            )
-            .unwrap();
-        db.connection
-            .execute(
-                "UPDATE evidence SET quote = 'Changed evidence' WHERE id = ?1",
-                [&raw.evidence_id.0],
-            )
-            .unwrap();
-        db.connection
-            .execute(
-                "UPDATE claims SET value = 'Changed employer' WHERE id = ?1",
-                [&claimed.claim_id.as_ref().unwrap().0],
-            )
-            .unwrap();
-
-        let found = db
-            .search(SearchInput {
-                tenant_id: TenantId("a".into()),
-                person_id: PersonId("sam".into()),
-                query: "no lexical match".into(),
-                limit: 10,
-                query_embedding: Some(DenseQuery {
-                    vector: vec![1.0, 0.0],
-                    model: "test/model".into(),
-                    version: "1".into(),
-                }),
-            })
-            .unwrap();
-        assert!(found.items.is_empty());
-
-        let issues = db
-            .projection_issues(ProjectionAuditInput {
-                tenant_id: TenantId("a".into()),
-                person_id: PersonId("sam".into()),
-                model: "test/model".into(),
-                version: "1".into(),
-                limit: 100,
-            })
-            .unwrap();
-        let stale = issues
-            .iter()
-            .filter(|issue| issue.state == ProjectionState::Stale)
-            .map(|issue| &issue.input.target)
-            .collect::<HashSet<_>>();
-        assert_eq!(stale, targets.iter().collect::<HashSet<_>>());
-        assert!(issues.iter().all(|issue| {
-            issue.input.target != EmbeddingTarget::Source(other.source_id.clone())
-                && issue.input.target != EmbeddingTarget::Evidence(other.evidence_id.clone())
-                && issue.input.target != EmbeddingTarget::Claim(other.claim_id.clone().unwrap())
-        }));
-        assert_eq!(
-            db.projection_issues(ProjectionAuditInput {
-                tenant_id: TenantId("a".into()),
-                person_id: PersonId("sam".into()),
-                model: "test/model".into(),
-                version: "1".into(),
-                limit: 2,
-            })
-            .unwrap()
-            .len(),
-            2
-        );
-    }
-
-    #[test]
-    fn embedding_rejects_input_hash_for_different_text() {
-        let mut db = MemoryDb {
-            connection: Connection::open_in_memory().unwrap(),
-        };
-        db.migrate().unwrap();
-        let remembered = db
-            .remember(remember_raw("a", "sam", "Current text"))
-            .unwrap();
-        let result = db.upsert_embedding(EmbeddingInput {
-            tenant_id: TenantId("a".into()),
-            person_id: PersonId("sam".into()),
-            target: EmbeddingTarget::Source(remembered.source_id),
-            embedding: Embedding {
-                vector: vec![1.0],
-                model: "test/model".into(),
-                version: "1".into(),
-                input_hash: input_hash("different text"),
-                normalization: VectorNormalization::L2,
-                distance: VectorDistance::Cosine,
-            },
-        });
-        assert!(matches!(result, Err(Error::Invalid(_))));
-    }
-
-    #[test]
-    fn migration_marks_existing_projections_for_lifecycle_revalidation() {
-        let connection = Connection::open_in_memory().unwrap();
-        connection
-            .execute_batch(
-                "CREATE TABLE embeddings(tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, target_kind TEXT NOT NULL, target_id TEXT NOT NULL, model TEXT NOT NULL, version TEXT NOT NULL, dimension INTEGER NOT NULL, input_hash TEXT NOT NULL, normalization TEXT NOT NULL, distance TEXT NOT NULL, vector TEXT NOT NULL, PRIMARY KEY(tenant_id, person_id, target_kind, target_id, model, version));
-                 INSERT INTO embeddings VALUES('a', 'sam', 'source', 'old', 'model', '1', 1, 'sha256:old', '\"l2\"', '\"cosine\"', '[1.0]');
-                 PRAGMA user_version = 1;",
-            )
-            .unwrap();
-        let mut db = MemoryDb { connection };
-        db.migrate().unwrap();
-        let lifecycle = db
-            .connection
-            .query_row(
-                "SELECT target_revision, created_at FROM embeddings WHERE target_id = 'old'",
-                [],
-                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
-            )
-            .unwrap();
-        assert_eq!(lifecycle, (0, 0));
-    }
-
-    #[test]
-    fn migration_upgrades_v1_and_accepts_point_locators() {
-        let connection = Connection::open_in_memory().unwrap();
-        connection
-            .execute_batch("PRAGMA user_version = 1;")
-            .unwrap();
-        let mut db = MemoryDb { connection };
-        db.migrate().unwrap();
-        let version = db
-            .connection
-            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
-            .unwrap();
-        assert_eq!(version, 4);
-
-        let remembered = db
-            .remember_with_locator(
-                remember_raw("a", "sam", "Untimed final transcript"),
-                Some(TranscriptLocator {
-                    device_id: "omi-1".into(),
-                    provider: "deepgram".into(),
-                    stream_id: "stream-1".into(),
-                    segment_id: "segment-1".into(),
-                    start_ms: 1000,
-                    end_ms: 1000,
-                }),
-            )
-            .unwrap();
-        assert_eq!(
-            db.evidence_locator(EvidenceLocatorInput {
-                tenant_id: TenantId("a".into()),
-                person_id: PersonId("sam".into()),
-                evidence_id: remembered.evidence_id,
-            })
-            .unwrap()
-            .unwrap()
-            .start_ms,
-            1000
-        );
-    }
-
-    #[test]
-    fn migration_preserves_unknown_legacy_superseded_claim_validity() {
-        let connection = Connection::open_in_memory().unwrap();
-        connection
-            .execute_batch(
-                "CREATE TABLE claims(id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, subject TEXT NOT NULL, predicate TEXT NOT NULL, value TEXT NOT NULL, valid_from INTEGER NOT NULL, valid_until INTEGER, recorded_from INTEGER NOT NULL, recorded_until INTEGER, status TEXT NOT NULL);
-                 INSERT INTO claims VALUES('old', 'a', 'sam', 'sam', 'employer', 'Acme', 10, NULL, 10, 20, 'superseded');
-                 PRAGMA user_version = 3;",
-            )
-            .unwrap();
-        let mut db = MemoryDb { connection };
-        db.migrate().unwrap();
-        let valid_until = db
-            .connection
-            .query_row(
-                "SELECT valid_until FROM claims WHERE id = 'old'",
-                [],
-                |row| row.get::<_, Option<i64>>(0),
-            )
-            .unwrap();
-        assert_eq!(valid_until, None);
-    }
-
-    #[test]
-    fn migration_is_idempotent_for_supported_schema_versions() {
-        for version in 0..=3 {
-            let connection = Connection::open_in_memory().unwrap();
-            connection
-                .execute_batch(&format!("PRAGMA user_version = {version};"))
-                .unwrap();
-            let mut db = MemoryDb { connection };
-            db.migrate().unwrap();
-            db.migrate().unwrap();
-            let actual = db
-                .connection
-                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
-                .unwrap();
-            assert_eq!(actual, 4);
-        }
-    }
-
-    #[test]
-    fn schema_rejects_cross_scope_references() {
-        let mut db = MemoryDb {
-            connection: Connection::open_in_memory().unwrap(),
-        };
-        db.migrate().unwrap();
-        let first = db.remember(remember("a", "sam", "Acme")).unwrap();
-        let second = db.remember(remember("b", "sam", "Other")).unwrap();
-
-        assert!(db
-            .connection
-            .execute(
-                "INSERT INTO evidence(id, tenant_id, person_id, source_id, source_revision, quote, recorded_at) VALUES(?1, ?2, ?3, ?4, 1, 'cross', 10)",
-                params!["cross-evidence", "b", "sam", first.source_id.0],
-            )
-            .is_err());
-        assert!(db
-            .connection
-            .execute(
-                "INSERT INTO evidence_locators(tenant_id, person_id, evidence_id, device_id, provider, stream_id, segment_id, start_ms, end_ms) VALUES('b', 'sam', ?1, 'device', 'provider', 'stream', 'segment', 0, 1)",
-                [&first.evidence_id.0],
-            )
-            .is_err());
-        assert!(db
-            .connection
-            .execute(
-                "INSERT INTO claim_evidence(tenant_id, person_id, claim_id, evidence_id, relation, confidence_basis_points) VALUES('b', 'sam', ?1, ?2, '\"supports\"', 10000)",
-                params![second.claim_id.unwrap().0, first.evidence_id.0],
-            )
-            .is_err());
-        assert!(db
-            .connection
-            .execute(
-                "INSERT INTO embeddings(tenant_id, person_id, target_kind, target_id, model, version, dimension, input_hash, target_revision, created_at, normalization, distance, vector) VALUES('b', 'sam', 'source', ?1, 'model', '1', 1, 'sha256:input', 1, 1, '\"l2\"', '\"cosine\"', '[1.0]')",
-                [&first.source_id.0],
-            )
-            .is_err());
-        let citations = serde_json::to_string(&[first.evidence_id]).unwrap();
-        assert!(db
-            .connection
-            .execute(
-                "INSERT INTO daily_reviews(id, tenant_id, person_id, day, summary, evidence_ids, recorded_at) VALUES('cross-review', 'b', 'sam', '2026-07-21', 'cross', ?1, 10)",
-                [&citations],
-            )
-            .is_err());
-    }
-
-    #[test]
-    fn migration_rejects_legacy_cross_scope_evidence() {
-        let connection = Connection::open_in_memory().unwrap();
-        connection
-            .execute_batch(
-                "CREATE TABLE sources(id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, ingestion_key TEXT, revision INTEGER NOT NULL, kind TEXT NOT NULL, content TEXT NOT NULL, captured_at INTEGER NOT NULL, recorded_at INTEGER NOT NULL, deleted_at INTEGER);
-                 CREATE TABLE evidence(id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, source_id TEXT NOT NULL, source_revision INTEGER NOT NULL, quote TEXT NOT NULL, recorded_at INTEGER NOT NULL, deleted_at INTEGER);
-                 INSERT INTO sources VALUES('source-a', 'a', 'sam', NULL, 1, '\"conversation\"', 'source', 10, 10, NULL);
-                 INSERT INTO evidence VALUES('evidence-b', 'b', 'sam', 'source-a', 1, 'cross', 10, NULL);",
-            )
-            .unwrap();
-        let mut db = MemoryDb { connection };
-        assert!(matches!(db.migrate(), Err(Error::Invalid(_))));
-    }
-}
+mod tests;
