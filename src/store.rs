@@ -125,6 +125,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub struct RememberInput {
     pub tenant_id: TenantId,
     pub person_id: PersonId,
+    #[serde(default)]
+    pub ingestion_key: Option<String>,
     pub kind: SourceKind,
     pub text: String,
     pub captured_at: Timestamp,
@@ -155,6 +157,13 @@ pub struct SearchInput {
     pub limit: u32,
     #[serde(default)]
     pub query_embedding: Option<DenseQuery>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GetInput {
+    pub tenant_id: TenantId,
+    pub person_id: PersonId,
+    pub target: EmbeddingTarget,
 }
 
 #[derive(Debug, Deserialize)]
@@ -244,14 +253,30 @@ impl MemoryDb {
     pub fn remember(&mut self, input: RememberInput) -> Result<Remembered> {
         require_scope(&input.tenant_id, &input.person_id)?;
         require_text("text", &input.text)?;
+        if let Some(key) = &input.ingestion_key {
+            require_text("ingestion_key", key)?;
+        }
         let transaction = self.connection.transaction()?;
         let source_id = SourceId(new_id(&transaction)?);
         let evidence_id = EvidenceId(new_id(&transaction)?);
         let kind = serde_json::to_string(&input.kind)?;
-        transaction.execute(
-            "INSERT INTO sources(id, tenant_id, person_id, revision, kind, content, captured_at, recorded_at) VALUES(?1, ?2, ?3, 1, ?4, ?5, ?6, ?6)",
-            params![source_id.0, input.tenant_id.0, input.person_id.0, kind, input.text, input.captured_at],
+        let inserted = transaction.execute(
+            "INSERT OR IGNORE INTO sources(id, tenant_id, person_id, ingestion_key, revision, kind, content, captured_at, recorded_at) VALUES(?1, ?2, ?3, ?4, 1, ?5, ?6, ?7, ?7)",
+            params![source_id.0, input.tenant_id.0, input.person_id.0, input.ingestion_key, kind, input.text, input.captured_at],
         )?;
+        if inserted == 0 {
+            let remembered = transaction.query_row(
+                "SELECT s.id, e.id, c.id FROM sources s JOIN evidence e ON e.source_id = s.id AND e.tenant_id = s.tenant_id AND e.person_id = s.person_id LEFT JOIN claim_evidence ce ON ce.evidence_id = e.id AND ce.tenant_id = e.tenant_id AND ce.person_id = e.person_id LEFT JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id WHERE s.tenant_id = ?1 AND s.person_id = ?2 AND s.ingestion_key = ?3 ORDER BY e.id, c.id LIMIT 1",
+                params![input.tenant_id.0, input.person_id.0, input.ingestion_key],
+                |row| Ok(Remembered {
+                    source_id: SourceId(row.get(0)?),
+                    evidence_id: EvidenceId(row.get(1)?),
+                    claim_id: row.get::<_, Option<String>>(2)?.map(ClaimId),
+                }),
+            )?;
+            transaction.commit()?;
+            return Ok(remembered);
+        }
         transaction.execute(
             "INSERT INTO source_fts(source_id, tenant_id, person_id, content) VALUES(?1, ?2, ?3, ?4)",
             params![source_id.0, input.tenant_id.0, input.person_id.0, input.text],
@@ -340,6 +365,16 @@ impl MemoryDb {
             items,
             gaps,
         })
+    }
+
+    pub fn get(&self, input: GetInput) -> Result<RetrievalItem> {
+        require_scope(&input.tenant_id, &input.person_id)?;
+        let target = match input.target {
+            EmbeddingTarget::Source(id) => RetrievalTarget::Source(id),
+            EmbeddingTarget::Evidence(id) => RetrievalTarget::Evidence(id),
+            EmbeddingTarget::Claim(id) => RetrievalTarget::Claim(id),
+        };
+        self.retrieval_item(&input.tenant_id, &input.person_id, target, 10_000)
     }
 
     fn dense_claims(
@@ -857,7 +892,7 @@ impl MemoryDb {
         self.connection.execute_batch(
             "PRAGMA foreign_keys = ON;
              BEGIN IMMEDIATE;
-             CREATE TABLE IF NOT EXISTS sources(id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, revision INTEGER NOT NULL, kind TEXT NOT NULL, content TEXT NOT NULL, captured_at INTEGER NOT NULL, recorded_at INTEGER NOT NULL, deleted_at INTEGER);
+             CREATE TABLE IF NOT EXISTS sources(id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, ingestion_key TEXT, revision INTEGER NOT NULL, kind TEXT NOT NULL, content TEXT NOT NULL, captured_at INTEGER NOT NULL, recorded_at INTEGER NOT NULL, deleted_at INTEGER);
              CREATE INDEX IF NOT EXISTS sources_scope ON sources(tenant_id, person_id, id);
              CREATE VIRTUAL TABLE IF NOT EXISTS source_fts USING fts5(source_id UNINDEXED, tenant_id UNINDEXED, person_id UNINDEXED, content, tokenize='unicode61');
              CREATE TABLE IF NOT EXISTS evidence(id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, source_id TEXT NOT NULL REFERENCES sources(id), source_revision INTEGER NOT NULL, quote TEXT NOT NULL, recorded_at INTEGER NOT NULL, deleted_at INTEGER);
@@ -888,6 +923,19 @@ impl MemoryDb {
                 )?;
             }
         }
+        let has_ingestion_key: bool = self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('sources') WHERE name = 'ingestion_key')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_ingestion_key {
+            self.connection
+                .execute("ALTER TABLE sources ADD COLUMN ingestion_key TEXT", [])?;
+        }
+        self.connection.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS sources_ingestion_key ON sources(tenant_id, person_id, ingestion_key) WHERE ingestion_key IS NOT NULL",
+            [],
+        )?;
         Ok(())
     }
 }
@@ -1058,6 +1106,7 @@ mod tests {
         RememberInput {
             tenant_id: TenantId(tenant.into()),
             person_id: PersonId(person.into()),
+            ingestion_key: None,
             kind: SourceKind::Conversation,
             text: format!("Sam works at {value}"),
             captured_at: 10,
@@ -1074,6 +1123,7 @@ mod tests {
         RememberInput {
             tenant_id: TenantId(tenant.into()),
             person_id: PersonId(person.into()),
+            ingestion_key: None,
             kind: SourceKind::Conversation,
             text: text.into(),
             captured_at: 10,
@@ -1085,6 +1135,29 @@ mod tests {
         db.projection_input(&TenantId("a".into()), &PersonId("sam".into()), target)
             .unwrap()
             .input_hash
+    }
+
+    #[test]
+    fn ingestion_keys_are_idempotent_within_scope() {
+        let mut db = MemoryDb {
+            connection: Connection::open_in_memory().unwrap(),
+        };
+        db.migrate().unwrap();
+        let mut first = remember_raw("a", "sam", "Remember once");
+        first.ingestion_key = Some("turn-1".into());
+        let stored = db.remember(first).unwrap();
+        let mut replay = remember_raw("a", "sam", "Changed replay content");
+        replay.ingestion_key = Some("turn-1".into());
+        let replayed = db.remember(replay).unwrap();
+        assert_eq!(stored.source_id, replayed.source_id);
+        assert_eq!(stored.evidence_id, replayed.evidence_id);
+        assert_eq!(
+            db.connection
+                .query_row("SELECT count(*) FROM sources", [], |row| row
+                    .get::<_, u64>(0))
+                .unwrap(),
+            1
+        );
     }
 
     #[test]
@@ -1118,10 +1191,18 @@ mod tests {
         db.delete_source(DeleteInput {
             tenant_id: TenantId("a".into()),
             person_id: PersonId("sam".into()),
-            source_id: raw.source_id,
+            source_id: raw.source_id.clone(),
             deleted_at: 20,
         })
         .unwrap();
+        assert!(matches!(
+            db.get(GetInput {
+                tenant_id: TenantId("a".into()),
+                person_id: PersonId("sam".into()),
+                target: EmbeddingTarget::Source(raw.source_id),
+            }),
+            Err(Error::NotFound)
+        ));
         assert!(
             db.search(SearchInput {
                 tenant_id: TenantId("a".into()),

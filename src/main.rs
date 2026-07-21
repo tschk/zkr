@@ -2,11 +2,11 @@ use serde::de::DeserializeOwned;
 use serde_json::json;
 use std::{env, io::Read, process::ExitCode};
 use zkr::{
-    CorrectInput, DeleteInput, EmbeddingInput, MemoryDb, ProjectionAuditInput, ReviewInput,
-    ReviewsInput, SearchInput,
+    CorrectInput, DeleteInput, EmbeddingInput, GetInput, MemoryDb, ProjectionAuditInput,
+    ReviewInput, ReviewsInput, SearchInput,
 };
 
-const HELP: &str = "zkr --db PATH COMMAND\n\nCommands (read one JSON object from stdin; write JSON to stdout):\n  remember     Store source evidence and an optional claim\n  search       Retrieve bounded, cited memory matches\n  correct      Supersede a claim using new correction evidence\n  delete       Tombstone a source and propagate unavailable evidence\n  review       Store a cited daily review without invoking an LLM\n  reviews      Retrieve bounded daily reviews\n  projections  List bounded stale or missing embedding inputs\n  embed        Upsert a rebuildable embedding projection\n  help         Show this help\n";
+const HELP: &str = "zkr --db PATH COMMAND\n\nCommands (read one JSON object from stdin; write JSON to stdout):\n  remember     Store source evidence and an optional claim\n  search       Retrieve bounded, cited memory matches\n  get          Read one live cited memory by target\n  correct      Supersede a claim using new correction evidence\n  delete       Tombstone a source and propagate unavailable evidence\n  review       Store a cited daily review without invoking an LLM\n  reviews      Retrieve bounded daily reviews\n  projections  List bounded stale or missing embedding inputs\n  embed        Upsert a rebuildable embedding projection\n  help         Show this help\n";
 
 fn main() -> ExitCode {
     match run() {
@@ -33,6 +33,10 @@ fn run() -> Result<Option<serde_json::Value>, Box<dyn std::error::Error>> {
         print!("{HELP}");
         return Ok(None);
     }
+    if arguments.len() == 3 && arguments[0] == "--db" && arguments[2] == "help" {
+        print!("{HELP}");
+        return Ok(None);
+    }
     if arguments.len() != 3 || arguments[0] != "--db" {
         return Err("usage: zkr --db PATH COMMAND (use --help)".into());
     }
@@ -40,6 +44,7 @@ fn run() -> Result<Option<serde_json::Value>, Box<dyn std::error::Error>> {
     let value = match arguments[2].as_str() {
         "remember" => serde_json::to_value(database.remember(read_json()?)?)?,
         "search" => serde_json::to_value(database.search(read_json::<SearchInput>()?)?)?,
+        "get" => serde_json::to_value(database.get(read_json::<GetInput>()?)?)?,
         "correct" => serde_json::to_value(database.correct(read_json::<CorrectInput>()?)?)?,
         "delete" => serde_json::to_value(database.delete_source(read_json::<DeleteInput>()?)?)?,
         "review" => serde_json::to_value(database.store_review(read_json::<ReviewInput>()?)?)?,

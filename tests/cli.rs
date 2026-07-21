@@ -52,6 +52,16 @@ fn json_cli_remembers_and_returns_cited_search_results() {
         found["items"][0]["evidence_ids"][0],
         remembered["evidence_id"]
     );
+    let exact = run(
+        database,
+        "get",
+        json!({
+            "tenant_id": "tenant",
+            "person_id": "person",
+            "target": found["items"][0]["memory"]
+        }),
+    );
+    assert_eq!(exact["excerpt"], "Sam employer Acme");
     let projections = run(
         database,
         "projections",
@@ -97,4 +107,20 @@ fn json_cli_retrieves_raw_capture_without_a_claim() {
         remembered["evidence_id"]
     );
     std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn database_help_matches_the_documented_command() {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let database = std::env::temp_dir().join(format!("zkr-help-{nonce}.db"));
+    let output = Command::new(env!("CARGO_BIN_EXE_zkr"))
+        .args(["--db", database.to_str().unwrap(), "help"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(String::from_utf8(output.stdout).unwrap().contains("get"));
+    assert!(!database.exists());
 }
