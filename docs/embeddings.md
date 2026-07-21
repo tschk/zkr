@@ -9,7 +9,9 @@ Each vector projection records:
 - a hash of the exact embedded input;
 - creation time.
 
-A changed source revision or embedding configuration makes the old vector stale. Rebuilding vectors must not mutate sources, evidence, claims, or reviews.
+Vectors declared as L2-normalized must have unit magnitude. A historical `as_of` search uses lexical retrieval only: current projections are intentionally not treated as evidence of historical embedding state.
+
+A changed source revision or malformed stored vector makes the old vector stale. Rebuilding vectors must not mutate sources, evidence, claims, or reviews. A model/version identifies one dimension, normalization, and distance lane within a tenant and person; use a new version when migrating that configuration.
 
 Run `projections` with a tenant, person, model, version, and limit to get only stale or missing work. Each item includes the current text, SHA-256 input hash, target revision, and any stored projection metadata. Embed that exact text and submit the returned hash to `embed`; zkr rejects a vector for any other input. This keeps model execution caller supplied while making rebuilds bounded and auditable.
 
@@ -36,6 +38,6 @@ Callers generate the query vector with the same model and version used for store
 }
 ```
 
-zkr scans matching persisted vectors exactly and combines their dense rank with SQLite FTS using deterministic reciprocal-rank fusion. Before scoring, it compares every vector's recorded revision and hash with the current live target, so stale and deleted projections cannot affect retrieval. Live source and evidence projections map to accepted cited claims when available; otherwise they remain directly retrievable as cited raw memory. It rejects dimension mismatches and mixed normalization or distance configurations within a model version.
+zkr scans matching persisted vectors exactly and combines their dense rank with SQLite FTS using deterministic reciprocal-rank fusion. Before scoring, it compares every vector's recorded revision, hash, dimension, normalization, distance, and vector encoding with the current live target and lane, so stale, malformed, mixed, and deleted projections cannot affect retrieval. Live source and evidence projections map to accepted cited claims when available; otherwise they remain directly retrievable as cited raw memory. New writes that would mix configurations within a model version are rejected.
 
 The initial model remains a caller choice. Before selecting a default, compare multilingual recall, latency, binary size, memory use, and platform support on LoCoMo, LongMemEval, and a private correction/deletion corpus.

@@ -31,7 +31,7 @@ zkr should keep durable, cited records as truth and treat every index, summary, 
 | Embeddings | A vector stores record ID, source revision, model ID and revision, dimension, normalization, distance metric, input hash, and creation time. Vectors never grant truth status. |
 | Index lifecycle | Changed text or configuration marks prior vectors stale. Reindexing is idempotent. Mixed vector spaces are queried separately or rejected, never silently compared. |
 | Hybrid retrieval | FTS and dense search generate candidates. Optional graph and recency signals rerank them. Reciprocal-rank fusion is the first implementation because it does not require score calibration. |
-| Reflection | A model emits cited proposals. Deterministic checks and normal lifecycle operations decide whether they become durable. |
+| Reflection | A model may emit cited suggestions outside zkr. Only an explicit normal storage, correction, profile, or review operation makes an accepted result durable. |
 | Deletion | Source tombstones synchronously hide affected facts from reads and enqueue idempotent FTS, vector, graph, and summary cleanup. A stale projection cannot resurrect deleted data. |
 | Tenancy | Tenant and subject scope are mandatory in durable rows, indexes, cache keys, retrieval, export, and deletion. Cross-tenant retrieval is a failed invariant, not a filter applied later. |
 

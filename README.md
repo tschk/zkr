@@ -11,7 +11,7 @@ Evidence-backed temporal memory for personal agents.
 - Corrections supersede history instead of silently rewriting it.
 - Retrieval is bounded, tenant-scoped, and cited.
 - Accepted claims replace their supporting raw capture in results instead of duplicating it.
-- Reflection proposes durable changes; it does not bypass evidence.
+- Reflection suggestions stay outside durable memory until a caller explicitly stores cited evidence, a claim, a correction, a profile projection, or a review.
 
 See [the architecture](docs/architecture.md), [embedding design](docs/embeddings.md), and [memory-system research](docs/research.md).
 
@@ -23,17 +23,17 @@ Transcript captures can include an optional `locator` with `device_id`, `provide
 cargo install zkr
 ```
 
-The library is consumed as the `zkr` crate. The CLI reads one JSON object from stdin and writes one JSON object to stdout.
+The library is consumed as the `zkr` crate. The CLI reads one JSON object of at most 1 MiB from stdin and writes one JSON object to stdout.
 
 ```sh
-printf '%s' '{"tenant_id":"local","person_id":"me","kind":"conversation","text":"I prefer short plans.","captured_at":1784615483,"claim":{"subject":"me","predicate":"prefers","value":"short plans","valid_from":1784615483}}' \
+printf '%s' '{"tenant_id":"local","person_id":"me","kind":"conversation","text":"I prefer short plans.","captured_at":1784615483,"recorded_at":1784615484,"claim":{"subject":"me","predicate":"prefers","value":"short plans","kind":"preference","valid_from":1784615483}}' \
   | zkr --db ~/.zkr/memory.db remember
 
 printf '%s' '{"tenant_id":"local","person_id":"me","query":"plans","limit":5}' \
   | zkr --db ~/.zkr/memory.db search
 ```
 
-Run `zkr --help` for `correct`, `delete`, `review`, `reviews`, `projections`, and `embed`. `projections` returns bounded stale or missing work with the exact text, revision, and SHA-256 hash required by `embed`.
+`correct` requires separate `valid_at` and `recorded_at` values. Add an `as_of` object with those same keys to `search` only when bitemporal history is required; ordinary retrieval returns current supported claims. Run `zkr --help` for `link`, `profile`, `profiles`, `delete`, `review`, `reviews`, `projections`, and `embed`. `link` records supporting or contradicting evidence without changing a claim. `profile` derives its key and value from a live `profile_fact` claim and keeps one current projection per scoped key. `projections` returns bounded stale or missing work with the exact text, revision, and SHA-256 hash required by `embed`. Retrieval excerpts are capped at 4096 UTF-8 bytes while retaining their evidence citation.
 
 ## Agent plugins
 
@@ -52,7 +52,7 @@ memory:
   provider: zkr
 ```
 
-Both plugins expose store, search, correction, deletion, and cited reflection through the neutral CLI. Hermes supports Hermes Agent 0.19.0 and Python 3.11–3.13 through its native Python `MemoryProvider` contract, persists completed turns to a local write-behind queue before returning, recovers pending turns on startup, flushes on shutdown, and skips non-primary agent contexts. Queue records outside the configured tenant and person are quarantined. The plugins do not add framework dependencies to the Rust crate.
+Both plugins expose store, search, correction, deletion, and cited reflection through the neutral CLI. Hermes supports Hermes Agent 0.19.0 and Python 3.11–3.13 through its native Python `MemoryProvider` contract, keeps `captured_at`, `valid_from`, and `recorded_at` distinct, persists completed turns to a local write-behind queue before returning, recovers pending turns on startup, flushes on shutdown, and skips non-primary agent contexts. Queue records outside the configured tenant and person are quarantined. The plugins do not add framework dependencies to the Rust crate.
 
 ## Development
 
