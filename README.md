@@ -37,6 +37,8 @@ Run `zkr --help` for `correct`, `delete`, `review`, `reviews`, `projections`, an
 
 ## Agent plugins
 
+Native plugin sources are available from the repository checkout and are not included in the crates.io package.
+
 ### OpenClaw
 
 Link or copy `plugins/openclaw` into an OpenClaw extension location, install it with Bun, then enable the `zkr` memory slot. It implements OpenClaw's native memory capability plus `memory_search` and `memory_get`, while preserving the explicit `zkr_*` tools. Its optional `command`, `database`, `tenant`, and `person` settings default to `zkr`, `~/.zkr/memory.db`, `openclaw`, and the active agent ID.

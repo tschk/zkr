@@ -697,9 +697,10 @@ impl MemoryDb {
             )
             .optional()?
             .ok_or(Error::NotFound)?;
-        if input.occurred_at <= old.3 {
+        if input.occurred_at <= old.2 || input.occurred_at <= old.3 {
             return Err(Error::Invalid(
-                "occurred_at must be after the original claim was recorded".to_owned(),
+                "occurred_at must be after the original claim became valid and was recorded"
+                    .to_owned(),
             ));
         }
         let source_id = SourceId(new_id(&transaction)?);
@@ -717,7 +718,7 @@ impl MemoryDb {
             params![evidence_id.0, input.tenant_id.0, input.person_id.0, source_id.0, input.text, input.occurred_at],
         )?;
         transaction.execute(
-            "UPDATE claims SET status = 'superseded', recorded_until = ?1 WHERE id = ?2 AND tenant_id = ?3 AND person_id = ?4",
+            "UPDATE claims SET status = 'superseded', valid_until = ?1, recorded_until = ?1 WHERE id = ?2 AND tenant_id = ?3 AND person_id = ?4",
             params![input.occurred_at, input.claim_id.0, input.tenant_id.0, input.person_id.0],
         )?;
         let claim_id = insert_claim(
@@ -1029,7 +1030,8 @@ impl MemoryDb {
              CREATE INDEX IF NOT EXISTS reviews_scope ON daily_reviews(tenant_id, person_id, day);
              CREATE TABLE IF NOT EXISTS embeddings(tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, target_kind TEXT NOT NULL, target_id TEXT NOT NULL, model TEXT NOT NULL, version TEXT NOT NULL, dimension INTEGER NOT NULL, input_hash TEXT NOT NULL, target_revision INTEGER NOT NULL, created_at INTEGER NOT NULL, normalization TEXT NOT NULL, distance TEXT NOT NULL, vector TEXT NOT NULL, PRIMARY KEY(tenant_id, person_id, target_kind, target_id, model, version));
              CREATE INDEX IF NOT EXISTS embeddings_scope ON embeddings(tenant_id, person_id, target_kind, target_id);
-             PRAGMA user_version = 2;
+             UPDATE claims SET valid_until = recorded_until WHERE status = 'superseded' AND valid_until IS NULL AND recorded_until > valid_from;
+             PRAGMA user_version = 3;
              COMMIT;",
         )?;
         for (column, definition) in [
@@ -1576,6 +1578,15 @@ mod tests {
                 occurred_at: 20,
             })
             .unwrap();
+        let old_intervals = db
+            .connection
+            .query_row(
+                "SELECT valid_until, recorded_until FROM claims WHERE id = ?1",
+                [&corrected.superseded_claim_id.0],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .unwrap();
+        assert_eq!(old_intervals, (20, 20));
         let deleted = db
             .delete_source(DeleteInput {
                 tenant_id: TenantId("a".into()),
@@ -1890,7 +1901,7 @@ mod tests {
             .connection
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
 
         let remembered = db
             .remember_with_locator(
@@ -1916,5 +1927,27 @@ mod tests {
             .start_ms,
             1000
         );
+    }
+
+    #[test]
+    fn migration_closes_legacy_superseded_claim_validity() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE claims(id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, subject TEXT NOT NULL, predicate TEXT NOT NULL, value TEXT NOT NULL, valid_from INTEGER NOT NULL, valid_until INTEGER, recorded_from INTEGER NOT NULL, recorded_until INTEGER, status TEXT NOT NULL);
+                 INSERT INTO claims VALUES('old', 'a', 'sam', 'sam', 'employer', 'Acme', 10, NULL, 10, 20, 'superseded');",
+            )
+            .unwrap();
+        let mut db = MemoryDb { connection };
+        db.migrate().unwrap();
+        let valid_until = db
+            .connection
+            .query_row(
+                "SELECT valid_until FROM claims WHERE id = 'old'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap();
+        assert_eq!(valid_until, 20);
     }
 }

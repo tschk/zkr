@@ -12,6 +12,7 @@ zkr separates durable truth from rebuildable retrieval machinery.
 6. Daily Reviews are cited text artifacts, not a second source of truth.
 
 Deleting a source tombstones it. Derived records without remaining support are retracted; history remains inspectable.
+Correcting a claim closes both of its half-open time ranges at the correction timestamp before recording the replacement.
 
 ## Retrieval
 

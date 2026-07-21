@@ -207,7 +207,10 @@ impl Claim {
                 to: ClaimStatus::Superseded,
             });
         }
-        self.recorded_time = TimeRange::new(self.recorded_time.from, Some(at))?;
+        let valid_time = TimeRange::new(self.valid_time.from, Some(at))?;
+        let recorded_time = TimeRange::new(self.recorded_time.from, Some(at))?;
+        self.valid_time = valid_time;
+        self.recorded_time = recorded_time;
         self.status = ClaimStatus::Superseded;
         Ok(())
     }
@@ -474,6 +477,9 @@ mod tests {
             .expect("accepted claim can be superseded");
 
         assert_eq!(old.status, ClaimStatus::Superseded);
+        assert_eq!(old.valid_time.until, Some(200));
+        assert!(old.valid_time.contains(199));
+        assert!(!old.valid_time.contains(200));
         assert_eq!(old.recorded_time.until, Some(200));
         assert!(old.recorded_time.contains(199));
         assert!(!old.recorded_time.contains(200));
