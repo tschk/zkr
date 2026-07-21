@@ -1029,7 +1029,7 @@ impl MemoryDb {
              CREATE INDEX IF NOT EXISTS reviews_scope ON daily_reviews(tenant_id, person_id, day);
              CREATE TABLE IF NOT EXISTS embeddings(tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, target_kind TEXT NOT NULL, target_id TEXT NOT NULL, model TEXT NOT NULL, version TEXT NOT NULL, dimension INTEGER NOT NULL, input_hash TEXT NOT NULL, target_revision INTEGER NOT NULL, created_at INTEGER NOT NULL, normalization TEXT NOT NULL, distance TEXT NOT NULL, vector TEXT NOT NULL, PRIMARY KEY(tenant_id, person_id, target_kind, target_id, model, version));
              CREATE INDEX IF NOT EXISTS embeddings_scope ON embeddings(tenant_id, person_id, target_kind, target_id);
-             PRAGMA user_version = 1;
+             PRAGMA user_version = 2;
              COMMIT;",
         )?;
         for (column, definition) in [
@@ -1098,9 +1098,9 @@ fn validate_transcript_locator(locator: &TranscriptLocator) -> Result<()> {
     ] {
         require_text(field, value)?;
     }
-    if locator.start_ms >= locator.end_ms {
+    if locator.start_ms > locator.end_ms {
         return Err(Error::Invalid(
-            "locator end_ms must be greater than start_ms".to_owned(),
+            "locator end_ms must not precede start_ms".to_owned(),
         ));
     }
     if locator.end_ms > i64::MAX as u64 {
@@ -1876,5 +1876,45 @@ mod tests {
             )
             .unwrap();
         assert_eq!(lifecycle, (0, 0));
+    }
+
+    #[test]
+    fn migration_upgrades_v1_and_accepts_point_locators() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch("PRAGMA user_version = 1;")
+            .unwrap();
+        let mut db = MemoryDb { connection };
+        db.migrate().unwrap();
+        let version = db
+            .connection
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap();
+        assert_eq!(version, 2);
+
+        let remembered = db
+            .remember_with_locator(
+                remember_raw("a", "sam", "Untimed final transcript"),
+                Some(TranscriptLocator {
+                    device_id: "omi-1".into(),
+                    provider: "deepgram".into(),
+                    stream_id: "stream-1".into(),
+                    segment_id: "segment-1".into(),
+                    start_ms: 1000,
+                    end_ms: 1000,
+                }),
+            )
+            .unwrap();
+        assert_eq!(
+            db.evidence_locator(EvidenceLocatorInput {
+                tenant_id: TenantId("a".into()),
+                person_id: PersonId("sam".into()),
+                evidence_id: remembered.evidence_id,
+            })
+            .unwrap()
+            .unwrap()
+            .start_ms,
+            1000
+        );
     }
 }
