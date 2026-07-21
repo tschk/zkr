@@ -442,13 +442,12 @@ impl MemoryDb {
              JOIN sources s ON s.id = source_fts.source_id AND s.tenant_id = source_fts.tenant_id AND s.person_id = source_fts.person_id
              JOIN evidence e ON e.source_id = s.id AND e.tenant_id = s.tenant_id AND e.person_id = s.person_id AND e.deleted_at IS NULL
              LEFT JOIN claim_evidence ce ON ce.evidence_id = e.id AND ce.tenant_id = e.tenant_id AND ce.person_id = e.person_id
-             LEFT JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id AND c.status = 'accepted'
+             LEFT JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL
              WHERE source_fts MATCH ?1 AND source_fts.tenant_id = ?2 AND source_fts.person_id = ?3 AND s.deleted_at IS NULL
              AND (c.id IS NOT NULL OR NOT EXISTS (
                  SELECT 1 FROM evidence live_e
                  JOIN claim_evidence live_ce ON live_ce.evidence_id = live_e.id AND live_ce.tenant_id = live_e.tenant_id AND live_ce.person_id = live_e.person_id
-                 JOIN claims live_c ON live_c.id = live_ce.claim_id AND live_c.tenant_id = live_ce.tenant_id AND live_c.person_id = live_ce.person_id
-                 WHERE live_e.source_id = s.id AND live_e.tenant_id = s.tenant_id AND live_e.person_id = s.person_id AND live_e.deleted_at IS NULL AND live_c.status = 'accepted'
+                 WHERE live_e.source_id = s.id AND live_e.tenant_id = s.tenant_id AND live_e.person_id = s.person_id AND live_e.deleted_at IS NULL
              ))
              ORDER BY bm25(source_fts), s.id, c.id LIMIT ?4",
         )?;
@@ -601,13 +600,13 @@ impl MemoryDb {
     ) -> Result<Vec<RetrievalTarget>> {
         let sql = match target_kind {
             "claim" => {
-                "SELECT id FROM claims WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND status = 'accepted'"
+                "SELECT id FROM claims WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND status = 'accepted' AND valid_until IS NULL AND recorded_until IS NULL"
             }
             "evidence" => {
-                "SELECT c.id FROM evidence e JOIN sources s ON s.id = e.source_id AND s.tenant_id = e.tenant_id AND s.person_id = e.person_id LEFT JOIN claim_evidence ce ON ce.evidence_id = e.id AND ce.tenant_id = e.tenant_id AND ce.person_id = e.person_id LEFT JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id AND c.status = 'accepted' WHERE e.id = ?1 AND e.tenant_id = ?2 AND e.person_id = ?3 AND e.deleted_at IS NULL AND s.deleted_at IS NULL ORDER BY c.id"
+                "SELECT c.id FROM evidence e JOIN sources s ON s.id = e.source_id AND s.tenant_id = e.tenant_id AND s.person_id = e.person_id LEFT JOIN claim_evidence ce ON ce.evidence_id = e.id AND ce.tenant_id = e.tenant_id AND ce.person_id = e.person_id LEFT JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL WHERE e.id = ?1 AND e.tenant_id = ?2 AND e.person_id = ?3 AND e.deleted_at IS NULL AND s.deleted_at IS NULL ORDER BY c.id"
             }
             "source" => {
-                "SELECT DISTINCT c.id FROM sources s JOIN evidence e ON e.source_id = s.id AND e.tenant_id = s.tenant_id AND e.person_id = s.person_id LEFT JOIN claim_evidence ce ON ce.evidence_id = e.id AND ce.tenant_id = e.tenant_id AND ce.person_id = e.person_id LEFT JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id AND c.status = 'accepted' WHERE s.id = ?1 AND s.tenant_id = ?2 AND s.person_id = ?3 AND s.deleted_at IS NULL AND e.deleted_at IS NULL ORDER BY c.id"
+                "SELECT DISTINCT c.id FROM sources s JOIN evidence e ON e.source_id = s.id AND e.tenant_id = s.tenant_id AND e.person_id = s.person_id LEFT JOIN claim_evidence ce ON ce.evidence_id = e.id AND ce.tenant_id = e.tenant_id AND ce.person_id = e.person_id LEFT JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL WHERE s.id = ?1 AND s.tenant_id = ?2 AND s.person_id = ?3 AND s.deleted_at IS NULL AND e.deleted_at IS NULL ORDER BY c.id"
             }
             _ => {
                 return Err(Error::Invalid(
@@ -631,12 +630,43 @@ impl MemoryDb {
         if !claims.is_empty() {
             return Ok(claims);
         }
+        if self.target_has_claim(tenant_id, person_id, target_kind, target_id)? {
+            return Ok(Vec::new());
+        }
         Ok(match target_kind {
             "source" => vec![RetrievalTarget::Source(SourceId(target_id.to_owned()))],
             "evidence" => vec![RetrievalTarget::Evidence(EvidenceId(target_id.to_owned()))],
             "claim" => Vec::new(),
             _ => unreachable!(),
         })
+    }
+
+    fn target_has_claim(
+        &self,
+        tenant_id: &TenantId,
+        person_id: &PersonId,
+        target_kind: &str,
+        target_id: &str,
+    ) -> Result<bool> {
+        let sql = match target_kind {
+            "source" => {
+                "SELECT EXISTS(SELECT 1 FROM claim_evidence ce JOIN evidence e ON e.id = ce.evidence_id AND e.tenant_id = ce.tenant_id AND e.person_id = ce.person_id WHERE e.source_id = ?1 AND e.tenant_id = ?2 AND e.person_id = ?3)"
+            }
+            "evidence" => {
+                "SELECT EXISTS(SELECT 1 FROM claim_evidence WHERE evidence_id = ?1 AND tenant_id = ?2 AND person_id = ?3)"
+            }
+            "claim" => return Ok(true),
+            _ => {
+                return Err(Error::Invalid(
+                    "stored embedding target is invalid".to_owned(),
+                ));
+            }
+        };
+        Ok(self
+            .connection
+            .query_row(sql, params![target_id, tenant_id.0, person_id.0], |row| {
+                row.get(0)
+            })?)
     }
 
     fn retrieval_item(
@@ -653,7 +683,7 @@ impl MemoryDb {
                  JOIN claim_evidence ce ON ce.claim_id = c.id AND ce.tenant_id = c.tenant_id AND ce.person_id = c.person_id
                  JOIN evidence e ON e.id = ce.evidence_id AND e.tenant_id = ce.tenant_id AND e.person_id = ce.person_id
                  JOIN sources s ON s.id = e.source_id AND s.tenant_id = e.tenant_id AND s.person_id = e.person_id
-                 WHERE c.id = ?1 AND c.tenant_id = ?2 AND c.person_id = ?3 AND c.status = 'accepted' AND e.deleted_at IS NULL AND s.deleted_at IS NULL
+                 WHERE c.id = ?1 AND c.tenant_id = ?2 AND c.person_id = ?3 AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL AND e.deleted_at IS NULL AND s.deleted_at IS NULL
                  ORDER BY ce.evidence_id LIMIT 1",
                 &id.0,
             ),
@@ -937,7 +967,7 @@ impl MemoryDb {
                 &id.0,
                 "subject || ' ' || predicate || ' ' || value",
                 "recorded_from",
-                "status = 'accepted'",
+                "status = 'accepted' AND valid_until IS NULL AND recorded_until IS NULL",
             ),
         };
         let (text, target_revision) = self
@@ -965,7 +995,7 @@ impl MemoryDb {
             "SELECT target_kind, target_id FROM (
                 SELECT 'source' AS target_kind, id AS target_id FROM sources WHERE tenant_id = ?1 AND person_id = ?2 AND deleted_at IS NULL
                 UNION ALL SELECT 'evidence', e.id FROM evidence e JOIN sources s ON s.id = e.source_id AND s.tenant_id = e.tenant_id AND s.person_id = e.person_id WHERE e.tenant_id = ?1 AND e.person_id = ?2 AND e.deleted_at IS NULL AND s.deleted_at IS NULL
-                UNION ALL SELECT 'claim', c.id FROM claims c WHERE c.tenant_id = ?1 AND c.person_id = ?2 AND c.status = 'accepted'
+                UNION ALL SELECT 'claim', c.id FROM claims c WHERE c.tenant_id = ?1 AND c.person_id = ?2 AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL
              ) ORDER BY target_kind, target_id",
         )?;
         let targets = statement
@@ -1014,9 +1044,19 @@ impl MemoryDb {
     }
 
     fn migrate(&mut self) -> Result<()> {
-        self.connection.execute_batch(
-            "PRAGMA foreign_keys = ON;
-             BEGIN IMMEDIATE;
+        const SCHEMA_VERSION: i64 = 4;
+        self.connection.execute_batch("PRAGMA foreign_keys = ON;")?;
+        let version: i64 = self
+            .connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if version > SCHEMA_VERSION {
+            return Err(Error::Invalid(format!(
+                "database schema version {version} is newer than supported version {SCHEMA_VERSION}"
+            )));
+        }
+        let transaction = self.connection.transaction()?;
+        transaction.execute_batch(
+            "
              CREATE TABLE IF NOT EXISTS sources(id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, ingestion_key TEXT, revision INTEGER NOT NULL, kind TEXT NOT NULL, content TEXT NOT NULL, captured_at INTEGER NOT NULL, recorded_at INTEGER NOT NULL, deleted_at INTEGER);
              CREATE INDEX IF NOT EXISTS sources_scope ON sources(tenant_id, person_id, id);
              CREATE VIRTUAL TABLE IF NOT EXISTS source_fts USING fts5(source_id UNINDEXED, tenant_id UNINDEXED, person_id UNINDEXED, content, tokenize='unicode61');
@@ -1030,39 +1070,72 @@ impl MemoryDb {
              CREATE INDEX IF NOT EXISTS reviews_scope ON daily_reviews(tenant_id, person_id, day);
              CREATE TABLE IF NOT EXISTS embeddings(tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, target_kind TEXT NOT NULL, target_id TEXT NOT NULL, model TEXT NOT NULL, version TEXT NOT NULL, dimension INTEGER NOT NULL, input_hash TEXT NOT NULL, target_revision INTEGER NOT NULL, created_at INTEGER NOT NULL, normalization TEXT NOT NULL, distance TEXT NOT NULL, vector TEXT NOT NULL, PRIMARY KEY(tenant_id, person_id, target_kind, target_id, model, version));
              CREATE INDEX IF NOT EXISTS embeddings_scope ON embeddings(tenant_id, person_id, target_kind, target_id);
-             UPDATE claims SET valid_until = recorded_until WHERE status = 'superseded' AND valid_until IS NULL AND recorded_until > valid_from;
-             PRAGMA user_version = 3;
-             COMMIT;",
+            ",
         )?;
         for (column, definition) in [
             ("target_revision", "INTEGER NOT NULL DEFAULT 0"),
             ("created_at", "INTEGER NOT NULL DEFAULT 0"),
         ] {
-            let exists: bool = self.connection.query_row(
+            let exists: bool = transaction.query_row(
                 "SELECT EXISTS(SELECT 1 FROM pragma_table_info('embeddings') WHERE name = ?1)",
                 [column],
                 |row| row.get(0),
             )?;
             if !exists {
-                self.connection.execute(
+                transaction.execute(
                     &format!("ALTER TABLE embeddings ADD COLUMN {column} {definition}"),
                     [],
                 )?;
             }
         }
-        let has_ingestion_key: bool = self.connection.query_row(
+        let has_ingestion_key: bool = transaction.query_row(
             "SELECT EXISTS(SELECT 1 FROM pragma_table_info('sources') WHERE name = 'ingestion_key')",
             [],
             |row| row.get(0),
         )?;
         if !has_ingestion_key {
-            self.connection
-                .execute("ALTER TABLE sources ADD COLUMN ingestion_key TEXT", [])?;
+            transaction.execute("ALTER TABLE sources ADD COLUMN ingestion_key TEXT", [])?;
         }
-        self.connection.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS sources_ingestion_key ON sources(tenant_id, person_id, ingestion_key) WHERE ingestion_key IS NOT NULL",
-            [],
+        for (name, query) in [
+            (
+                "evidence",
+                "SELECT EXISTS(SELECT 1 FROM evidence e LEFT JOIN sources s ON s.id = e.source_id AND s.tenant_id = e.tenant_id AND s.person_id = e.person_id WHERE s.id IS NULL)",
+            ),
+            (
+                "evidence locator",
+                "SELECT EXISTS(SELECT 1 FROM evidence_locators l LEFT JOIN evidence e ON e.id = l.evidence_id AND e.tenant_id = l.tenant_id AND e.person_id = l.person_id WHERE e.id IS NULL)",
+            ),
+            (
+                "claim evidence",
+                "SELECT EXISTS(SELECT 1 FROM claim_evidence ce LEFT JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id LEFT JOIN evidence e ON e.id = ce.evidence_id AND e.tenant_id = ce.tenant_id AND e.person_id = ce.person_id WHERE c.id IS NULL OR e.id IS NULL)",
+            ),
+            (
+                "daily review",
+                "SELECT EXISTS(SELECT 1 FROM daily_reviews r, json_each(r.evidence_ids) citation LEFT JOIN evidence e ON e.id = citation.value AND e.tenant_id = r.tenant_id AND e.person_id = r.person_id WHERE json_valid(r.evidence_ids) = 0 OR e.id IS NULL)",
+            ),
+        ] {
+            let inconsistent: bool = transaction.query_row(query, [], |row| row.get(0))?;
+            if inconsistent {
+                return Err(Error::Invalid(format!(
+                    "legacy {name} references cross tenant or person scope"
+                )));
+            }
+        }
+        transaction.execute_batch(
+            "CREATE UNIQUE INDEX IF NOT EXISTS sources_ingestion_key ON sources(tenant_id, person_id, ingestion_key) WHERE ingestion_key IS NOT NULL;
+             CREATE TRIGGER IF NOT EXISTS evidence_scope_insert BEFORE INSERT ON evidence FOR EACH ROW WHEN NOT EXISTS (SELECT 1 FROM sources WHERE id = NEW.source_id AND tenant_id = NEW.tenant_id AND person_id = NEW.person_id) BEGIN SELECT RAISE(ABORT, 'evidence source scope mismatch'); END;
+             CREATE TRIGGER IF NOT EXISTS evidence_scope_update BEFORE UPDATE OF source_id, tenant_id, person_id ON evidence FOR EACH ROW WHEN NOT EXISTS (SELECT 1 FROM sources WHERE id = NEW.source_id AND tenant_id = NEW.tenant_id AND person_id = NEW.person_id) BEGIN SELECT RAISE(ABORT, 'evidence source scope mismatch'); END;
+             CREATE TRIGGER IF NOT EXISTS locator_scope_insert BEFORE INSERT ON evidence_locators FOR EACH ROW WHEN NOT EXISTS (SELECT 1 FROM evidence WHERE id = NEW.evidence_id AND tenant_id = NEW.tenant_id AND person_id = NEW.person_id) BEGIN SELECT RAISE(ABORT, 'evidence locator scope mismatch'); END;
+             CREATE TRIGGER IF NOT EXISTS locator_scope_update BEFORE UPDATE OF evidence_id, tenant_id, person_id ON evidence_locators FOR EACH ROW WHEN NOT EXISTS (SELECT 1 FROM evidence WHERE id = NEW.evidence_id AND tenant_id = NEW.tenant_id AND person_id = NEW.person_id) BEGIN SELECT RAISE(ABORT, 'evidence locator scope mismatch'); END;
+             CREATE TRIGGER IF NOT EXISTS claim_evidence_scope_insert BEFORE INSERT ON claim_evidence FOR EACH ROW WHEN NOT EXISTS (SELECT 1 FROM claims WHERE id = NEW.claim_id AND tenant_id = NEW.tenant_id AND person_id = NEW.person_id) OR NOT EXISTS (SELECT 1 FROM evidence WHERE id = NEW.evidence_id AND tenant_id = NEW.tenant_id AND person_id = NEW.person_id) BEGIN SELECT RAISE(ABORT, 'claim evidence scope mismatch'); END;
+             CREATE TRIGGER IF NOT EXISTS claim_evidence_scope_update BEFORE UPDATE OF claim_id, evidence_id, tenant_id, person_id ON claim_evidence FOR EACH ROW WHEN NOT EXISTS (SELECT 1 FROM claims WHERE id = NEW.claim_id AND tenant_id = NEW.tenant_id AND person_id = NEW.person_id) OR NOT EXISTS (SELECT 1 FROM evidence WHERE id = NEW.evidence_id AND tenant_id = NEW.tenant_id AND person_id = NEW.person_id) BEGIN SELECT RAISE(ABORT, 'claim evidence scope mismatch'); END;
+             CREATE TRIGGER IF NOT EXISTS embedding_scope_insert BEFORE INSERT ON embeddings FOR EACH ROW WHEN NEW.target_kind NOT IN ('source', 'evidence', 'claim') OR (NEW.target_kind = 'source' AND NOT EXISTS (SELECT 1 FROM sources WHERE id = NEW.target_id AND tenant_id = NEW.tenant_id AND person_id = NEW.person_id)) OR (NEW.target_kind = 'evidence' AND NOT EXISTS (SELECT 1 FROM evidence WHERE id = NEW.target_id AND tenant_id = NEW.tenant_id AND person_id = NEW.person_id)) OR (NEW.target_kind = 'claim' AND NOT EXISTS (SELECT 1 FROM claims WHERE id = NEW.target_id AND tenant_id = NEW.tenant_id AND person_id = NEW.person_id)) BEGIN SELECT RAISE(ABORT, 'embedding target scope mismatch'); END;
+             CREATE TRIGGER IF NOT EXISTS embedding_scope_update BEFORE UPDATE OF target_kind, target_id, tenant_id, person_id ON embeddings FOR EACH ROW WHEN NEW.target_kind NOT IN ('source', 'evidence', 'claim') OR (NEW.target_kind = 'source' AND NOT EXISTS (SELECT 1 FROM sources WHERE id = NEW.target_id AND tenant_id = NEW.tenant_id AND person_id = NEW.person_id)) OR (NEW.target_kind = 'evidence' AND NOT EXISTS (SELECT 1 FROM evidence WHERE id = NEW.target_id AND tenant_id = NEW.tenant_id AND person_id = NEW.person_id)) OR (NEW.target_kind = 'claim' AND NOT EXISTS (SELECT 1 FROM claims WHERE id = NEW.target_id AND tenant_id = NEW.tenant_id AND person_id = NEW.person_id)) BEGIN SELECT RAISE(ABORT, 'embedding target scope mismatch'); END;
+             CREATE TRIGGER IF NOT EXISTS review_scope_insert BEFORE INSERT ON daily_reviews FOR EACH ROW WHEN json_valid(NEW.evidence_ids) = 0 OR EXISTS (SELECT 1 FROM json_each(NEW.evidence_ids) citation LEFT JOIN evidence e ON e.id = citation.value AND e.tenant_id = NEW.tenant_id AND e.person_id = NEW.person_id WHERE e.id IS NULL) BEGIN SELECT RAISE(ABORT, 'daily review evidence scope mismatch'); END;
+             CREATE TRIGGER IF NOT EXISTS review_scope_update BEFORE UPDATE OF tenant_id, person_id, evidence_ids ON daily_reviews FOR EACH ROW WHEN json_valid(NEW.evidence_ids) = 0 OR EXISTS (SELECT 1 FROM json_each(NEW.evidence_ids) citation LEFT JOIN evidence e ON e.id = citation.value AND e.tenant_id = NEW.tenant_id AND e.person_id = NEW.person_id WHERE e.id IS NULL) BEGIN SELECT RAISE(ABORT, 'daily review evidence scope mismatch'); END;
+             PRAGMA user_version = 4;",
         )?;
+        transaction.commit()?;
         Ok(())
     }
 }
@@ -1550,6 +1623,54 @@ mod tests {
     }
 
     #[test]
+    fn expired_claims_do_not_fall_back_to_stale_raw_evidence() {
+        let mut db = MemoryDb {
+            connection: Connection::open_in_memory().unwrap(),
+        };
+        db.migrate().unwrap();
+        let remembered = db.remember(remember("a", "sam", "Acme")).unwrap();
+        let target = EmbeddingTarget::Claim(remembered.claim_id.clone().unwrap());
+        db.upsert_embedding(EmbeddingInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            target,
+            embedding: Embedding {
+                vector: vec![1.0, 0.0],
+                model: "test/model".into(),
+                version: "1".into(),
+                input_hash: hash_for(
+                    &db,
+                    EmbeddingTarget::Claim(remembered.claim_id.clone().unwrap()),
+                ),
+                normalization: VectorNormalization::L2,
+                distance: VectorDistance::Cosine,
+            },
+        })
+        .unwrap();
+        db.connection
+            .execute(
+                "UPDATE claims SET valid_until = 20, recorded_until = 20 WHERE id = ?1",
+                [&remembered.claim_id.unwrap().0],
+            )
+            .unwrap();
+
+        let found = db
+            .search(SearchInput {
+                tenant_id: TenantId("a".into()),
+                person_id: PersonId("sam".into()),
+                query: "Acme".into(),
+                limit: 5,
+                query_embedding: Some(DenseQuery {
+                    vector: vec![1.0, 0.0],
+                    model: "test/model".into(),
+                    version: "1".into(),
+                }),
+            })
+            .unwrap();
+        assert!(found.items.is_empty());
+    }
+
+    #[test]
     fn lifecycle_is_scoped_cited_and_propagates_deletion() {
         let mut db = MemoryDb {
             connection: Connection::open_in_memory().unwrap(),
@@ -1873,7 +1994,8 @@ mod tests {
         connection
             .execute_batch(
                 "CREATE TABLE embeddings(tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, target_kind TEXT NOT NULL, target_id TEXT NOT NULL, model TEXT NOT NULL, version TEXT NOT NULL, dimension INTEGER NOT NULL, input_hash TEXT NOT NULL, normalization TEXT NOT NULL, distance TEXT NOT NULL, vector TEXT NOT NULL, PRIMARY KEY(tenant_id, person_id, target_kind, target_id, model, version));
-                 INSERT INTO embeddings VALUES('a', 'sam', 'source', 'old', 'model', '1', 1, 'sha256:old', '\"l2\"', '\"cosine\"', '[1.0]');",
+                 INSERT INTO embeddings VALUES('a', 'sam', 'source', 'old', 'model', '1', 1, 'sha256:old', '\"l2\"', '\"cosine\"', '[1.0]');
+                 PRAGMA user_version = 1;",
             )
             .unwrap();
         let mut db = MemoryDb { connection };
@@ -1901,7 +2023,7 @@ mod tests {
             .connection
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap();
-        assert_eq!(version, 3);
+        assert_eq!(version, 4);
 
         let remembered = db
             .remember_with_locator(
@@ -1930,12 +2052,13 @@ mod tests {
     }
 
     #[test]
-    fn migration_closes_legacy_superseded_claim_validity() {
+    fn migration_preserves_unknown_legacy_superseded_claim_validity() {
         let connection = Connection::open_in_memory().unwrap();
         connection
             .execute_batch(
                 "CREATE TABLE claims(id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, subject TEXT NOT NULL, predicate TEXT NOT NULL, value TEXT NOT NULL, valid_from INTEGER NOT NULL, valid_until INTEGER, recorded_from INTEGER NOT NULL, recorded_until INTEGER, status TEXT NOT NULL);
-                 INSERT INTO claims VALUES('old', 'a', 'sam', 'sam', 'employer', 'Acme', 10, NULL, 10, 20, 'superseded');",
+                 INSERT INTO claims VALUES('old', 'a', 'sam', 'sam', 'employer', 'Acme', 10, NULL, 10, 20, 'superseded');
+                 PRAGMA user_version = 3;",
             )
             .unwrap();
         let mut db = MemoryDb { connection };
@@ -1945,9 +2068,89 @@ mod tests {
             .query_row(
                 "SELECT valid_until FROM claims WHERE id = 'old'",
                 [],
-                |row| row.get::<_, i64>(0),
+                |row| row.get::<_, Option<i64>>(0),
             )
             .unwrap();
-        assert_eq!(valid_until, 20);
+        assert_eq!(valid_until, None);
+    }
+
+    #[test]
+    fn migration_is_idempotent_for_supported_schema_versions() {
+        for version in 0..=3 {
+            let connection = Connection::open_in_memory().unwrap();
+            connection
+                .execute_batch(&format!("PRAGMA user_version = {version};"))
+                .unwrap();
+            let mut db = MemoryDb { connection };
+            db.migrate().unwrap();
+            db.migrate().unwrap();
+            let actual = db
+                .connection
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .unwrap();
+            assert_eq!(actual, 4);
+        }
+    }
+
+    #[test]
+    fn schema_rejects_cross_scope_references() {
+        let mut db = MemoryDb {
+            connection: Connection::open_in_memory().unwrap(),
+        };
+        db.migrate().unwrap();
+        let first = db.remember(remember("a", "sam", "Acme")).unwrap();
+        let second = db.remember(remember("b", "sam", "Other")).unwrap();
+
+        assert!(db
+            .connection
+            .execute(
+                "INSERT INTO evidence(id, tenant_id, person_id, source_id, source_revision, quote, recorded_at) VALUES(?1, ?2, ?3, ?4, 1, 'cross', 10)",
+                params!["cross-evidence", "b", "sam", first.source_id.0],
+            )
+            .is_err());
+        assert!(db
+            .connection
+            .execute(
+                "INSERT INTO evidence_locators(tenant_id, person_id, evidence_id, device_id, provider, stream_id, segment_id, start_ms, end_ms) VALUES('b', 'sam', ?1, 'device', 'provider', 'stream', 'segment', 0, 1)",
+                [&first.evidence_id.0],
+            )
+            .is_err());
+        assert!(db
+            .connection
+            .execute(
+                "INSERT INTO claim_evidence(tenant_id, person_id, claim_id, evidence_id, relation, confidence_basis_points) VALUES('b', 'sam', ?1, ?2, '\"supports\"', 10000)",
+                params![second.claim_id.unwrap().0, first.evidence_id.0],
+            )
+            .is_err());
+        assert!(db
+            .connection
+            .execute(
+                "INSERT INTO embeddings(tenant_id, person_id, target_kind, target_id, model, version, dimension, input_hash, target_revision, created_at, normalization, distance, vector) VALUES('b', 'sam', 'source', ?1, 'model', '1', 1, 'sha256:input', 1, 1, '\"l2\"', '\"cosine\"', '[1.0]')",
+                [&first.source_id.0],
+            )
+            .is_err());
+        let citations = serde_json::to_string(&[first.evidence_id]).unwrap();
+        assert!(db
+            .connection
+            .execute(
+                "INSERT INTO daily_reviews(id, tenant_id, person_id, day, summary, evidence_ids, recorded_at) VALUES('cross-review', 'b', 'sam', '2026-07-21', 'cross', ?1, 10)",
+                [&citations],
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn migration_rejects_legacy_cross_scope_evidence() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE sources(id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, ingestion_key TEXT, revision INTEGER NOT NULL, kind TEXT NOT NULL, content TEXT NOT NULL, captured_at INTEGER NOT NULL, recorded_at INTEGER NOT NULL, deleted_at INTEGER);
+                 CREATE TABLE evidence(id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, source_id TEXT NOT NULL, source_revision INTEGER NOT NULL, quote TEXT NOT NULL, recorded_at INTEGER NOT NULL, deleted_at INTEGER);
+                 INSERT INTO sources VALUES('source-a', 'a', 'sam', NULL, 1, '\"conversation\"', 'source', 10, 10, NULL);
+                 INSERT INTO evidence VALUES('evidence-b', 'b', 'sam', 'source-a', 1, 'cross', 10, NULL);",
+            )
+            .unwrap();
+        let mut db = MemoryDb { connection };
+        assert!(matches!(db.migrate(), Err(Error::Invalid(_))));
     }
 }
