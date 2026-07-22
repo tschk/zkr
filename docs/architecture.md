@@ -6,13 +6,16 @@ zkr separates durable truth from rebuildable retrieval machinery.
 
 1. A source records an observation and keeps append-only revisions.
 2. Evidence points to an exact source revision and span.
-3. A claim records a fact, profile fact, preference, task, skill, or recommendation with valid time and recorded time.
+3. A claim records a fact, profile fact, preference, task, skill, or recommendation with valid time, recorded time, a tier (`short_term`, `long_term`, `archive`), and a processing state (`pending`, `processed`, `blocked`).
 4. Claim-evidence links say whether evidence supports or contradicts a claim.
 5. Profile entries expose one deterministic stable/current projection per scoped claim predicate; their key and value are derived from a live profile-fact claim.
 6. Daily Reviews are cited text artifacts, not a second source of truth.
+7. A legal-state matrix guards every claim: only (`short_term`/`long_term`/`archive`) × (`accepted`/`superseded`/`retracted`) × (`pending`/`processed`/`blocked`) combinations that the schema defines as legal can be inserted or updated.
 
 Deleting a source tombstones it. Derived records without remaining support are retracted and are unavailable to retrieval. Explicit bitemporal history exposes prior non-deleted claim states without recreating deleted evidence.
 Correcting or superseding a claim closes both of its half-open time ranges using separately supplied valid and recorded timestamps before recording the replacement.
+`promote` moves a processed `short_term` claim to `long_term`; `archive` moves a processed claim out of live retrieval. Both enqueue idempotent projection-repair work and append the updated claim to the durable commit feed.
+`repair` drains the projection-repair outbox: it revalidates or deletes embeddings, FTS entries, and future graph citations when a source is retracted, a claim is superseded or archived, or a tier changes. The outbox makes cleanup idempotent and crash safe.
 Schema upgrades run as ordered immediate transactions. The v5-to-v6 upgrade rebuilds profile projections from their backing profile-fact claims; it does not alter those claims or their evidence.
 
 ## Retrieval
