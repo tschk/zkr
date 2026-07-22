@@ -87,11 +87,12 @@ impl MemoryDb {
                  JOIN sources s ON s.id = source_fts.source_id AND s.tenant_id = source_fts.tenant_id AND s.person_id = source_fts.person_id
                  JOIN evidence e ON e.source_id = s.id AND e.tenant_id = s.tenant_id AND e.person_id = s.person_id AND e.deleted_at IS NULL
                  LEFT JOIN claim_evidence ce ON ce.evidence_id = e.id AND ce.tenant_id = e.tenant_id AND ce.person_id = e.person_id AND ce.relation = '\"supports\"'
-                 LEFT JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL
+                 LEFT JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL AND c.tier IN ('short_term', 'long_term') AND c.processing_state = 'processed'
                  WHERE source_fts MATCH ?1 AND source_fts.tenant_id = ?2 AND source_fts.person_id = ?3 AND s.deleted_at IS NULL
                  AND (c.id IS NOT NULL OR NOT EXISTS (
                      SELECT 1 FROM evidence live_e
                      JOIN claim_evidence live_ce ON live_ce.evidence_id = live_e.id AND live_ce.tenant_id = live_e.tenant_id AND live_ce.person_id = live_e.person_id AND live_ce.relation = '\"supports\"'
+
                      WHERE live_e.source_id = s.id AND live_e.tenant_id = s.tenant_id AND live_e.person_id = s.person_id AND live_e.deleted_at IS NULL
                  ))
                  ORDER BY bm25(source_fts), s.id, c.id LIMIT ?4",
@@ -103,13 +104,13 @@ impl MemoryDb {
                  JOIN sources s ON s.id = source_fts.source_id AND s.tenant_id = source_fts.tenant_id AND s.person_id = source_fts.person_id
                  JOIN evidence e ON e.source_id = s.id AND e.tenant_id = s.tenant_id AND e.person_id = s.person_id AND e.deleted_at IS NULL AND e.recorded_at <= ?5
                  LEFT JOIN claim_evidence ce ON ce.evidence_id = e.id AND ce.tenant_id = e.tenant_id AND ce.person_id = e.person_id AND ce.relation = '\"supports\"'
-                 LEFT JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id AND c.status IN ('accepted', 'superseded') AND c.valid_from <= ?4 AND (c.valid_until IS NULL OR c.valid_until > ?4) AND c.recorded_from <= ?5 AND (c.recorded_until IS NULL OR c.recorded_until > ?5)
+                 LEFT JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id AND c.status IN ('accepted', 'superseded') AND c.valid_from <= ?4 AND (c.valid_until IS NULL OR c.valid_until > ?4) AND c.recorded_from <= ?5 AND (c.recorded_until IS NULL OR c.recorded_until > ?5) AND c.processing_state = 'processed'
                  WHERE source_fts MATCH ?1 AND source_fts.tenant_id = ?2 AND source_fts.person_id = ?3 AND s.deleted_at IS NULL AND s.captured_at <= ?4 AND s.recorded_at <= ?5
                  AND (c.id IS NOT NULL OR NOT EXISTS (
                      SELECT 1 FROM evidence live_e
                      JOIN claim_evidence live_ce ON live_ce.evidence_id = live_e.id AND live_ce.tenant_id = live_e.tenant_id AND live_ce.person_id = live_e.person_id AND live_ce.relation = '\"supports\"'
                      JOIN claims live_c ON live_c.id = live_ce.claim_id AND live_c.tenant_id = live_ce.tenant_id AND live_c.person_id = live_ce.person_id
-                     WHERE live_e.source_id = s.id AND live_e.tenant_id = s.tenant_id AND live_e.person_id = s.person_id AND live_e.deleted_at IS NULL AND live_e.recorded_at <= ?5 AND live_c.status IN ('accepted', 'superseded') AND live_c.valid_from <= ?4 AND (live_c.valid_until IS NULL OR live_c.valid_until > ?4) AND live_c.recorded_from <= ?5 AND (live_c.recorded_until IS NULL OR live_c.recorded_until > ?5)
+                     WHERE live_e.source_id = s.id AND live_e.tenant_id = s.tenant_id AND live_e.person_id = s.person_id AND live_e.deleted_at IS NULL AND live_e.recorded_at <= ?5 AND live_c.status IN ('accepted', 'superseded') AND live_c.valid_from <= ?4 AND (live_c.valid_until IS NULL OR live_c.valid_until > ?4) AND live_c.recorded_from <= ?5 AND (live_c.recorded_until IS NULL OR live_c.recorded_until > ?5) AND live_c.processing_state = 'processed'
                  ))
                  ORDER BY bm25(source_fts), s.id, c.id LIMIT ?6",
                 vec![&query, &tenant_id.0, &person_id.0, &as_of.valid_at, &as_of.recorded_at, &candidate_limit],
@@ -145,13 +146,13 @@ impl MemoryDb {
     ) -> Result<Vec<RetrievalTarget>> {
         let sql = match target_kind {
             "claim" => {
-                "SELECT id FROM claims WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND status = 'accepted' AND valid_until IS NULL AND recorded_until IS NULL"
+                "SELECT id FROM claims WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND status = 'accepted' AND valid_until IS NULL AND recorded_until IS NULL AND tier IN ('short_term', 'long_term') AND processing_state = 'processed'"
             }
             "evidence" => {
-                "SELECT c.id FROM evidence e JOIN sources s ON s.id = e.source_id AND s.tenant_id = e.tenant_id AND s.person_id = e.person_id LEFT JOIN claim_evidence ce ON ce.evidence_id = e.id AND ce.tenant_id = e.tenant_id AND ce.person_id = e.person_id AND ce.relation = '\"supports\"' LEFT JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL WHERE e.id = ?1 AND e.tenant_id = ?2 AND e.person_id = ?3 AND e.deleted_at IS NULL AND s.deleted_at IS NULL ORDER BY c.id"
+                "SELECT c.id FROM evidence e JOIN sources s ON s.id = e.source_id AND s.tenant_id = e.tenant_id AND s.person_id = e.person_id LEFT JOIN claim_evidence ce ON ce.evidence_id = e.id AND ce.tenant_id = e.tenant_id AND ce.person_id = e.person_id AND ce.relation = '\"supports\"' LEFT JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL AND c.tier IN ('short_term', 'long_term') AND c.processing_state = 'processed' WHERE e.id = ?1 AND e.tenant_id = ?2 AND e.person_id = ?3 AND e.deleted_at IS NULL AND s.deleted_at IS NULL ORDER BY c.id"
             }
             "source" => {
-                "SELECT DISTINCT c.id FROM sources s JOIN evidence e ON e.source_id = s.id AND e.tenant_id = s.tenant_id AND e.person_id = s.person_id LEFT JOIN claim_evidence ce ON ce.evidence_id = e.id AND ce.tenant_id = e.tenant_id AND ce.person_id = e.person_id AND ce.relation = '\"supports\"' LEFT JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL WHERE s.id = ?1 AND s.tenant_id = ?2 AND s.person_id = ?3 AND s.deleted_at IS NULL AND e.deleted_at IS NULL ORDER BY c.id"
+                "SELECT DISTINCT c.id FROM sources s JOIN evidence e ON e.source_id = s.id AND e.tenant_id = s.tenant_id AND e.person_id = s.person_id LEFT JOIN claim_evidence ce ON ce.evidence_id = e.id AND ce.tenant_id = e.tenant_id AND ce.person_id = e.person_id AND ce.relation = '\"supports\"' LEFT JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL AND c.tier IN ('short_term', 'long_term') AND c.processing_state = 'processed' WHERE s.id = ?1 AND s.tenant_id = ?2 AND s.person_id = ?3 AND s.deleted_at IS NULL AND e.deleted_at IS NULL ORDER BY c.id"
             }
             _ => {
                 return Err(Error::Invalid(
@@ -195,10 +196,10 @@ impl MemoryDb {
     ) -> Result<bool> {
         let sql = match target_kind {
             "source" => {
-                "SELECT EXISTS(SELECT 1 FROM claim_evidence ce JOIN evidence e ON e.id = ce.evidence_id AND e.tenant_id = ce.tenant_id AND e.person_id = ce.person_id WHERE ce.relation = '\"supports\"' AND e.source_id = ?1 AND e.tenant_id = ?2 AND e.person_id = ?3)"
+                "SELECT EXISTS(SELECT 1 FROM claim_evidence ce JOIN evidence e ON e.id = ce.evidence_id AND e.tenant_id = ce.tenant_id AND e.person_id = ce.person_id JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL AND c.tier IN ('short_term', 'long_term') AND c.processing_state = 'processed' WHERE ce.relation = '\"supports\"' AND e.source_id = ?1 AND e.tenant_id = ?2 AND e.person_id = ?3)"
             }
             "evidence" => {
-                "SELECT EXISTS(SELECT 1 FROM claim_evidence WHERE relation = '\"supports\"' AND evidence_id = ?1 AND tenant_id = ?2 AND person_id = ?3)"
+                "SELECT EXISTS(SELECT 1 FROM claim_evidence ce JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL AND c.tier IN ('short_term', 'long_term') AND c.processing_state = 'processed' WHERE ce.relation = '\"supports\"' AND ce.evidence_id = ?1 AND ce.tenant_id = ?2 AND ce.person_id = ?3)"
             }
             "claim" => return Ok(true),
             _ => {
@@ -230,7 +231,7 @@ impl MemoryDb {
                  JOIN claim_evidence ce ON ce.claim_id = c.id AND ce.tenant_id = c.tenant_id AND ce.person_id = c.person_id AND ce.relation = '\"supports\"'
                  JOIN evidence e ON e.id = ce.evidence_id AND e.tenant_id = ce.tenant_id AND e.person_id = ce.person_id
                  JOIN sources s ON s.id = e.source_id AND s.tenant_id = e.tenant_id AND s.person_id = e.person_id
-                 WHERE c.id = ?1 AND c.tenant_id = ?2 AND c.person_id = ?3 AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL AND e.deleted_at IS NULL AND s.deleted_at IS NULL
+                 WHERE c.id = ?1 AND c.tenant_id = ?2 AND c.person_id = ?3 AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL AND c.tier IN ('short_term', 'long_term') AND c.processing_state = 'processed' AND e.deleted_at IS NULL AND s.deleted_at IS NULL
                  ORDER BY ce.evidence_id LIMIT 1",
                     vec![&id.0, &tenant_id.0, &person_id.0],
                 ),
@@ -240,7 +241,7 @@ impl MemoryDb {
                  JOIN claim_evidence ce ON ce.claim_id = c.id AND ce.tenant_id = c.tenant_id AND ce.person_id = c.person_id AND ce.relation = '\"supports\"'
                  JOIN evidence e ON e.id = ce.evidence_id AND e.tenant_id = ce.tenant_id AND e.person_id = ce.person_id
                  JOIN sources s ON s.id = e.source_id AND s.tenant_id = e.tenant_id AND s.person_id = e.person_id
-                 WHERE c.id = ?1 AND c.tenant_id = ?2 AND c.person_id = ?3 AND c.status IN ('accepted', 'superseded') AND c.valid_from <= ?4 AND (c.valid_until IS NULL OR c.valid_until > ?4) AND c.recorded_from <= ?5 AND (c.recorded_until IS NULL OR c.recorded_until > ?5) AND e.deleted_at IS NULL AND e.recorded_at <= ?5 AND s.deleted_at IS NULL AND s.captured_at <= ?4 AND s.recorded_at <= ?5
+                 WHERE c.id = ?1 AND c.tenant_id = ?2 AND c.person_id = ?3 AND c.status IN ('accepted', 'superseded') AND c.valid_from <= ?4 AND (c.valid_until IS NULL OR c.valid_until > ?4) AND c.recorded_from <= ?5 AND (c.recorded_until IS NULL OR c.recorded_until > ?5) AND c.processing_state = 'processed' AND e.deleted_at IS NULL AND e.recorded_at <= ?5 AND s.deleted_at IS NULL AND s.captured_at <= ?4 AND s.recorded_at <= ?5
                  ORDER BY ce.evidence_id LIMIT 1",
                     vec![&id.0, &tenant_id.0, &person_id.0, &as_of.valid_at, &as_of.recorded_at],
                 ),
@@ -250,7 +251,7 @@ impl MemoryDb {
                 vec![&id.0, &tenant_id.0, &person_id.0],
             ),
             RetrievalTarget::Evidence(id) => (
-                "SELECT e.quote, e.id FROM evidence e JOIN sources s ON s.id = e.source_id AND s.tenant_id = e.tenant_id AND s.person_id = e.person_id WHERE e.id = ?1 AND e.tenant_id = ?2 AND e.person_id = ?3 AND e.deleted_at IS NULL AND s.deleted_at IS NULL",
+                "SELECT e.quote, e.id FROM evidence e JOIN sources s ON s.id = e.source_id AND s.tenant_id = e.tenant_id AND e.person_id = s.person_id WHERE e.id = ?1 AND e.tenant_id = ?2 AND e.person_id = ?3 AND e.deleted_at IS NULL AND s.deleted_at IS NULL",
                 vec![&id.0, &tenant_id.0, &person_id.0],
             ),
         };

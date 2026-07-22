@@ -96,7 +96,7 @@ pub(super) fn projection_input_from(
             &id.0,
             "subject || ' ' || predicate || ' ' || value",
             "recorded_from",
-            "status = 'accepted' AND valid_until IS NULL AND recorded_until IS NULL",
+            "status = 'accepted' AND valid_until IS NULL AND recorded_until IS NULL AND tier IN ('short_term', 'long_term') AND processing_state = 'processed'",
         ),
     };
     let (text, target_revision) = connection
@@ -459,7 +459,7 @@ impl MemoryDb {
             "SELECT target_kind, target_id FROM (
                 SELECT 'source' AS target_kind, id AS target_id FROM sources WHERE tenant_id = ?1 AND person_id = ?2 AND deleted_at IS NULL
                 UNION ALL SELECT 'evidence', e.id FROM evidence e JOIN sources s ON s.id = e.source_id AND s.tenant_id = e.tenant_id AND s.person_id = e.person_id WHERE e.tenant_id = ?1 AND e.person_id = ?2 AND e.deleted_at IS NULL AND s.deleted_at IS NULL
-                UNION ALL SELECT 'claim', c.id FROM claims c WHERE c.tenant_id = ?1 AND c.person_id = ?2 AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL
+                UNION ALL SELECT 'claim', c.id FROM claims c WHERE c.tenant_id = ?1 AND c.person_id = ?2 AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL AND c.tier IN ('short_term', 'long_term') AND c.processing_state = 'processed'
              ) ORDER BY target_kind, target_id",
         )?;
         let targets = statement

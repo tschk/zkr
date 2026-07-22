@@ -1,6 +1,7 @@
 use super::export::{
     append_commit, claim_evidence_record, claim_record, evidence_record, source_record,
 };
+use super::repair::{enqueue_projection_repair, record_operation};
 use super::*;
 
 impl MemoryDb {
@@ -249,6 +250,14 @@ impl MemoryDb {
             "UPDATE claims SET status = 'superseded', valid_until = ?1, recorded_until = ?2 WHERE id = ?3 AND tenant_id = ?4 AND person_id = ?5",
             params![input.valid_at, input.recorded_at, input.claim_id.0, input.tenant_id.0, input.person_id.0],
         )?;
+        enqueue_projection_repair(
+            &transaction,
+            &input.tenant_id,
+            &input.person_id,
+            EmbeddingTarget::Claim(input.claim_id.clone()),
+            "superseded_sync",
+            input.recorded_at,
+        )?;
         transaction.execute(
             "DELETE FROM profile_entries WHERE tenant_id = ?1 AND person_id = ?2 AND claim_id = ?3",
             params![input.tenant_id.0, input.person_id.0, input.claim_id.0],
@@ -264,6 +273,8 @@ impl MemoryDb {
                 value: input.value,
                 kind: claim_kind(&old.2)?,
                 valid_from: input.valid_at,
+                tier: MemoryTier::LongTerm,
+                processing_state: MemoryProcessingState::Processed,
             },
             input.recorded_at,
         )?;
@@ -437,10 +448,34 @@ impl MemoryDb {
                 changed_claim_ids.push(claim_id);
             }
         }
-        transaction.execute(
-            "DELETE FROM embeddings WHERE tenant_id = ?1 AND person_id = ?2 AND ((target_kind = 'source' AND target_id = ?3) OR (target_kind = 'evidence' AND target_id IN (SELECT id FROM evidence WHERE source_id = ?3 AND tenant_id = ?1 AND person_id = ?2)) OR (target_kind = 'claim' AND target_id IN (SELECT c.id FROM claims c JOIN claim_evidence ce ON ce.claim_id = c.id AND ce.tenant_id = c.tenant_id AND ce.person_id = c.person_id JOIN evidence e ON e.id = ce.evidence_id AND e.tenant_id = ce.tenant_id AND e.person_id = ce.person_id WHERE c.tenant_id = ?1 AND c.person_id = ?2 AND c.status = 'retracted' AND e.source_id = ?3)))",
-            params![input.tenant_id.0, input.person_id.0, input.source_id.0],
+        enqueue_projection_repair(
+            &transaction,
+            &input.tenant_id,
+            &input.person_id,
+            EmbeddingTarget::Source(input.source_id.clone()),
+            "delete_sync",
+            input.deleted_at,
         )?;
+        for evidence_id in &evidence_ids {
+            enqueue_projection_repair(
+                &transaction,
+                &input.tenant_id,
+                &input.person_id,
+                EmbeddingTarget::Evidence(evidence_id.clone()),
+                "delete_sync",
+                input.deleted_at,
+            )?;
+        }
+        for claim_id in &changed_claim_ids {
+            enqueue_projection_repair(
+                &transaction,
+                &input.tenant_id,
+                &input.person_id,
+                EmbeddingTarget::Claim(claim_id.clone()),
+                "delete_sync",
+                input.deleted_at,
+            )?;
+        }
         transaction.execute(
             "DELETE FROM profile_entries WHERE tenant_id = ?1 AND person_id = ?2 AND claim_id IN (SELECT id FROM claims WHERE tenant_id = ?1 AND person_id = ?2 AND status = 'retracted')",
             params![input.tenant_id.0, input.person_id.0],
@@ -520,6 +555,140 @@ impl MemoryDb {
             source_id: input.source_id,
             evidence_count,
             claim_count,
+        })
+    }
+
+    pub fn promote(&mut self, input: PromoteInput) -> Result<Promoted> {
+        require_scope(&input.tenant_id, &input.person_id)?;
+        let transaction = self.connection.transaction()?;
+        let current: (String, String, String, i64) = transaction.query_row(
+            "SELECT tier, processing_state, status, recorded_from FROM claims WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3",
+            params![input.claim_id.0, input.tenant_id.0, input.person_id.0],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )?;
+        if current.2 != "accepted" {
+            return Err(Error::Invalid(
+                "promotion requires an active claim".to_owned(),
+            ));
+        }
+        if current.1 != "processed" {
+            return Err(Error::Invalid(
+                "promotion requires processing_state=processed".to_owned(),
+            ));
+        }
+        if current.0 != "short_term" {
+            return Err(Error::Invalid(
+                "promotion requires tier=short_term".to_owned(),
+            ));
+        }
+        if input.recorded_at < current.3 {
+            return Err(Error::Invalid(
+                "promotion recorded_at must not predate claim".to_owned(),
+            ));
+        }
+        transaction.execute(
+            "UPDATE claims SET tier = 'long_term' WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3",
+            params![input.claim_id.0, input.tenant_id.0, input.person_id.0],
+        )?;
+        enqueue_projection_repair(
+            &transaction,
+            &input.tenant_id,
+            &input.person_id,
+            EmbeddingTarget::Claim(input.claim_id.clone()),
+            "tier_changed",
+            input.recorded_at,
+        )?;
+        let record = ExportRecord::Claim(claim_record(
+            &transaction,
+            &input.tenant_id,
+            &input.person_id,
+            &input.claim_id,
+        )?);
+        append_commit(
+            &transaction,
+            &input.tenant_id,
+            &input.person_id,
+            input.recorded_at,
+            [record],
+        )?;
+        record_operation(
+            &transaction,
+            &input.tenant_id,
+            &input.person_id,
+            "promote",
+            "success",
+            Some(EmbeddingTarget::Claim(input.claim_id.clone())),
+            input.recorded_at,
+        )?;
+        transaction.commit()?;
+        Ok(Promoted {
+            claim_id: input.claim_id,
+        })
+    }
+
+    pub fn archive(&mut self, input: ArchiveInput) -> Result<Archived> {
+        require_scope(&input.tenant_id, &input.person_id)?;
+        let transaction = self.connection.transaction()?;
+        let current: (String, String, String, i64) = transaction.query_row(
+            "SELECT tier, processing_state, status, recorded_from FROM claims WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3",
+            params![input.claim_id.0, input.tenant_id.0, input.person_id.0],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )?;
+        if current.0 == "archive" {
+            return Ok(Archived {
+                claim_id: input.claim_id,
+            });
+        }
+        if current.2 == "superseded" {
+            return Err(Error::Invalid("archive cannot be superseded".to_owned()));
+        }
+        if current.1 != "processed" {
+            return Err(Error::Invalid(
+                "archive requires processing_state=processed".to_owned(),
+            ));
+        }
+        if input.recorded_at < current.3 {
+            return Err(Error::Invalid(
+                "archive recorded_at must not predate claim".to_owned(),
+            ));
+        }
+        transaction.execute(
+            "UPDATE claims SET tier = 'archive' WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3",
+            params![input.claim_id.0, input.tenant_id.0, input.person_id.0],
+        )?;
+        enqueue_projection_repair(
+            &transaction,
+            &input.tenant_id,
+            &input.person_id,
+            EmbeddingTarget::Claim(input.claim_id.clone()),
+            "tier_changed",
+            input.recorded_at,
+        )?;
+        let record = ExportRecord::Claim(claim_record(
+            &transaction,
+            &input.tenant_id,
+            &input.person_id,
+            &input.claim_id,
+        )?);
+        append_commit(
+            &transaction,
+            &input.tenant_id,
+            &input.person_id,
+            input.recorded_at,
+            [record],
+        )?;
+        record_operation(
+            &transaction,
+            &input.tenant_id,
+            &input.person_id,
+            "archive",
+            "success",
+            Some(EmbeddingTarget::Claim(input.claim_id.clone())),
+            input.recorded_at,
+        )?;
+        transaction.commit()?;
+        Ok(Archived {
+            claim_id: input.claim_id,
         })
     }
 
@@ -788,10 +957,12 @@ fn insert_claim(
     require_text("claim subject", &claim.subject)?;
     require_text("claim predicate", &claim.predicate)?;
     require_text("claim value", &claim.value)?;
+    assert_legal_state(&claim.tier, &ClaimStatus::Accepted, &claim.processing_state)
+        .map_err(|error| Error::Invalid(error.to_string()))?;
     let id = ClaimId(new_id(transaction)?);
     transaction.execute(
-        "INSERT INTO claims(id, tenant_id, person_id, subject, predicate, value, kind, valid_from, recorded_from, status) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'accepted')",
-        params![id.0, tenant_id.0, person_id.0, claim.subject, claim.predicate, claim.value, claim_kind_name(&claim.kind), claim.valid_from, recorded_at],
+        "INSERT INTO claims(id, tenant_id, person_id, subject, predicate, value, kind, valid_from, recorded_from, status, tier, processing_state) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'accepted', ?10, ?11)",
+        params![id.0, tenant_id.0, person_id.0, claim.subject, claim.predicate, claim.value, claim_kind_name(&claim.kind), claim.valid_from, recorded_at, tier_name(&claim.tier), processing_state_name(&claim.processing_state)],
     )?;
     let relation = serde_json::to_string(&EvidenceRelation::Supports)?;
     transaction.execute(
@@ -809,6 +980,22 @@ fn claim_kind_name(kind: &ClaimKind) -> &'static str {
         ClaimKind::Task => "task",
         ClaimKind::Skill => "skill",
         ClaimKind::Recommendation => "recommendation",
+    }
+}
+
+fn tier_name(tier: &MemoryTier) -> &'static str {
+    match tier {
+        MemoryTier::ShortTerm => "short_term",
+        MemoryTier::LongTerm => "long_term",
+        MemoryTier::Archive => "archive",
+    }
+}
+
+fn processing_state_name(state: &MemoryProcessingState) -> &'static str {
+    match state {
+        MemoryProcessingState::Pending => "pending",
+        MemoryProcessingState::Processed => "processed",
+        MemoryProcessingState::Blocked => "blocked",
     }
 }
 
