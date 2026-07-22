@@ -5,7 +5,7 @@ use super::export::{
 use super::*;
 use rusqlite::{Transaction, TransactionBehavior};
 
-pub(super) const SCHEMA_VERSION: i64 = 8;
+pub(super) const SCHEMA_VERSION: i64 = 9;
 pub(super) const CLAIM_TIME_INTERVAL_ERROR: &str = "invalid claim half-open time interval";
 
 pub(super) fn migrate(connection: &mut Connection) -> Result<()> {
@@ -45,6 +45,9 @@ pub(super) fn migrate(connection: &mut Connection) -> Result<()> {
     if version < 8 {
         migrate_v8(&transaction)?;
     }
+    if version < 9 {
+        migrate_v9(&transaction)?;
+    }
     set_version(&transaction, SCHEMA_VERSION)?;
     transaction.commit()?;
     Ok(())
@@ -72,6 +75,18 @@ fn migrate_v1(transaction: &Transaction<'_>) -> Result<()> {
 
 fn repair_v1_shape(transaction: &Transaction<'_>) -> Result<()> {
     ensure_column(transaction, "sources", "ingestion_key", "TEXT")?;
+    ensure_column(
+        transaction,
+        "claims",
+        "tier",
+        "TEXT NOT NULL DEFAULT 'long_term'",
+    )?;
+    ensure_column(
+        transaction,
+        "claims",
+        "processing_state",
+        "TEXT NOT NULL DEFAULT 'processed'",
+    )?;
     ensure_column(
         transaction,
         "embeddings",
@@ -219,6 +234,30 @@ fn migrate_v8(transaction: &Transaction<'_>) -> Result<()> {
         )?;
         bootstrap_export_events(transaction)?;
     }
+    Ok(())
+}
+
+fn migrate_v9(transaction: &Transaction<'_>) -> Result<()> {
+    ensure_column(
+        transaction,
+        "claims",
+        "tier",
+        "TEXT NOT NULL DEFAULT 'long_term'",
+    )?;
+    ensure_column(
+        transaction,
+        "claims",
+        "processing_state",
+        "TEXT NOT NULL DEFAULT 'processed'",
+    )?;
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS memory_repair_outbox(id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, target_kind TEXT NOT NULL, target_id TEXT NOT NULL, reason TEXT NOT NULL, created_at INTEGER NOT NULL, processed_at INTEGER);
+         CREATE INDEX IF NOT EXISTS memory_repair_outbox_scope ON memory_repair_outbox(tenant_id, person_id, processed_at, created_at);
+         CREATE TABLE IF NOT EXISTS memory_operations(id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, operation_type TEXT NOT NULL, status TEXT NOT NULL, target_kind TEXT, target_id TEXT, recorded_at INTEGER NOT NULL);
+         CREATE INDEX IF NOT EXISTS memory_operations_scope ON memory_operations(tenant_id, person_id, recorded_at);
+         CREATE TRIGGER IF NOT EXISTS claim_legal_state_insert BEFORE INSERT ON claims FOR EACH ROW WHEN ((NEW.tier = 'archive' AND NEW.status = 'superseded') OR ((NEW.tier = 'long_term' OR NEW.tier = 'archive') AND NEW.processing_state <> 'processed')) BEGIN SELECT RAISE(ABORT, 'illegal memory state combination'); END;
+         CREATE TRIGGER IF NOT EXISTS claim_legal_state_update BEFORE UPDATE OF tier, processing_state, status ON claims FOR EACH ROW WHEN ((NEW.tier = 'archive' AND NEW.status = 'superseded') OR ((NEW.tier = 'long_term' OR NEW.tier = 'archive') AND NEW.processing_state <> 'processed')) BEGIN SELECT RAISE(ABORT, 'illegal memory state combination'); END;",
+    )?;
     Ok(())
 }
 

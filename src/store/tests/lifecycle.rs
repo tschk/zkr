@@ -78,6 +78,8 @@ fn ingestion_key_rejects_changed_payload() {
         value: "focused".into(),
         kind: ClaimKind::Fact,
         valid_from: 10,
+        tier: MemoryTier::LongTerm,
+        processing_state: MemoryProcessingState::Processed,
     });
     for mut changed in [changed_text, changed_kind, changed_time, changed_claim] {
         changed.ingestion_key = Some("turn-1".into());
@@ -92,6 +94,8 @@ fn ingestion_key_rejects_changed_payload() {
             value: value.into(),
             kind: ClaimKind::Fact,
             valid_from: 10,
+            tier: MemoryTier::LongTerm,
+            processing_state: MemoryProcessingState::Processed,
         });
         input
     };

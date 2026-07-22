@@ -93,6 +93,10 @@ pub struct Claim {
     pub valid_time: TimeRange,
     pub recorded_time: TimeRange,
     pub status: ClaimStatus,
+    #[serde(default)]
+    pub tier: MemoryTier,
+    #[serde(default)]
+    pub processing_state: MemoryProcessingState,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -112,6 +116,24 @@ pub enum ClaimStatus {
     Accepted,
     Superseded,
     Retracted,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryTier {
+    ShortTerm,
+    #[default]
+    LongTerm,
+    Archive,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryProcessingState {
+    Pending,
+    #[default]
+    Processed,
+    Blocked,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -211,6 +233,48 @@ pub enum ValidationError {
     EmptyText(&'static str),
     #[error("confidence {0} must be at most 10000 basis points")]
     InvalidConfidence(u16),
+    #[error("illegal memory state combination: tier={0}, status={1}, processing_state={2}")]
+    IllegalMemoryState(String, String, String),
+}
+
+pub fn is_legal_state_combination(
+    tier: &MemoryTier,
+    status: &ClaimStatus,
+    processing_state: &MemoryProcessingState,
+) -> bool {
+    if *tier == MemoryTier::Archive && *status == ClaimStatus::Superseded {
+        return false;
+    }
+    if (*tier == MemoryTier::LongTerm || *tier == MemoryTier::Archive)
+        && *processing_state != MemoryProcessingState::Processed
+    {
+        return false;
+    }
+    true
+}
+
+pub fn assert_legal_state(
+    tier: &MemoryTier,
+    status: &ClaimStatus,
+    processing_state: &MemoryProcessingState,
+) -> Result<(), ValidationError> {
+    if is_legal_state_combination(tier, status, processing_state) {
+        return Ok(());
+    }
+    Err(ValidationError::IllegalMemoryState(
+        serde_json::to_string(tier)
+            .unwrap_or_default()
+            .trim_matches('"')
+            .to_owned(),
+        serde_json::to_string(status)
+            .unwrap_or_default()
+            .trim_matches('"')
+            .to_owned(),
+        serde_json::to_string(processing_state)
+            .unwrap_or_default()
+            .trim_matches('"')
+            .to_owned(),
+    ))
 }
 
 fn validate_text(field: &'static str, value: &str) -> Result<(), ValidationError> {

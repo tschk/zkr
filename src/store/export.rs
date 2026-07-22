@@ -151,11 +151,13 @@ pub(super) fn claim_record(
     claim_id: &ClaimId,
 ) -> Result<Claim> {
     transaction.query_row(
-        "SELECT subject, predicate, value, kind, valid_from, valid_until, recorded_from, recorded_until, status FROM claims WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3",
+        "SELECT subject, predicate, value, kind, valid_from, valid_until, recorded_from, recorded_until, status, tier, processing_state FROM claims WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3",
         params![claim_id.0, tenant_id.0, person_id.0],
         |row| {
             let kind: String = row.get(3)?;
             let status: String = row.get(8)?;
+            let tier: String = row.get(9)?;
+            let processing_state: String = row.get(10)?;
             Ok(Claim {
                 id: claim_id.clone(),
                 tenant_id: tenant_id.clone(),
@@ -168,6 +170,10 @@ pub(super) fn claim_record(
                 valid_time: crate::TimeRange { from: row.get(4)?, until: row.get(5)? },
                 recorded_time: crate::TimeRange { from: row.get(6)?, until: row.get(7)? },
                 status: serde_json::from_str(&format!("\"{status}\""))
+                    .map_err(sql_json_error)?,
+                tier: serde_json::from_str(&format!("\"{tier}\""))
+                    .map_err(sql_json_error)?,
+                processing_state: serde_json::from_str(&format!("\"{processing_state}\""))
                     .map_err(sql_json_error)?,
             })
         },

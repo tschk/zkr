@@ -1,7 +1,8 @@
 use crate::{
-    Claim, ClaimEvidence, ClaimId, ClaimKind, DailyReview, DailyReviewId, Evidence, EvidenceId,
-    EvidenceRelation, MemoryRef, PersonId, ProfileEntry, ProfileEntryId, ProfileStability,
-    RetrievalItem, RetrievalPack, Source, SourceId, SourceKind, TenantId, Timestamp,
+    Claim, ClaimEvidence, ClaimId, ClaimKind, ClaimStatus, DailyReview, DailyReviewId, Evidence,
+    EvidenceId, EvidenceRelation, MemoryProcessingState, MemoryRef, MemoryTier, PersonId,
+    ProfileEntry, ProfileEntryId, ProfileStability, RetrievalItem, RetrievalPack, Source, SourceId,
+    SourceKind, TenantId, Timestamp, assert_legal_state,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
@@ -10,6 +11,7 @@ use std::path::Path;
 mod embeddings;
 mod export;
 mod lifecycle;
+mod repair;
 mod retrieval;
 mod schema;
 
@@ -166,6 +168,10 @@ pub struct ClaimInput {
     pub value: String,
     pub kind: ClaimKind,
     pub valid_from: Timestamp,
+    #[serde(default)]
+    pub tier: MemoryTier,
+    #[serde(default)]
+    pub processing_state: MemoryProcessingState,
 }
 
 #[derive(Debug, Serialize)]
@@ -258,6 +264,45 @@ pub struct Deleted {
     pub source_id: SourceId,
     pub evidence_count: u64,
     pub claim_count: u64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PromoteInput {
+    pub tenant_id: TenantId,
+    pub person_id: PersonId,
+    pub claim_id: ClaimId,
+    pub recorded_at: Timestamp,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Promoted {
+    pub claim_id: ClaimId,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ArchiveInput {
+    pub tenant_id: TenantId,
+    pub person_id: PersonId,
+    pub claim_id: ClaimId,
+    pub recorded_at: Timestamp,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Archived {
+    pub claim_id: ClaimId,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RepairInput {
+    pub tenant_id: TenantId,
+    pub person_id: PersonId,
+    #[serde(default = "default_limit")]
+    pub limit: u32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RepairResult {
+    pub processed: u32,
 }
 
 #[derive(Debug, Deserialize)]

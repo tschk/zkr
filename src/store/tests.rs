@@ -16,6 +16,8 @@ fn remember(tenant: &str, person: &str, value: &str) -> RememberInput {
             value: value.into(),
             kind: ClaimKind::Fact,
             valid_from: 10,
+            tier: MemoryTier::LongTerm,
+            processing_state: MemoryProcessingState::Processed,
         }),
     }
 }
