@@ -74,6 +74,7 @@ fn claim_with_older_last_support() -> (MemoryDb, SourceId, ClaimId) {
     (db, older.source_id, claim_id)
 }
 
+mod apply;
 mod embeddings;
 mod export;
 mod lifecycle;

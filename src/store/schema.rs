@@ -5,7 +5,7 @@ use super::export::{
 use super::*;
 use rusqlite::{Transaction, TransactionBehavior};
 
-pub(super) const SCHEMA_VERSION: i64 = 9;
+pub(super) const SCHEMA_VERSION: i64 = 10;
 pub(super) const CLAIM_TIME_INTERVAL_ERROR: &str = "invalid claim half-open time interval";
 
 pub(super) fn migrate(connection: &mut Connection) -> Result<()> {
@@ -47,6 +47,9 @@ pub(super) fn migrate(connection: &mut Connection) -> Result<()> {
     }
     if version < 9 {
         migrate_v9(&transaction)?;
+    }
+    if version < 10 {
+        migrate_v10(&transaction)?;
     }
     set_version(&transaction, SCHEMA_VERSION)?;
     transaction.commit()?;
@@ -257,6 +260,14 @@ fn migrate_v9(transaction: &Transaction<'_>) -> Result<()> {
          CREATE INDEX IF NOT EXISTS memory_operations_scope ON memory_operations(tenant_id, person_id, recorded_at);
          CREATE TRIGGER IF NOT EXISTS claim_legal_state_insert BEFORE INSERT ON claims FOR EACH ROW WHEN ((NEW.tier = 'archive' AND NEW.status = 'superseded') OR ((NEW.tier = 'long_term' OR NEW.tier = 'archive') AND NEW.processing_state <> 'processed')) BEGIN SELECT RAISE(ABORT, 'illegal memory state combination'); END;
          CREATE TRIGGER IF NOT EXISTS claim_legal_state_update BEFORE UPDATE OF tier, processing_state, status ON claims FOR EACH ROW WHEN ((NEW.tier = 'archive' AND NEW.status = 'superseded') OR ((NEW.tier = 'long_term' OR NEW.tier = 'archive') AND NEW.processing_state <> 'processed')) BEGIN SELECT RAISE(ABORT, 'illegal memory state combination'); END;",
+    )?;
+    Ok(())
+}
+
+fn migrate_v10(transaction: &Transaction<'_>) -> Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS memory_applied_records(tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, record_kind TEXT NOT NULL, record_id TEXT NOT NULL, payload_hash TEXT NOT NULL, applied_at INTEGER NOT NULL, PRIMARY KEY(tenant_id, person_id, record_kind, record_id, payload_hash));
+         CREATE INDEX IF NOT EXISTS memory_applied_records_scope ON memory_applied_records(tenant_id, person_id, record_kind, record_id);",
     )?;
     Ok(())
 }

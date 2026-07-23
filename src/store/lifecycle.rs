@@ -972,7 +972,7 @@ fn insert_claim(
     Ok(id)
 }
 
-fn claim_kind_name(kind: &ClaimKind) -> &'static str {
+pub(super) fn claim_kind_name(kind: &ClaimKind) -> &'static str {
     match kind {
         ClaimKind::Fact => "fact",
         ClaimKind::ProfileFact => "profile_fact",
@@ -983,7 +983,15 @@ fn claim_kind_name(kind: &ClaimKind) -> &'static str {
     }
 }
 
-fn tier_name(tier: &MemoryTier) -> &'static str {
+pub(super) fn claim_status_name(status: &ClaimStatus) -> &'static str {
+    match status {
+        ClaimStatus::Accepted => "accepted",
+        ClaimStatus::Superseded => "superseded",
+        ClaimStatus::Retracted => "retracted",
+    }
+}
+
+pub(super) fn tier_name(tier: &MemoryTier) -> &'static str {
     match tier {
         MemoryTier::ShortTerm => "short_term",
         MemoryTier::LongTerm => "long_term",
@@ -991,7 +999,7 @@ fn tier_name(tier: &MemoryTier) -> &'static str {
     }
 }
 
-fn processing_state_name(state: &MemoryProcessingState) -> &'static str {
+pub(super) fn processing_state_name(state: &MemoryProcessingState) -> &'static str {
     match state {
         MemoryProcessingState::Pending => "pending",
         MemoryProcessingState::Processed => "processed",
@@ -1011,7 +1019,7 @@ fn claim_kind(value: &str) -> Result<ClaimKind> {
     }
 }
 
-fn validate_transcript_locator(locator: &TranscriptLocator) -> Result<()> {
+pub(super) fn validate_transcript_locator(locator: &TranscriptLocator) -> Result<()> {
     for (field, value) in [
         ("locator.device_id", locator.device_id.as_str()),
         ("locator.provider", locator.provider.as_str()),

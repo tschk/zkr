@@ -50,7 +50,7 @@ pub(super) fn append_records(
     Ok(())
 }
 
-fn validate_record_scope(
+pub(super) fn validate_record_scope(
     record: &ExportRecord,
     tenant_id: &TenantId,
     person_id: &PersonId,

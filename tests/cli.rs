@@ -482,3 +482,81 @@ fn json_cli_split_correction_requires_a_complete_commit_before_cursor_advance() 
     );
     std::fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn json_cli_applies_an_exported_page_into_an_empty_replica() {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let origin_path = std::env::temp_dir().join(format!("zkr-apply-origin-{nonce}.db"));
+    let replica_path = std::env::temp_dir().join(format!("zkr-apply-replica-{nonce}.db"));
+    let origin = origin_path.to_str().unwrap();
+    let replica = replica_path.to_str().unwrap();
+    run(
+        origin,
+        "remember",
+        json!({
+            "tenant_id": "tenant",
+            "person_id": "person",
+            "kind": "conversation",
+            "text": "Sam works at Acme",
+            "captured_at": 10,
+            "recorded_at": 10,
+            "claim": {
+                "subject": "Sam",
+                "predicate": "employer",
+                "value": "Acme",
+                "kind": "fact",
+                "valid_from": 10
+            }
+        }),
+    );
+    let page = run(
+        origin,
+        "export",
+        json!({
+            "export_format": 1,
+            "tenant_id": "tenant",
+            "person_id": "person",
+            "after_commit": 0,
+            "limit": 100
+        }),
+    );
+    assert_eq!(page["complete"], true);
+    let request = json!({
+        "export_format": 1,
+        "database_schema_version": page["database_schema_version"],
+        "tenant_id": "tenant",
+        "person_id": "person",
+        "commits": page["commits"]
+    });
+    let applied = run(replica, "apply", request.clone());
+    assert_eq!(applied["commits_applied"], 1);
+    assert_eq!(applied["records_applied"], 4);
+    let replayed = run(replica, "apply", request);
+    assert_eq!(replayed["records_applied"], 0);
+    assert_eq!(replayed["records_skipped"], 4);
+    assert_eq!(
+        run(
+            replica,
+            "export",
+            json!({
+                "export_format": 1,
+                "tenant_id": "tenant",
+                "person_id": "person",
+                "after_commit": 0,
+                "limit": 100
+            }),
+        )["commits"],
+        page["commits"]
+    );
+    let pack = run(
+        replica,
+        "search",
+        json!({ "tenant_id": "tenant", "person_id": "person", "query": "Acme", "limit": 5 }),
+    );
+    assert!(!pack["items"].as_array().unwrap().is_empty());
+    std::fs::remove_file(origin_path).unwrap();
+    std::fs::remove_file(replica_path).unwrap();
+}

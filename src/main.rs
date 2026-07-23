@@ -2,14 +2,15 @@ use serde::de::DeserializeOwned;
 use serde_json::json;
 use std::{env, io::Read, process::ExitCode};
 use zkr::{
-    ArchiveInput, ClaimEvidence, CorrectInput, DeleteInput, EmbeddingInput, EvidenceLocatorInput,
-    ExportInput, GetInput, MemoryDb, ProfileInput, ProfilesInput, ProjectionAuditInput,
-    PromoteInput, RememberRequest, RepairInput, ReviewInput, ReviewsInput, SearchInput,
+    ApplyInput, ArchiveInput, ClaimEvidence, CorrectInput, DeleteInput, EmbeddingInput,
+    EvidenceLocatorInput, ExportInput, GetInput, MemoryDb, ProfileInput, ProfilesInput,
+    ProjectionAuditInput, PromoteInput, RememberRequest, RepairInput, ReviewInput, ReviewsInput,
+    SearchInput,
 };
 
 const MAX_REQUEST_BYTES: u64 = 1024 * 1024;
 
-const HELP: &str = "zkr --db PATH COMMAND\n\nCommands (read one JSON object from stdin; write JSON to stdout):\n  remember     Store source evidence and an optional typed claim or transcript locator\n  locator      Read a live evidence transcript locator\n  search       Retrieve bounded, cited memory matches\n  get          Read one live cited memory by target\n  correct      Supersede a claim using new correction evidence\n  promote      Promote a short-term processed claim to long-term\n  archive      Move a processed claim to archive tier\n  link         Attach supporting or contradicting evidence to a claim\n  delete       Tombstone a source and propagate unavailable evidence\n  repair       Process bounded projection-repair outbox records\n  profile      Project a live profile-fact claim into the current profile\n  profiles     Retrieve bounded live profile entries\n  review       Store a cited daily review without invoking an LLM\n  reviews      Retrieve bounded daily reviews\n  projections  List bounded stale or missing embedding inputs\n  embed        Upsert a rebuildable embedding projection\n  export       Read a bounded page from the scoped authoritative commit feed\n  help         Show this help\n";
+const HELP: &str = "zkr --db PATH COMMAND\n\nCommands (read one JSON object from stdin; write JSON to stdout):\n  remember     Store source evidence and an optional typed claim or transcript locator\n  locator      Read a live evidence transcript locator\n  search       Retrieve bounded, cited memory matches\n  get          Read one live cited memory by target\n  correct      Supersede a claim using new correction evidence\n  promote      Promote a short-term processed claim to long-term\n  archive      Move a processed claim to archive tier\n  link         Attach supporting or contradicting evidence to a claim\n  delete       Tombstone a source and propagate unavailable evidence\n  repair       Process bounded projection-repair outbox records\n  profile      Project a live profile-fact claim into the current profile\n  profiles     Retrieve bounded live profile entries\n  review       Store a cited daily review without invoking an LLM\n  reviews      Retrieve bounded daily reviews\n  projections  List bounded stale or missing embedding inputs\n  embed        Upsert a rebuildable embedding projection\n  export       Read a bounded page from the scoped authoritative commit feed\n  apply        Materialize complete authoritative commits authored elsewhere\n  help         Show this help\n";
 
 fn main() -> ExitCode {
     match run() {
@@ -76,6 +77,7 @@ fn run() -> Result<Option<serde_json::Value>, Box<dyn std::error::Error>> {
             serde_json::to_value(database.upsert_embedding(read_json::<EmbeddingInput>()?)?)?
         }
         "export" => serde_json::to_value(database.export(read_json::<ExportInput>()?)?)?,
+        "apply" => serde_json::to_value(database.apply(read_json::<ApplyInput>()?)?)?,
         command => return Err(format!("unknown command {command:?}").into()),
     };
     Ok(Some(value))

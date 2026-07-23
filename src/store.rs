@@ -8,6 +8,7 @@ use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+mod apply;
 mod embeddings;
 mod export;
 mod lifecycle;
@@ -383,6 +384,25 @@ pub enum ExportRecord {
     Deletion(DeletionRecord),
     Profile(ProfileEntry),
     DailyReview(DailyReview),
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ApplyInput {
+    pub export_format: u32,
+    #[serde(default)]
+    pub database_schema_version: Option<i64>,
+    pub tenant_id: TenantId,
+    pub person_id: PersonId,
+    #[serde(default)]
+    pub commits: Vec<ExportCommit>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Applied {
+    pub commits_applied: u64,
+    pub commits_skipped: u64,
+    pub records_applied: u64,
+    pub records_skipped: u64,
 }
 
 #[derive(Debug, Deserialize)]
