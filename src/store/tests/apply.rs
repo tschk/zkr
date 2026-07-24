@@ -433,6 +433,7 @@ fn applied_records_stay_searchable_and_repairable() {
             limit: 5,
             query_embedding: None,
             as_of: None,
+            enabled_features: Vec::new(),
         })
         .unwrap();
     assert!(!pack.items.is_empty());

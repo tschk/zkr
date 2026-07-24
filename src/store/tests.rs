@@ -19,6 +19,7 @@ fn remember(tenant: &str, person: &str, value: &str) -> RememberInput {
             tier: MemoryTier::LongTerm,
             processing_state: MemoryProcessingState::Processed,
         }),
+        feature_flag: None,
     }
 }
 
@@ -32,6 +33,7 @@ fn remember_raw(tenant: &str, person: &str, text: &str) -> RememberInput {
         captured_at: 10,
         recorded_at: 10,
         claim: None,
+        feature_flag: None,
     }
 }
 

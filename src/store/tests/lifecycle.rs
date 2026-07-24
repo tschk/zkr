@@ -151,6 +151,7 @@ fn lifecycle_is_scoped_cited_and_propagates_deletion() {
             limit: 5,
             query_embedding: None,
             as_of: None,
+            enabled_features: Vec::new(),
         })
         .unwrap();
     assert_eq!(found.items.len(), 1);
@@ -183,6 +184,7 @@ fn lifecycle_is_scoped_cited_and_propagates_deletion() {
             limit: 5,
             query_embedding: None,
             as_of: None,
+            enabled_features: Vec::new(),
         })
         .unwrap()
         .items
@@ -199,6 +201,7 @@ fn lifecycle_is_scoped_cited_and_propagates_deletion() {
                 valid_at: 4,
                 recorded_at: 15,
             }),
+            enabled_features: Vec::new(),
         })
         .unwrap()
         .items[0]
@@ -222,6 +225,7 @@ fn lifecycle_is_scoped_cited_and_propagates_deletion() {
             limit: 5,
             query_embedding: None,
             as_of: None,
+            enabled_features: Vec::new(),
         })
         .unwrap()
         .items

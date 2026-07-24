@@ -135,6 +135,8 @@ pub struct RememberInput {
     pub captured_at: Timestamp,
     pub recorded_at: Timestamp,
     pub claim: Option<ClaimInput>,
+    #[serde(default)]
+    pub feature_flag: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -193,6 +195,8 @@ pub struct SearchInput {
     pub query_embedding: Option<DenseQuery>,
     #[serde(default)]
     pub as_of: Option<TemporalQuery>,
+    #[serde(default)]
+    pub enabled_features: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

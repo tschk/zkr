@@ -131,6 +131,7 @@ fn embedding_lanes_reject_mixed_configuration_and_surface_corruption() {
                 version: "1".into(),
             }),
             as_of: None,
+            enabled_features: Vec::new(),
         })
         .is_ok()
     );
@@ -282,6 +283,7 @@ fn search_fuses_lexical_and_real_dense_ranks_deterministically() {
                 version: "1".into(),
             }),
             as_of: None,
+            enabled_features: Vec::new(),
         })
         .unwrap();
 
@@ -356,6 +358,7 @@ fn stale_projections_are_excluded_and_reported_with_current_inputs() {
                 version: "1".into(),
             }),
             as_of: None,
+            enabled_features: Vec::new(),
         })
         .unwrap();
     assert!(found.items.is_empty());

@@ -80,7 +80,7 @@ pub(super) fn source_record(
     source_id: &SourceId,
 ) -> Result<SourceRecord> {
     transaction.query_row(
-        "SELECT revision, kind, content, captured_at, recorded_at, deleted_at, ingestion_key, origin_evidence_id, origin_claim_id FROM sources WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3",
+        "SELECT revision, kind, content, captured_at, recorded_at, deleted_at, ingestion_key, origin_evidence_id, origin_claim_id, feature_flag FROM sources WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3",
         params![source_id.0, tenant_id.0, person_id.0],
         |row| {
             let kind: String = row.get(1)?;
@@ -95,6 +95,7 @@ pub(super) fn source_record(
                     captured_at: row.get(3)?,
                     recorded_at: row.get(4)?,
                     deleted_at: row.get(5)?,
+                    feature_flag: row.get(9)?,
                 },
                 ingestion_key: row.get(6)?,
                 origin_evidence_id: row.get::<_, Option<String>>(7)?.map(EvidenceId),

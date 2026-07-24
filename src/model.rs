@@ -50,6 +50,8 @@ pub struct Source {
     pub captured_at: Timestamp,
     pub recorded_at: Timestamp,
     pub deleted_at: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature_flag: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

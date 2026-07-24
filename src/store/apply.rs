@@ -179,7 +179,7 @@ fn apply_source(
     let kind = serde_json::to_string(&source.kind)?;
     let stored = transaction
         .query_row(
-            "SELECT ingestion_key, revision, kind, content, captured_at, recorded_at, deleted_at FROM sources WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3",
+            "SELECT ingestion_key, revision, kind, content, captured_at, recorded_at, deleted_at, feature_flag FROM sources WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3",
             params![source.id.0, source.tenant_id.0, source.person_id.0],
             |row| {
                 Ok((
@@ -190,14 +190,15 @@ fn apply_source(
                     row.get::<_, Timestamp>(4)?,
                     row.get::<_, Timestamp>(5)?,
                     row.get::<_, Option<Timestamp>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
                 ))
             },
         )
         .optional()?;
     let Some(stored) = stored else {
         transaction.execute(
-            "INSERT INTO sources(id, tenant_id, person_id, ingestion_key, revision, kind, content, captured_at, recorded_at, deleted_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-            params![source.id.0, source.tenant_id.0, source.person_id.0, record.ingestion_key, source.revision, kind, source.content, source.captured_at, source.recorded_at, source.deleted_at],
+            "INSERT INTO sources(id, tenant_id, person_id, ingestion_key, revision, kind, content, captured_at, recorded_at, deleted_at, feature_flag) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![source.id.0, source.tenant_id.0, source.person_id.0, record.ingestion_key, source.revision, kind, source.content, source.captured_at, source.recorded_at, source.deleted_at, source.feature_flag],
         )?;
         if source.deleted_at.is_none() {
             transaction.execute(
@@ -212,6 +213,7 @@ fn apply_source(
         || stored.3 != source.content
         || stored.4 != source.captured_at
         || stored.5 != source.recorded_at
+        || stored.7 != source.feature_flag
     {
         return Err(Error::Invalid(format!(
             "applied source {} conflicts with the stored source payload",
@@ -234,8 +236,8 @@ fn apply_source(
         )));
     }
     transaction.execute(
-        "UPDATE sources SET revision = ?1, deleted_at = ?2 WHERE id = ?3 AND tenant_id = ?4 AND person_id = ?5",
-        params![source.revision, source.deleted_at, source.id.0, source.tenant_id.0, source.person_id.0],
+        "UPDATE sources SET revision = ?1, deleted_at = ?2, feature_flag = ?3 WHERE id = ?4 AND tenant_id = ?5 AND person_id = ?6",
+        params![source.revision, source.deleted_at, source.feature_flag, source.id.0, source.tenant_id.0, source.person_id.0],
     )?;
     if stored.6.is_none() && source.deleted_at.is_some() {
         remove_source_index(transaction, source, applied_at)?;

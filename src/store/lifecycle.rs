@@ -27,12 +27,12 @@ impl MemoryDb {
         let evidence_id = EvidenceId(new_id(&transaction)?);
         let kind = serde_json::to_string(&input.kind)?;
         let inserted = transaction.execute(
-            "INSERT OR IGNORE INTO sources(id, tenant_id, person_id, ingestion_key, revision, kind, content, captured_at, recorded_at) VALUES(?1, ?2, ?3, ?4, 1, ?5, ?6, ?7, ?8)",
-            params![source_id.0, input.tenant_id.0, input.person_id.0, input.ingestion_key, kind, input.text, input.captured_at, input.recorded_at],
+            "INSERT OR IGNORE INTO sources(id, tenant_id, person_id, ingestion_key, revision, kind, content, captured_at, recorded_at, feature_flag) VALUES(?1, ?2, ?3, ?4, 1, ?5, ?6, ?7, ?8, ?9)",
+            params![source_id.0, input.tenant_id.0, input.person_id.0, input.ingestion_key, kind, input.text, input.captured_at, input.recorded_at, input.feature_flag],
         )?;
         if inserted == 0 {
             let replay = transaction.query_row(
-                "SELECT s.id, e.id, c.id, s.kind, s.content, s.captured_at, s.recorded_at, s.deleted_at, e.deleted_at, c.subject, c.predicate, c.value, c.valid_from, c.kind FROM sources s JOIN evidence e ON e.id = s.origin_evidence_id AND e.tenant_id = s.tenant_id AND e.person_id = s.person_id LEFT JOIN claims c ON c.id = s.origin_claim_id AND c.tenant_id = s.tenant_id AND c.person_id = s.person_id WHERE s.tenant_id = ?1 AND s.person_id = ?2 AND s.ingestion_key = ?3",
+                "SELECT s.id, e.id, c.id, s.kind, s.content, s.captured_at, s.recorded_at, s.deleted_at, e.deleted_at, c.subject, c.predicate, c.value, c.valid_from, c.kind, s.feature_flag FROM sources s JOIN evidence e ON e.id = s.origin_evidence_id AND e.tenant_id = s.tenant_id AND e.person_id = s.person_id LEFT JOIN claims c ON c.id = s.origin_claim_id AND c.tenant_id = s.tenant_id AND c.person_id = s.person_id WHERE s.tenant_id = ?1 AND s.person_id = ?2 AND s.ingestion_key = ?3",
                 params![input.tenant_id.0, input.person_id.0, input.ingestion_key],
                 |row| {
                     Ok((
@@ -52,6 +52,7 @@ impl MemoryDb {
                         row.get::<_, Option<String>>(11)?,
                         row.get::<_, Option<i64>>(12)?,
                         row.get::<_, Option<String>>(13)?,
+                        row.get::<_, Option<String>>(14)?,
                     ))
                 },
             ).optional()?.ok_or(Error::NotFound)?;
@@ -96,6 +97,7 @@ impl MemoryDb {
                 || replay.4 != input.recorded_at
                 || stored_claim != input_claim
                 || stored_locator.as_ref() != locator.as_ref()
+                || replay.12 != input.feature_flag
             {
                 return Err(Error::Invalid(
                     "ingestion_key conflicts with different memory payload".to_owned(),

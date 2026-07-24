@@ -20,6 +20,7 @@ fn raw_sources_are_scoped_cited_and_deleted_from_retrieval() {
             limit: 5,
             query_embedding: None,
             as_of: None,
+            enabled_features: Vec::new(),
         })
         .unwrap();
     assert_eq!(found.items.len(), 1);
@@ -52,6 +53,7 @@ fn raw_sources_are_scoped_cited_and_deleted_from_retrieval() {
             limit: 5,
             query_embedding: None,
             as_of: None,
+            enabled_features: Vec::new(),
         })
         .unwrap()
         .items
@@ -86,6 +88,7 @@ fn lexical_search_prefers_phrases_then_recalls_natural_language_tokens() {
             limit: 5,
             query_embedding: None,
             as_of: None,
+            enabled_features: Vec::new(),
         })
         .unwrap();
     assert_eq!(
@@ -101,6 +104,7 @@ fn lexical_search_prefers_phrases_then_recalls_natural_language_tokens() {
             limit: 5,
             query_embedding: None,
             as_of: None,
+            enabled_features: Vec::new(),
         })
         .unwrap()
     };
@@ -146,6 +150,7 @@ fn lexical_token_fallback_is_bounded_and_handles_fts_punctuation() {
             limit: 3,
             query_embedding: None,
             as_of: None,
+            enabled_features: Vec::new(),
         })
         .unwrap();
 
@@ -173,6 +178,7 @@ fn lexical_token_fallback_bounds_the_query_expression() {
             limit: 3,
             query_embedding: None,
             as_of: None,
+            enabled_features: Vec::new(),
         })
         .unwrap();
 
@@ -234,6 +240,7 @@ fn accepted_claim_replaces_its_source_in_retrieval() {
                 version: "1".into(),
             }),
             as_of: None,
+            enabled_features: Vec::new(),
         })
         .unwrap();
     assert_eq!(found.items.len(), 1);
@@ -280,6 +287,7 @@ fn dense_evidence_without_a_claim_is_retrievable() {
                 version: "1".into(),
             }),
             as_of: None,
+            enabled_features: Vec::new(),
         })
         .unwrap();
     assert_eq!(found.items.len(), 1);
@@ -304,6 +312,7 @@ fn dense_evidence_without_a_claim_is_retrievable() {
                 version: "1".into(),
             }),
             as_of: None,
+            enabled_features: Vec::new(),
         })
         .unwrap()
         .items
@@ -355,6 +364,7 @@ fn expired_claims_do_not_fall_back_to_stale_raw_evidence() {
                 version: "1".into(),
             }),
             as_of: None,
+            enabled_features: Vec::new(),
         })
         .unwrap();
     assert!(found.items.is_empty());

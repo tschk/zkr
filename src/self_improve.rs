@@ -54,6 +54,7 @@ impl SelfImprove {
             captured_at: now,
             recorded_at: now,
             claim: Some(claim),
+            feature_flag: None,
         })
     }
 
@@ -86,6 +87,7 @@ impl SelfImprove {
                 limit,
                 query_embedding: None,
                 as_of: None,
+                enabled_features: Vec::new(),
             })?;
             for item in pack.items {
                 let text = item.excerpt.trim().to_string();
