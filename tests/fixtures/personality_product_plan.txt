@@ -1,0 +1,298 @@
+# Full personality AI product plan
+
+The product is not a chatbot and not one custom model. It is a model-agnostic behavioral runtime that sits between a conversation platform and whichever LLM generates the words.
+
+The public contract combines seven systems: turn-taking, social signals, social norms, social memory, theory of mind, personas, and post-conversation observability. Its realtime API also handles interruption, message splitting, typing delays, and multi-human rooms.
+
+The internal models and infrastructure are private, so this is a functional-parity design—not a claim that we know any private implementation.
+
+CS: 8/10. The public API, integration, papers, and repository options provide strong architectural evidence. The remaining uncertainty is model quality on real customer conversations, which must be resolved through evaluation and human-labelled data.
+
+## Reasoning Path
+
+I decomposed the runtime into its realtime, behavioral, memory, model, platform, safety, and evaluation layers; mapped those against `zkr`; then evaluated permissively licensed projects for the pieces we should not build ourselves.
+
+## What we should build
+
+```text
+Slack / Discord / Telegram / Web / Voice / Robots
+                         │
+                  Events and media
+                         ▼
+              Gateway + identity mapping
+                         │
+                         ▼
+         Authoritative per-thread runtime actor
+       event ordering · epochs · cancellation · pacing
+              │                         │
+              ▼                         ▼
+       Behavior engine              LiveKit voice
+  turn router · norms · ToM      VAD · STT · TTS · barge-in
+       signals · persona
+              │
+        ┌─────┴───────────┐
+        ▼                 ▼
+  zkr social memory    Customer LLM / vLLM
+        │                 │
+        └───────┬─────────┘
+                ▼
+     refined and scheduled actions
+  message · reaction · speech · gesture hint
+                │
+                ▼
+    Event log → background extraction/audits/evals
+```
+
+The decisive design is one authoritative runtime actor per conversation thread. Every incoming event advances a `turn_epoch`. Drafts, typing indicators, audio, and scheduled replies carry that epoch; when a new event supersedes them, older work is cancelled before delivery. That is how we prevent an agent from replying to an obsolete conversational moment.
+
+A Router → Action Agent → Reflection architecture, including roughly twenty conversational strategies, explicit silence, recency-sensitive timing, preserved pending actions, and interruption handling. We should reproduce the architectural principles while training and evaluating our own routing policy.
+
+## How `zkr` fits
+
+The current repository is already an excellent foundation for social memory:
+
+- Evidence and citations are authoritative.
+- Claims are bitemporal, correctable, supersedable, and deletable.
+- Person-centric retrieval is bounded and auditable.
+- Sources already support conversation, screen, audio, documents, integrations, and user corrections.
+- Embedding providers remain replaceable.
+
+Those principles are documented in README.md, architecture.md, and research.md.
+
+We should preserve the existing neutral embedded crate and add the product around it:
+
+```text
+/
+├── existing zkr crate
+├── crates/
+│   ├── contracts
+│   ├── zkr-postgres
+│   ├── behavior-runtime
+│   ├── provider-gateway
+│   └── platform
+├── apps/
+│   ├── api
+│   └── dashboard
+├── services/
+│   └── voice-worker
+├── ml/
+│   ├── training
+│   ├── datasets
+│   └── model-serving
+├── sdk/
+│   ├── typescript
+│   ├── python
+│   └── rust
+└── evals/
+```
+
+The existing SQLite backend remains for embedded and self-hosted local use. A separate PostgreSQL adapter supplies the hosted system with full-text search, vector indexes when benchmarks justify them, tenant isolation, partitioned event storage, and deletion/export workflows.
+
+## Complete behavior suite
+
+### 1. Turn-taking and proactivity
+
+The router evaluates every event and returns:
+
+- `speak`, `stay_silent`, `react`, or `continue_pending`
+- selected conversational strategy
+- intended addressee
+- confidence and supporting events
+- current epoch
+- retrieved behavioral context
+
+Hard rules handle direct mentions, commands, rate limits, safety, and agent availability. A learned policy scores appropriateness and timeliness, including strategy recency. Silence is a first-class successful result.
+
+A response stage then:
+
+- Refines the customer LLM's draft.
+- Splits it into natural message units.
+- Calculates reading, thinking, typing, or speech timing.
+- Schedules actions against the epoch.
+- Cancels them on interruption.
+- Fails open to the customer's original response if enhancement is unavailable.
+
+### 2. Social signals
+
+Persist normalized events for messages, replies, edits, deletions, reactions, typing, participant joins, media, and voice activity.
+
+Derived signals include response latency, overlapping speech, typing-without-send, reaction removal, reply topology, participation balance, addressability, and conversation velocity. These are contextual features—not durable personality facts.
+
+### 3. Social norms
+
+A background worker periodically extracts a versioned, evidence-cited "voice card" containing register, humor, lexicon, banned phrases, roles, taboos, in-jokes, and group norms.
+
+Norms must have confidence, supporting event IDs, valid-time ranges, and scope. They remain separate from durable fact memory so an obsolete style snapshot cannot fight the current room's behavior.
+
+Use a social-norms benchmark and public dataset, then add human-labelled production scenarios. Existing benchmarks are useful but too small and synthetic to be the final quality standard.
+
+### 4. Social memory
+
+Use `zkr` for:
+
+- Idempotent ingestion.
+- Person-centric recall.
+- Conversation and memory-bank scopes.
+- Natural-language questions.
+- Explicit citations.
+- Corrections, supersession, deletion, export, and retention.
+- Stable person identities independent of display names.
+
+Ours should expose clear delete, export, reset, and subject-access operations from the beginning.
+
+### 5. Theory of mind
+
+Represent beliefs, emotions, goals, and likely reactions as expiring hypotheses with confidence and evidence—not facts about a person.
+
+For each candidate reply:
+
+- Predict every participant's likely reception and next action.
+- Identify misunderstanding, escalation, exclusion, or churn risk.
+- Return a safer/refined candidate and rationale.
+- Record the eventual real response to measure calibration.
+
+FANTOM can seed offline testing, but production quality should use next-message prediction, Brier score, calibration error, and human judgement rather than self-graded LLM answers.
+
+### 6. Personas
+
+Provide enhance, generate-population, and validate workflows:
+
+- Infer a typed persona blueprint from a product brief.
+- Build causal dependencies and conditional distributions.
+- Generate diverse, constraint-valid personas.
+- Measure duplicates, marginal fidelity, and coverage.
+- Produce structured fields plus a system prompt.
+- Preserve citations when web or research grounding is enabled.
+
+Personas describe fictional agents or test populations by default. Inferring sensitive attributes about real users requires a separate consent and governance path.
+
+### 7. Social observability
+
+Run asynchronously over conversation windows:
+
+- Interaction segmentation.
+- Per-participant reception and frustration hypotheses.
+- Conversation health.
+- Evidence-cited findings.
+- Recommended component changes.
+- Before/after reply examples.
+- Per-turn verdicts and agent-behavior summaries.
+
+This must never silently become employee scoring, clinical diagnosis, or psychological profiling.
+
+## Platform surface
+
+The full public product should include:
+
+- Thread opening and short-lived realtime grants.
+- Event submission and recording.
+- Turn decisions and response scheduling.
+- WebSocket event delivery.
+- Memory ingest, recall, ask, correct, delete, and export.
+- Norm extraction.
+- Theory-of-mind forecasting.
+- Persona enhancement, generation, and validation.
+- Conversation audit preparation, execution, and reporting.
+- Organizations, projects, agents, API keys, scopes, RBAC, usage, credits, and invoices.
+- OpenAPI plus TypeScript, Python, and Rust SDKs.
+- Dashboard for agents, prompts, memory banks, audit runs, evaluations, usage, and data controls.
+- Generic webhook adapter plus Slack, Discord, Telegram, WhatsApp, LiveKit, and Hermes-compatible integrations.
+- Single-tenant enterprise deployment in addition to the hosted service.
+
+The dashboard and TypeScript SDK should use Bun exclusively.
+
+## What to reuse
+
+| Area | Decision |
+|---|---|
+| Social memory | Build on `zkr`; add PostgreSQL storage and group/person identity mapping. |
+| Realtime rooms and media | Use LiveKit and LiveKit Agents, Apache-2.0. |
+| Distributed live events | Use NATS JetStream, Apache-2.0, with at-least-once delivery and application idempotency. |
+| Long-running audits/personas | Use Temporal, MIT. |
+| Voice activity | Use Silero VAD, MIT. |
+| Semantic end-of-turn | Use Smart Turn, BSD-2-Clause. Disable its optional training telemetry. |
+| STT and mixed-microphone diarization | Benchmark faster-whisper and sherpa-onnx. Sherpa covers streaming ASR, speaker recognition, and diarization under Apache-2.0. |
+| Local TTS | Start with Kokoro, while keeping commercial voice providers pluggable. |
+| Self-hosted LLMs | Use vLLM, Apache-2.0, behind the same provider contract as external APIs. |
+| Social simulation | Use Sotopia and Concordia in evaluation—not the production runtime. |
+| Persona research | Use TinyTroupe as an evaluation/reference implementation, not a production dependency. |
+| Alternative memories | Keep Mem0, Graphiti, and Letta as benchmark competitors. They overlap with `zkr` and do not replace its correction/provenance model. |
+
+Do not install both Pipecat and LiveKit as competing orchestration layers; borrow Smart Turn while standardizing realtime transport around LiveKit.
+
+Before redistribution, pin and separately audit every model weight's license—repository code licenses do not automatically cover all weights or datasets.
+
+## Data and infrastructure
+
+Use PostgreSQL as the system of record, object storage for consented audio/media, NATS for realtime routing, and Temporal for durable background workflows.
+
+Core records:
+
+- `conversation_event`
+- `thread_state`
+- `scheduled_action`
+- `behavior_artifact`
+- `memory_bank`
+- `person_identity`
+- `model_run`
+- `audit_run`
+- `usage_ledger`
+- `data_subject_request`
+
+Raw content, derived hypotheses, durable facts, and billing records must have separate retention policies. Provider credentials are encrypted and never copied into traces. Traces default to IDs, timing, model/version, token counts, and redacted structured outputs rather than raw conversation content.
+
+## Evaluation and release gates
+
+| System | Required gate |
+|---|---|
+| Runtime | Deterministic event replay; zero stale-epoch deliveries; idempotency under retries and reconnects. |
+| Isolation | Zero cross-organization or cross-memory-bank leakage across adversarial tests. |
+| Turn-taking | Human-labelled false interruption, missed address, inappropriate silence, participation balance, and strategy selection—not generic accuracy alone. |
+| Norms | Social-norms benchmark plus real multilingual/cultural rooms; evidence precision and regression testing per model. |
+| Memory | Citation precision, correction accuracy, temporal retrieval, deletion completeness, LoCoMo/LongMemEval-style tasks. |
+| Theory of mind | Calibrated next-reaction prediction, Brier score, evidence quality, and harmful-rewrite rate. |
+| Personas | 100% deterministic constraint validity; measured diversity and requested-versus-achieved distribution fidelity. |
+| Observability | Human-rater agreement, evidence correctness, calibration, and actionable finding rate. |
+| Voice | Endpointing false-cut rate, late-turn rate, speaker attribution, WER, barge-in cancellation, and first-audio latency. |
+| Reliability | Event acknowledgement under 100 ms p95 regionally; compute-only decision under 600 ms p95; no enhancement failure may block the customer's baseline answer. |
+| Safety | Prompt-injection, impersonation, covert persuasion, minors, self-harm, sensitive inference, and memory-poisoning suites. |
+
+Naturalized delays should be measured separately from compute latency; making an agent intentionally wait before typing must not disguise a slow backend.
+
+## Safety and product boundaries
+
+The agent should be socially competent but never optimized to trick people into believing it is human.
+
+- Disclose AI participation in every supported client and mark synthetic output where applicable. Article 50 of the EU AI Act explicitly addresses direct human interaction and synthetic content.
+- Implement consent, purpose limitation, retention, access, correction, deletion, and export. The EDPB AI-model opinion stresses case-specific anonymity and lawful processing.
+- Structure operational risk management around NIST's Govern, Map, Measure, and Manage functions and its Generative AI Profile.
+- Companion products for minors and therapy/care deployments remain separately gated. The FTC's companion-chatbot inquiry specifically focuses on testing, disclosures, data handling, and harm to children and teens.
+- Never expose inferred mental state as objective truth.
+- Never link identities across rooms without an explicit memory-bank policy and consent.
+- Require human escalation and vertical-specific review before healthcare, therapy, employment, education assessment, or child-facing deployment.
+
+## Full delivery program
+
+1. **Contracts, data, and evaluation foundation — weeks 0–6**
+
+   Freeze the event schema, OpenAPI, identity/memory scopes, epoch semantics, provider contract, threat model, retention model, benchmark harness, and architecture decisions. Produce replayable test conversations before implementing model behavior.
+
+2. **Conversation kernel and platform — weeks 4–16**
+
+   Build the Rust API, thread actors, NATS routing, Temporal workflows, PostgreSQL adapter, WebSockets, model gateway, organizations, API keys, usage ledger, deletion/export, and generated SDKs.
+
+3. **All seven behavior systems — weeks 10–28**
+
+   Implement turn-taking, signals, norms, memory, theory of mind, personas, and observability. Begin with structured prompts and deterministic policy layers; collect labels, then distill or fine-tune only where evaluation demonstrates a durable cost, latency, or quality improvement.
+
+4. **Voice, multimodal actions, and integrations — weeks 20–38**
+
+   Add LiveKit rooms, VAD, endpointing, streaming STT/TTS, speaker attribution, barge-in, telephony, reactions, gesture/gaze hints, and production Slack/Discord/Telegram/WhatsApp/Hermes adapters.
+
+5. **Scale, enterprise, safety, and GA — weeks 30–52+**
+
+   Add multi-region routing, single-tenant deployments, model/prompt registry, incident response, SLOs, cost controls, audit logging, red-team automation, compliance evidence, admin tooling, and longitudinal human studies.
+
+With overlapping work, expect a complete private beta in roughly 9–12 months and production maturity in 12–18 months. A credible team is 9–10 people: one technical lead, two distributed/backend engineers, two applied-ML researchers, one realtime/voice engineer, one SDK/integrations engineer, one dashboard engineer, and one SRE/security engineer, with product research/design support.
+
+The immediate next action is to turn this into a committed product specification containing the OpenAPI contract, database/event schema, six architecture decisions, benchmark manifest, and a dependency/license inventory. That is the correct foundation before implementing runtime code.

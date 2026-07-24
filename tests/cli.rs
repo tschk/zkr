@@ -560,3 +560,47 @@ fn json_cli_applies_an_exported_page_into_an_empty_replica() {
     std::fs::remove_file(origin_path).unwrap();
     std::fs::remove_file(replica_path).unwrap();
 }
+
+#[test]
+fn json_cli_stores_and_gates_a_feature_flagged_product_plan() {
+    let plan = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/personality_product_plan.txt"),
+    )
+    .unwrap();
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("zkr-feature-plan-{nonce}.db"));
+    let database = path.to_str().unwrap();
+    let remembered = run(
+        database,
+        "remember",
+        json!({
+            "tenant_id": "tenant",
+            "person_id": "person",
+            "kind": "document",
+            "text": plan,
+            "captured_at": 10,
+            "recorded_at": 10,
+            "feature_flag": "personality"
+        }),
+    );
+    assert!(remembered["source_id"].is_string());
+    let hidden = run(
+        database,
+        "search",
+        json!({ "tenant_id": "tenant", "person_id": "person", "query": "personality", "limit": 5 }),
+    );
+    assert!(hidden["items"].as_array().unwrap().is_empty());
+    let enabled = run(
+        database,
+        "search",
+        json!({ "tenant_id": "tenant", "person_id": "person", "query": "personality", "limit": 5, "enabled_features": ["personality"] }),
+    );
+    let items = enabled["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["memory"]["kind"], "source");
+    std::fs::remove_file(path).unwrap();
+}
