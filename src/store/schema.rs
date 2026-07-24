@@ -5,7 +5,7 @@ use super::export::{
 use super::*;
 use rusqlite::{Transaction, TransactionBehavior};
 
-pub(super) const SCHEMA_VERSION: i64 = 10;
+pub(super) const SCHEMA_VERSION: i64 = 11;
 pub(super) const CLAIM_TIME_INTERVAL_ERROR: &str = "invalid claim half-open time interval";
 
 pub(super) fn migrate(connection: &mut Connection) -> Result<()> {
@@ -51,6 +51,9 @@ pub(super) fn migrate(connection: &mut Connection) -> Result<()> {
     if version < 10 {
         migrate_v10(&transaction)?;
     }
+    if version < 11 {
+        migrate_v11(&transaction)?;
+    }
     set_version(&transaction, SCHEMA_VERSION)?;
     transaction.commit()?;
     Ok(())
@@ -78,6 +81,7 @@ fn migrate_v1(transaction: &Transaction<'_>) -> Result<()> {
 
 fn repair_v1_shape(transaction: &Transaction<'_>) -> Result<()> {
     ensure_column(transaction, "sources", "ingestion_key", "TEXT")?;
+    ensure_column(transaction, "sources", "feature_flag", "TEXT")?;
     ensure_column(
         transaction,
         "claims",
@@ -269,6 +273,11 @@ fn migrate_v10(transaction: &Transaction<'_>) -> Result<()> {
         "CREATE TABLE IF NOT EXISTS memory_applied_records(tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, record_kind TEXT NOT NULL, record_id TEXT NOT NULL, payload_hash TEXT NOT NULL, applied_at INTEGER NOT NULL, PRIMARY KEY(tenant_id, person_id, record_kind, record_id, payload_hash));
          CREATE INDEX IF NOT EXISTS memory_applied_records_scope ON memory_applied_records(tenant_id, person_id, record_kind, record_id);",
     )?;
+    Ok(())
+}
+
+fn migrate_v11(transaction: &Transaction<'_>) -> Result<()> {
+    ensure_column(transaction, "sources", "feature_flag", "TEXT")?;
     Ok(())
 }
 

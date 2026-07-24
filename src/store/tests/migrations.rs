@@ -53,7 +53,7 @@ fn new_database_accepts_point_locators() {
         .connection
         .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 10);
+    assert_eq!(version, 11);
 
     let remembered = db
         .remember_with_locator(
@@ -176,7 +176,7 @@ fn migration_is_idempotent_for_supported_schema_versions() {
             .connection
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap();
-        assert_eq!(actual, 10);
+        assert_eq!(actual, 11);
         if version > 0 {
             let preserved = db
                 .connection
