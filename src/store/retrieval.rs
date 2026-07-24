@@ -21,6 +21,7 @@ impl MemoryDb {
             &phrase_query,
             candidate_limit,
             input.as_of.as_ref(),
+            &input.enabled_features,
         )?;
         let mut seen = HashSet::new();
         lexical.retain(|target| seen.insert(target.clone()));
@@ -32,6 +33,7 @@ impl MemoryDb {
                     &token_query,
                     candidate_limit,
                     input.as_of.as_ref(),
+                    &input.enabled_features,
                 )? {
                     if seen.insert(target.clone()) {
                         lexical.push(target);
@@ -42,13 +44,21 @@ impl MemoryDb {
                 }
             }
         }
-        let dense = input
-            .query_embedding
-            .as_ref()
-            .filter(|_| input.as_of.is_none())
-            .map(|query| self.dense_claims(&input.tenant_id, &input.person_id, query))
-            .transpose()?
-            .unwrap_or_default();
+        let dense = if input.enabled_features.is_empty() {
+            input
+                .query_embedding
+                .as_ref()
+                .filter(|_| input.as_of.is_none())
+                .map(|query| self.dense_claims(&input.tenant_id, &input.person_id, query))
+                .transpose()?
+                .unwrap_or_default()
+        } else if input.query_embedding.is_some() {
+            return Err(Error::Invalid(
+                "feature filtering is not supported with dense queries".to_owned(),
+            ));
+        } else {
+            Vec::new()
+        };
         let ranked = reciprocal_rank_fusion(&lexical, &dense, limit as usize);
         let mut items = Vec::with_capacity(ranked.len());
         for (target, relevance_basis_points) in ranked {
@@ -79,43 +89,65 @@ impl MemoryDb {
         query: &str,
         candidate_limit: u32,
         as_of: Option<&TemporalQuery>,
+        enabled_features: &[String],
     ) -> Result<Vec<RetrievalTarget>> {
-        let (sql, values): (&str, Vec<&dyn rusqlite::ToSql>) = match as_of {
+        let feature_condition = if enabled_features.is_empty() {
+            "s.feature_flag IS NULL".to_string()
+        } else {
+            let placeholders = (5..5 + enabled_features.len())
+                .map(|i| format!("?{i}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("(s.feature_flag IS NULL OR s.feature_flag IN ({placeholders}))")
+        };
+        let as_of_feature_condition = if enabled_features.is_empty() {
+            "s.feature_flag IS NULL".to_string()
+        } else {
+            let placeholders = (7..7 + enabled_features.len())
+                .map(|i| format!("?{i}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("(s.feature_flag IS NULL OR s.feature_flag IN ({placeholders}))")
+        };
+        let (sql, mut values): (&str, Vec<&dyn rusqlite::ToSql>) = match as_of {
             None => (
-                "SELECT s.id, c.id
+                &format!("SELECT s.id, c.id
                  FROM source_fts
                  JOIN sources s ON s.id = source_fts.source_id AND s.tenant_id = source_fts.tenant_id AND s.person_id = source_fts.person_id
                  JOIN evidence e ON e.source_id = s.id AND e.tenant_id = s.tenant_id AND e.person_id = s.person_id AND e.deleted_at IS NULL
                  LEFT JOIN claim_evidence ce ON ce.evidence_id = e.id AND ce.tenant_id = e.tenant_id AND ce.person_id = e.person_id AND ce.relation = '\"supports\"'
                  LEFT JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL AND c.tier IN ('short_term', 'long_term') AND c.processing_state = 'processed'
-                 WHERE source_fts MATCH ?1 AND source_fts.tenant_id = ?2 AND source_fts.person_id = ?3 AND s.deleted_at IS NULL
+                 WHERE source_fts MATCH ?1 AND source_fts.tenant_id = ?2 AND source_fts.person_id = ?3 AND s.deleted_at IS NULL AND {feature_condition}
                  AND (c.id IS NOT NULL OR NOT EXISTS (
                      SELECT 1 FROM evidence live_e
                      JOIN claim_evidence live_ce ON live_ce.evidence_id = live_e.id AND live_ce.tenant_id = live_e.tenant_id AND live_ce.person_id = live_e.person_id AND live_ce.relation = '\"supports\"'
 
                      WHERE live_e.source_id = s.id AND live_e.tenant_id = s.tenant_id AND live_e.person_id = s.person_id AND live_e.deleted_at IS NULL
                  ))
-                 ORDER BY bm25(source_fts), s.id, c.id LIMIT ?4",
+                 ORDER BY bm25(source_fts), s.id, c.id LIMIT ?4"),
                 vec![&query, &tenant_id.0, &person_id.0, &candidate_limit],
             ),
             Some(as_of) => (
-                "SELECT s.id, c.id
+                &format!("SELECT s.id, c.id
                  FROM source_fts
                  JOIN sources s ON s.id = source_fts.source_id AND s.tenant_id = source_fts.tenant_id AND s.person_id = source_fts.person_id
                  JOIN evidence e ON e.source_id = s.id AND e.tenant_id = s.tenant_id AND e.person_id = s.person_id AND e.deleted_at IS NULL AND e.recorded_at <= ?5
                  LEFT JOIN claim_evidence ce ON ce.evidence_id = e.id AND ce.tenant_id = e.tenant_id AND ce.person_id = e.person_id AND ce.relation = '\"supports\"'
                  LEFT JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id AND c.status IN ('accepted', 'superseded') AND c.valid_from <= ?4 AND (c.valid_until IS NULL OR c.valid_until > ?4) AND c.recorded_from <= ?5 AND (c.recorded_until IS NULL OR c.recorded_until > ?5) AND c.processing_state = 'processed'
-                 WHERE source_fts MATCH ?1 AND source_fts.tenant_id = ?2 AND source_fts.person_id = ?3 AND s.deleted_at IS NULL AND s.captured_at <= ?4 AND s.recorded_at <= ?5
+                 WHERE source_fts MATCH ?1 AND source_fts.tenant_id = ?2 AND source_fts.person_id = ?3 AND s.deleted_at IS NULL AND s.captured_at <= ?4 AND s.recorded_at <= ?5 AND {as_of_feature_condition}
                  AND (c.id IS NOT NULL OR NOT EXISTS (
                      SELECT 1 FROM evidence live_e
                      JOIN claim_evidence live_ce ON live_ce.evidence_id = live_e.id AND live_ce.tenant_id = live_e.tenant_id AND live_ce.person_id = live_e.person_id AND live_ce.relation = '\"supports\"'
                      JOIN claims live_c ON live_c.id = live_ce.claim_id AND live_c.tenant_id = live_ce.tenant_id AND live_c.person_id = live_ce.person_id
                      WHERE live_e.source_id = s.id AND live_e.tenant_id = s.tenant_id AND live_e.person_id = s.person_id AND live_e.deleted_at IS NULL AND live_e.recorded_at <= ?5 AND live_c.status IN ('accepted', 'superseded') AND live_c.valid_from <= ?4 AND (live_c.valid_until IS NULL OR live_c.valid_until > ?4) AND live_c.recorded_from <= ?5 AND (live_c.recorded_until IS NULL OR live_c.recorded_until > ?5) AND live_c.processing_state = 'processed'
                  ))
-                 ORDER BY bm25(source_fts), s.id, c.id LIMIT ?6",
+                 ORDER BY bm25(source_fts), s.id, c.id LIMIT ?6"),
                 vec![&query, &tenant_id.0, &person_id.0, &as_of.valid_at, &as_of.recorded_at, &candidate_limit],
             ),
         };
+        for feature in enabled_features {
+            values.push(feature);
+        }
         let mut statement = self.connection.prepare(sql)?;
         let rows = statement.query_map(rusqlite::params_from_iter(values), |row| {
             let source_id = row.get::<_, String>(0)?;
