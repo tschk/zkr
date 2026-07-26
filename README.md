@@ -4,6 +4,8 @@ Evidence-backed temporal memory for personal agents.
 
 `zkr` keeps source evidence authoritative, represents facts as temporal claims, and produces bounded retrieval packs with citations. Raw captures remain searchable before a claim is extracted. Embeddings and search indexes are projections that can be rebuilt from the stored evidence.
 
+`MemoryMode::{Coding, Personal, Research, Agent}` provides scoped presets without changing the storage engine. Each preset selects a workspace, person, project, or agent boundary; an existing memory tier; bounded retrieval defaults; allowed source kinds; and profile eligibility. All modes require evidence citations and tenant/person privacy isolation while preserving correction history.
+
 ## Principles
 
 - Sources and evidence are authoritative; indexes are disposable.
