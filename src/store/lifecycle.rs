@@ -2,6 +2,7 @@ use super::export::{
     append_commit, claim_evidence_record, claim_record, evidence_record, source_record,
 };
 use super::repair::{enqueue_projection_repair, record_operation};
+use super::summaries::invalidate_summaries_for_evidence;
 use super::*;
 
 impl MemoryDb {
@@ -228,6 +229,15 @@ impl MemoryDb {
             )
             .optional()?
             .ok_or(Error::NotFound)?;
+        let stale_evidence_ids = transaction
+            .prepare(
+                "SELECT evidence_id FROM claim_evidence WHERE tenant_id = ?1 AND person_id = ?2 AND claim_id = ?3 AND relation = '\"supports\"' ORDER BY evidence_id",
+            )?
+            .query_map(
+                params![input.tenant_id.0, input.person_id.0, input.claim_id.0],
+                |row| row.get::<_, String>(0).map(EvidenceId),
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         if input.valid_at <= old.3 || input.recorded_at <= old.4 {
             return Err(Error::Invalid(
                 "correction timestamps must advance the original valid and recorded intervals"
@@ -251,6 +261,13 @@ impl MemoryDb {
         transaction.execute(
             "UPDATE claims SET status = 'superseded', valid_until = ?1, recorded_until = ?2 WHERE id = ?3 AND tenant_id = ?4 AND person_id = ?5",
             params![input.valid_at, input.recorded_at, input.claim_id.0, input.tenant_id.0, input.person_id.0],
+        )?;
+        invalidate_summaries_for_evidence(
+            &transaction,
+            &input.tenant_id,
+            &input.person_id,
+            &stale_evidence_ids,
+            input.recorded_at,
         )?;
         enqueue_projection_repair(
             &transaction,
@@ -423,6 +440,13 @@ impl MemoryDb {
             "UPDATE evidence SET deleted_at = ?1 WHERE source_id = ?2 AND tenant_id = ?3 AND person_id = ?4 AND deleted_at IS NULL",
             params![input.deleted_at, input.source_id.0, input.tenant_id.0, input.person_id.0],
         )? as u64;
+        invalidate_summaries_for_evidence(
+            &transaction,
+            &input.tenant_id,
+            &input.person_id,
+            &evidence_ids,
+            input.deleted_at,
+        )?;
         let claim_count = transaction.execute(
             "UPDATE claims SET status = 'retracted', recorded_until = ?1
              WHERE tenant_id = ?2 AND person_id = ?3 AND status = 'accepted'

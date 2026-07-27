@@ -39,13 +39,13 @@ printf '%s' '{"tenant_id":"local","person_id":"me","query":"plans","limit":5}' \
 
 ## Agent session workflow
 
-`wake` is the session-facing name for bounded, cited retrieval; send it the current task or question rather than loading an unbounded history. `nap` is the session-facing name for storing an explicit cited review after a task or session. Both use the ordinary `search` and `review` request formats and do not create a second memory store, autonomous compaction, or uncited summaries.
+`nap` stores one cited leaf summary. `merge` combines two adjacent summaries, `zoom` opens a parent, and `wake` returns raw cited matches plus the newest-first detail cover that fits `max_bytes`. Summary nodes are local rebuildable projections: source deletion or claim correction marks them stale, and `rebuild` replaces a stale node with cited current inputs. `search` remains raw FTS/dense retrieval and `review` remains a separate durable cited artifact.
 
 ```sh
 printf '%s' '{"tenant_id":"local","person_id":"me","query":"current rollout","limit":8}' \
   | zkr --db ~/.zkr/memory.db wake
 
-printf '%s' '{"tenant_id":"local","person_id":"me","day":"2026-07-26","summary":"Rollout is Friday.","evidence_ids":["evidence-id"],"recorded_at":1785062400}' \
+printf '%s' '{"tenant_id":"local","person_id":"me","summary":"Rollout is Friday.","evidence_ids":["evidence-id"],"recorded_at":1785062400}' \
   | zkr --db ~/.zkr/memory.db nap
 ```
 

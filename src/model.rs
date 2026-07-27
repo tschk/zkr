@@ -30,6 +30,7 @@ string_id!(EvidenceId);
 string_id!(ClaimId);
 string_id!(ProfileEntryId);
 string_id!(DailyReviewId);
+string_id!(SummaryId);
 
 pub type Timestamp = i64;
 

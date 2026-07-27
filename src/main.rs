@@ -3,14 +3,14 @@ use serde_json::json;
 use std::{env, io::Read, process::ExitCode};
 use zkr::{
     ApplyInput, ArchiveInput, ClaimEvidence, CorrectInput, DeleteInput, EmbeddingInput,
-    EvidenceLocatorInput, ExportInput, GetInput, MemoryDb, ProfileInput, ProfilesInput,
-    ProjectionAuditInput, PromoteInput, RememberRequest, RepairInput, ReviewInput, ReviewsInput,
-    SearchInput,
+    EvidenceLocatorInput, ExportInput, GetInput, MemoryDb, MergeInput, NapInput, ProfileInput,
+    ProfilesInput, ProjectionAuditInput, PromoteInput, RebuildInput, RememberRequest, RepairInput,
+    ReviewInput, ReviewsInput, SearchInput, WakeInput, ZoomInput,
 };
 
 const MAX_REQUEST_BYTES: u64 = 1024 * 1024;
 
-const HELP: &str = "zkr --db PATH COMMAND\n\nCommands (read one JSON object from stdin; write JSON to stdout):\n  remember     Store source evidence and an optional typed claim or transcript locator\n  locator      Read a live evidence transcript locator\n  search       Retrieve bounded, cited memory matches\n  wake         Retrieve bounded, cited context for the current session\n  get          Read one live cited memory by target\n  correct      Supersede a claim using new correction evidence\n  promote      Promote a short-term processed claim to long-term\n  archive      Move a processed claim to archive tier\n  link         Attach supporting or contradicting evidence to a claim\n  delete       Tombstone a source and propagate unavailable evidence\n  repair       Process bounded projection-repair outbox records\n  profile      Project a live profile-fact claim into the current profile\n  profiles     Retrieve bounded live profile entries\n  review       Store a cited daily review without invoking an LLM\n  nap          Store an explicit cited session compaction\n  reviews      Retrieve bounded daily reviews\n  projections  List bounded stale or missing embedding inputs\n  embed        Upsert a rebuildable embedding projection\n  export       Read a bounded page from the scoped authoritative commit feed\n  apply        Materialize complete authoritative commits authored elsewhere\n  help         Show this help\n";
+const HELP: &str = "zkr --db PATH COMMAND\n\nCommands (read one JSON object from stdin; write JSON to stdout):\n  remember     Store source evidence and an optional typed claim or transcript locator\n  locator      Read a live evidence transcript locator\n  search       Retrieve bounded, cited memory matches\n  wake         Retrieve cited raw matches plus a bounded summary-tree cover\n  zoom         Expand one live summary into its two children\n  nap          Store a cited leaf summary\n  merge        Merge two adjacent live summaries\n  rebuild      Replace one stale summary explicitly\n  get          Read one live cited memory by target\n  correct      Supersede a claim using new correction evidence\n  promote      Promote a short-term processed claim to long-term\n  archive      Move a processed claim to archive tier\n  link         Attach supporting or contradicting evidence to a claim\n  delete       Tombstone a source and propagate unavailable evidence\n  repair       Process projection repairs and report stale summaries\n  profile      Project a live profile-fact claim into the current profile\n  profiles     Retrieve bounded live profile entries\n  review       Store a cited daily review without invoking an LLM\n  reviews      Retrieve bounded daily reviews\n  projections  List bounded stale or missing embedding inputs\n  embed        Upsert a rebuildable embedding projection\n  export       Read a bounded page from the scoped authoritative commit feed\n  apply        Materialize complete authoritative commits authored elsewhere\n  help         Show this help\n";
 
 fn main() -> ExitCode {
     match run() {
@@ -53,7 +53,12 @@ fn run() -> Result<Option<serde_json::Value>, Box<dyn std::error::Error>> {
         "locator" => {
             serde_json::to_value(database.evidence_locator(read_json::<EvidenceLocatorInput>()?)?)?
         }
-        "search" | "wake" => serde_json::to_value(database.search(read_json::<SearchInput>()?)?)?,
+        "search" => serde_json::to_value(database.search(read_json::<SearchInput>()?)?)?,
+        "wake" => serde_json::to_value(database.wake(read_json::<WakeInput>()?)?)?,
+        "zoom" => serde_json::to_value(database.zoom(read_json::<ZoomInput>()?)?)?,
+        "nap" => serde_json::to_value(database.nap(read_json::<NapInput>()?)?)?,
+        "merge" => serde_json::to_value(database.merge(read_json::<MergeInput>()?)?)?,
+        "rebuild" => serde_json::to_value(database.rebuild(read_json::<RebuildInput>()?)?)?,
         "get" => serde_json::to_value(database.get(read_json::<GetInput>()?)?)?,
         "correct" => serde_json::to_value(database.correct(read_json::<CorrectInput>()?)?)?,
         "link" => {
@@ -68,9 +73,7 @@ fn run() -> Result<Option<serde_json::Value>, Box<dyn std::error::Error>> {
         }
         "profile" => serde_json::to_value(database.store_profile(read_json::<ProfileInput>()?)?)?,
         "profiles" => serde_json::to_value(database.profiles(read_json::<ProfilesInput>()?)?)?,
-        "review" | "nap" => {
-            serde_json::to_value(database.store_review(read_json::<ReviewInput>()?)?)?
-        }
+        "review" => serde_json::to_value(database.store_review(read_json::<ReviewInput>()?)?)?,
         "reviews" => serde_json::to_value(database.reviews(read_json::<ReviewsInput>()?)?)?,
         "projections" => {
             serde_json::to_value(database.projection_issues(read_json::<ProjectionAuditInput>()?)?)?

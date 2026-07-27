@@ -165,28 +165,36 @@ fn json_cli_wakes_and_naps_with_cited_memory() {
             "recorded_at": 10
         }),
     );
-    let wake = run(
-        database,
-        "wake",
-        json!({ "tenant_id": "tenant", "person_id": "person", "query": "rollout", "limit": 1 }),
-    );
-    assert_eq!(
-        wake["items"][0]["evidence_ids"][0],
-        remembered["evidence_id"]
-    );
     let nap = run(
         database,
         "nap",
         json!({
             "tenant_id": "tenant",
             "person_id": "person",
-            "day": "2026-07-26",
             "summary": "The rollout is Friday.",
             "evidence_ids": [remembered["evidence_id"]],
             "recorded_at": 11
         }),
     );
-    assert!(nap["id"].is_string());
+    assert!(nap["summary_id"].is_string());
+    let wake = run(
+        database,
+        "wake",
+        json!({ "tenant_id": "tenant", "person_id": "person", "query": "rollout", "limit": 1, "max_bytes": 100 }),
+    );
+    assert_eq!(
+        wake["items"][0]["evidence_ids"][0],
+        remembered["evidence_id"]
+    );
+    assert_eq!(wake["summaries"][0]["id"], nap["summary_id"]);
+    assert!(run(
+        database,
+        "zoom",
+        json!({ "tenant_id": "tenant", "person_id": "person", "summary_id": nap["summary_id"] }),
+    )["children"]
+        .as_array()
+        .unwrap()
+        .is_empty());
     std::fs::remove_file(path).unwrap();
 }
 

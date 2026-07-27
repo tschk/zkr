@@ -5,7 +5,7 @@ use super::export::{
 use super::*;
 use rusqlite::{Transaction, TransactionBehavior};
 
-pub(super) const SCHEMA_VERSION: i64 = 11;
+pub(super) const SCHEMA_VERSION: i64 = 12;
 pub(super) const CLAIM_TIME_INTERVAL_ERROR: &str = "invalid claim half-open time interval";
 
 pub(super) fn migrate(connection: &mut Connection) -> Result<()> {
@@ -53,6 +53,9 @@ pub(super) fn migrate(connection: &mut Connection) -> Result<()> {
     }
     if version < 11 {
         migrate_v11(&transaction)?;
+    }
+    if version < 12 {
+        migrate_v12(&transaction)?;
     }
     set_version(&transaction, SCHEMA_VERSION)?;
     transaction.commit()?;
@@ -278,6 +281,17 @@ fn migrate_v10(transaction: &Transaction<'_>) -> Result<()> {
 
 fn migrate_v11(transaction: &Transaction<'_>) -> Result<()> {
     ensure_column(transaction, "sources", "feature_flag", "TEXT")?;
+    Ok(())
+}
+
+fn migrate_v12(transaction: &Transaction<'_>) -> Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS summary_nodes(id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, summary TEXT NOT NULL, evidence_ids TEXT NOT NULL CHECK(json_valid(evidence_ids)), child_ids TEXT NOT NULL CHECK(json_valid(child_ids)), start_sequence INTEGER NOT NULL, end_sequence INTEGER NOT NULL, level INTEGER NOT NULL CHECK(level >= 0), supersedes_id TEXT REFERENCES summary_nodes(id), recorded_at INTEGER NOT NULL, stale_at INTEGER, CHECK(start_sequence <= end_sequence), CHECK((level = 0 AND start_sequence = end_sequence AND json_array_length(child_ids) = 0) OR (level > 0 AND json_array_length(child_ids) = 2)));
+         CREATE INDEX IF NOT EXISTS summary_nodes_scope ON summary_nodes(tenant_id, person_id, stale_at, start_sequence, end_sequence, level);
+         CREATE UNIQUE INDEX IF NOT EXISTS summary_nodes_live_range ON summary_nodes(tenant_id, person_id, start_sequence, end_sequence, level) WHERE stale_at IS NULL;
+         CREATE TRIGGER IF NOT EXISTS summary_node_scope_insert BEFORE INSERT ON summary_nodes FOR EACH ROW WHEN json_array_length(NEW.evidence_ids) = 0 OR EXISTS (SELECT 1 FROM json_each(NEW.evidence_ids) citation LEFT JOIN evidence e ON e.id = citation.value AND e.tenant_id = NEW.tenant_id AND e.person_id = NEW.person_id WHERE e.id IS NULL OR e.deleted_at IS NOT NULL) OR EXISTS (SELECT 1 FROM json_each(NEW.child_ids) child LEFT JOIN summary_nodes s ON s.id = child.value AND s.tenant_id = NEW.tenant_id AND s.person_id = NEW.person_id WHERE s.id IS NULL OR s.stale_at IS NOT NULL) OR (NEW.supersedes_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM summary_nodes s WHERE s.id = NEW.supersedes_id AND s.tenant_id = NEW.tenant_id AND s.person_id = NEW.person_id AND s.stale_at IS NOT NULL)) BEGIN SELECT RAISE(ABORT, 'summary scope mismatch'); END;
+         CREATE TRIGGER IF NOT EXISTS summary_node_scope_update BEFORE UPDATE OF tenant_id, person_id, evidence_ids, child_ids, supersedes_id ON summary_nodes FOR EACH ROW WHEN json_array_length(NEW.evidence_ids) = 0 OR EXISTS (SELECT 1 FROM json_each(NEW.evidence_ids) citation LEFT JOIN evidence e ON e.id = citation.value AND e.tenant_id = NEW.tenant_id AND e.person_id = NEW.person_id WHERE e.id IS NULL OR e.deleted_at IS NOT NULL) OR EXISTS (SELECT 1 FROM json_each(NEW.child_ids) child LEFT JOIN summary_nodes s ON s.id = child.value AND s.tenant_id = NEW.tenant_id AND s.person_id = NEW.person_id WHERE s.id IS NULL OR s.stale_at IS NOT NULL) OR (NEW.supersedes_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM summary_nodes s WHERE s.id = NEW.supersedes_id AND s.tenant_id = NEW.tenant_id AND s.person_id = NEW.person_id AND s.stale_at IS NOT NULL)) BEGIN SELECT RAISE(ABORT, 'summary scope mismatch'); END;",
+    )?;
     Ok(())
 }
 

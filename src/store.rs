@@ -2,7 +2,7 @@ use crate::{
     Claim, ClaimEvidence, ClaimId, ClaimKind, ClaimStatus, DailyReview, DailyReviewId, Evidence,
     EvidenceId, EvidenceRelation, MemoryProcessingState, MemoryRef, MemoryTier, PersonId,
     ProfileEntry, ProfileEntryId, ProfileStability, RetrievalItem, RetrievalPack, Source, SourceId,
-    SourceKind, TenantId, Timestamp, assert_legal_state,
+    SourceKind, SummaryId, TenantId, Timestamp, assert_legal_state,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
@@ -15,6 +15,7 @@ mod lifecycle;
 mod repair;
 mod retrieval;
 mod schema;
+mod summaries;
 
 use embeddings::*;
 #[cfg(test)]
@@ -308,6 +309,7 @@ pub struct RepairInput {
 #[derive(Debug, Serialize)]
 pub struct RepairResult {
     pub processed: u32,
+    pub summaries_stale: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -340,6 +342,91 @@ pub struct ReviewRecord {
     pub summary: String,
     pub evidence_ids: Vec<EvidenceId>,
     pub recorded_at: Timestamp,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct MemorySummary {
+    pub id: SummaryId,
+    pub summary: String,
+    pub evidence_ids: Vec<EvidenceId>,
+    pub child_ids: Vec<SummaryId>,
+    pub start_sequence: u64,
+    pub end_sequence: u64,
+    pub level: u32,
+    pub recorded_at: Timestamp,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NapInput {
+    pub tenant_id: TenantId,
+    pub person_id: PersonId,
+    pub summary: String,
+    pub evidence_ids: Vec<EvidenceId>,
+    pub recorded_at: Timestamp,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Napped {
+    pub summary_id: SummaryId,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MergeInput {
+    pub tenant_id: TenantId,
+    pub person_id: PersonId,
+    pub summary: String,
+    pub child_ids: Vec<SummaryId>,
+    pub recorded_at: Timestamp,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Merged {
+    pub summary_id: SummaryId,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RebuildInput {
+    pub tenant_id: TenantId,
+    pub person_id: PersonId,
+    pub summary_id: SummaryId,
+    pub summary: String,
+    #[serde(default)]
+    pub evidence_ids: Vec<EvidenceId>,
+    pub recorded_at: Timestamp,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Rebuilt {
+    pub summary_id: SummaryId,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WakeInput {
+    #[serde(flatten)]
+    pub search: SearchInput,
+    #[serde(default = "default_wake_bytes")]
+    pub max_bytes: u32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WakePack {
+    #[serde(flatten)]
+    pub retrieval: RetrievalPack,
+    pub summaries: Vec<MemorySummary>,
+    pub used_bytes: u32,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ZoomInput {
+    pub tenant_id: TenantId,
+    pub person_id: PersonId,
+    pub summary_id: SummaryId,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Zoomed {
+    pub summary: MemorySummary,
+    pub children: Vec<MemorySummary>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -482,6 +569,10 @@ fn require_text(field: &str, value: &str) -> Result<()> {
 
 const fn default_limit() -> u32 {
     10
+}
+
+const fn default_wake_bytes() -> u32 {
+    16 * 1024
 }
 const fn default_after_event_index() -> i64 {
     -1

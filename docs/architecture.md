@@ -22,6 +22,8 @@ Schema upgrades run as ordered immediate transactions. The v5-to-v6 upgrade rebu
 
 Keyword and vector results are projections over durable records. A retrieval pack is bounded and contains citations plus explicit gaps. Before extraction, a pack can cite a live source or evidence record directly; after an accepted claim has supporting evidence, retrieval returns the claim without also emitting that supporting source. Contradicting evidence remains available as raw evidence until an explicit correction or supersession. A caller can answer from the pack, request more evidence, or say the memory is insufficient.
 
+Summary nodes are local rebuildable projections over cited evidence. A leaf stores explicit evidence citations; a parent has exactly two adjacent children and derives its citations from them. `wake` selects a byte-bounded cover, preferring newer detail when it fits; `zoom` returns the immediate children. Deletion and correction mark affected nodes and ancestors stale. `rebuild` inserts a replacement for one stale range, never rewrites historical summary text. Summary nodes are excluded from export and apply, so each replica rebuilds them from its local authoritative evidence.
+
 ## Reflection
 
 Reflection reads a bounded cited pack and may suggest claims, corrections, profile changes, review text, or procedural lessons. Suggestions are caller-owned and are not durable zkr records. A caller must explicitly invoke the ordinary cited storage, correction, profile, or review operation; none of those operations can rewrite observations or evidence.

@@ -1,0 +1,206 @@
+use super::*;
+
+fn scope() -> (TenantId, PersonId) {
+    (TenantId("a".into()), PersonId("sam".into()))
+}
+
+fn wake(db: &MemoryDb) -> WakePack {
+    let (tenant_id, person_id) = scope();
+    db.wake(WakeInput {
+        search: SearchInput {
+            tenant_id,
+            person_id,
+            query: "rollout".into(),
+            limit: 10,
+            query_embedding: None,
+            as_of: None,
+            enabled_features: Vec::new(),
+        },
+        max_bytes: 20,
+    })
+    .unwrap()
+}
+
+#[test]
+fn summary_tree_wakes_zooms_stales_and_rebuilds() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let (tenant_id, person_id) = scope();
+    let remembered = (0..4)
+        .map(|index| {
+            let mut input = remember_raw("a", "sam", &format!("rollout item {index}"));
+            input.captured_at = 10 + index;
+            input.recorded_at = 10 + index;
+            db.remember(input).unwrap()
+        })
+        .collect::<Vec<_>>();
+    let leaves = remembered
+        .iter()
+        .enumerate()
+        .map(|(index, memory)| {
+            db.nap(NapInput {
+                tenant_id: tenant_id.clone(),
+                person_id: person_id.clone(),
+                summary: format!("item {index}"),
+                evidence_ids: vec![memory.evidence_id.clone()],
+                recorded_at: 20 + index as i64,
+            })
+            .unwrap()
+            .summary_id
+        })
+        .collect::<Vec<_>>();
+    let first_half = db
+        .merge(MergeInput {
+            tenant_id: tenant_id.clone(),
+            person_id: person_id.clone(),
+            summary: "first half".into(),
+            child_ids: leaves[..2].to_vec(),
+            recorded_at: 30,
+        })
+        .unwrap()
+        .summary_id;
+    let second_half = db
+        .merge(MergeInput {
+            tenant_id: tenant_id.clone(),
+            person_id: person_id.clone(),
+            summary: "second half".into(),
+            child_ids: leaves[2..].to_vec(),
+            recorded_at: 31,
+        })
+        .unwrap()
+        .summary_id;
+    let root = db
+        .merge(MergeInput {
+            tenant_id: tenant_id.clone(),
+            person_id: person_id.clone(),
+            summary: "all rollout".into(),
+            child_ids: vec![first_half.clone(), second_half.clone()],
+            recorded_at: 32,
+        })
+        .unwrap()
+        .summary_id;
+    assert_eq!(
+        wake(&db).summaries,
+        vec![
+            db.zoom(ZoomInput {
+                tenant_id: tenant_id.clone(),
+                person_id: person_id.clone(),
+                summary_id: root.clone()
+            })
+            .unwrap()
+            .summary
+        ]
+    );
+    let zoom = db
+        .zoom(ZoomInput {
+            tenant_id: tenant_id.clone(),
+            person_id: person_id.clone(),
+            summary_id: root.clone(),
+        })
+        .unwrap();
+    assert_eq!(zoom.children.len(), 2);
+    db.delete_source(DeleteInput {
+        tenant_id: tenant_id.clone(),
+        person_id: person_id.clone(),
+        source_id: remembered[0].source_id.clone(),
+        deleted_at: 100,
+    })
+    .unwrap();
+    assert!(matches!(
+        db.zoom(ZoomInput {
+            tenant_id: tenant_id.clone(),
+            person_id: person_id.clone(),
+            summary_id: root.clone(),
+        }),
+        Err(Error::NotFound)
+    ));
+    assert_eq!(
+        db.repair_projections(RepairInput {
+            tenant_id: tenant_id.clone(),
+            person_id: person_id.clone(),
+            limit: 10,
+        })
+        .unwrap()
+        .summaries_stale,
+        3
+    );
+    let replacement = db
+        .remember(remember_raw("a", "sam", "rollout replacement"))
+        .unwrap();
+    let first_leaf = db
+        .rebuild(RebuildInput {
+            tenant_id: tenant_id.clone(),
+            person_id: person_id.clone(),
+            summary_id: leaves[0].clone(),
+            summary: "item 0 corrected".into(),
+            evidence_ids: vec![replacement.evidence_id],
+            recorded_at: 101,
+        })
+        .unwrap()
+        .summary_id;
+    let rebuilt_half = db
+        .rebuild(RebuildInput {
+            tenant_id: tenant_id.clone(),
+            person_id: person_id.clone(),
+            summary_id: first_half,
+            summary: "first half corrected".into(),
+            evidence_ids: Vec::new(),
+            recorded_at: 102,
+        })
+        .unwrap()
+        .summary_id;
+    assert_ne!(first_leaf, leaves[0]);
+    let rebuilt_root = db
+        .rebuild(RebuildInput {
+            tenant_id: tenant_id.clone(),
+            person_id: person_id.clone(),
+            summary_id: root,
+            summary: "all fixed".into(),
+            evidence_ids: Vec::new(),
+            recorded_at: 103,
+        })
+        .unwrap()
+        .summary_id;
+    assert_ne!(rebuilt_half, second_half);
+    assert_eq!(wake(&db).summaries[0].id, rebuilt_root);
+}
+
+#[test]
+fn correction_stales_its_cited_summary() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let (tenant_id, person_id) = scope();
+    let remembered = db.remember(remember("a", "sam", "Acme")).unwrap();
+    let summary_id = db
+        .nap(NapInput {
+            tenant_id: tenant_id.clone(),
+            person_id: person_id.clone(),
+            summary: "Sam works at Acme".into(),
+            evidence_ids: vec![remembered.evidence_id],
+            recorded_at: 11,
+        })
+        .unwrap()
+        .summary_id;
+    db.correct(CorrectInput {
+        tenant_id: tenant_id.clone(),
+        person_id: person_id.clone(),
+        claim_id: remembered.claim_id.unwrap(),
+        text: "Sam now works at Beta".into(),
+        value: "Beta".into(),
+        valid_at: 12,
+        recorded_at: 12,
+    })
+    .unwrap();
+    assert!(matches!(
+        db.zoom(ZoomInput {
+            tenant_id,
+            person_id,
+            summary_id,
+        }),
+        Err(Error::NotFound)
+    ));
+}

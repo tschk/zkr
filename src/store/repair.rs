@@ -2,6 +2,7 @@ use super::embeddings::{
     current_embedding_lane, embedding_target, embedding_target_parts, projection_input_from,
     stored_embedding_is_valid,
 };
+use super::summaries::stale_summary_count;
 use super::*;
 use rusqlite::{Transaction, params};
 
@@ -169,6 +170,8 @@ impl MemoryDb {
             )?;
             processed += 1;
         }
+        let summaries_stale =
+            stale_summary_count(&transaction, &input.tenant_id, &input.person_id)?;
         record_operation(
             &transaction,
             &input.tenant_id,
@@ -179,7 +182,10 @@ impl MemoryDb {
             processed_at,
         )?;
         transaction.commit()?;
-        Ok(RepairResult { processed })
+        Ok(RepairResult {
+            processed,
+            summaries_stale,
+        })
     }
 }
 
