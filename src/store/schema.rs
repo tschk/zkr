@@ -5,7 +5,7 @@ use super::export::{
 use super::*;
 use rusqlite::{Transaction, TransactionBehavior};
 
-pub(super) const SCHEMA_VERSION: i64 = 12;
+pub(super) const SCHEMA_VERSION: i64 = 13;
 pub(super) const CLAIM_TIME_INTERVAL_ERROR: &str = "invalid claim half-open time interval";
 
 pub(super) fn migrate(connection: &mut Connection) -> Result<()> {
@@ -56,6 +56,9 @@ pub(super) fn migrate(connection: &mut Connection) -> Result<()> {
     }
     if version < 12 {
         migrate_v12(&transaction)?;
+    }
+    if version < 13 {
+        migrate_v13(&transaction)?;
     }
     set_version(&transaction, SCHEMA_VERSION)?;
     transaction.commit()?;
@@ -291,6 +294,16 @@ fn migrate_v12(transaction: &Transaction<'_>) -> Result<()> {
          CREATE UNIQUE INDEX IF NOT EXISTS summary_nodes_live_range ON summary_nodes(tenant_id, person_id, start_sequence, end_sequence, level) WHERE stale_at IS NULL;
          CREATE TRIGGER IF NOT EXISTS summary_node_scope_insert BEFORE INSERT ON summary_nodes FOR EACH ROW WHEN json_array_length(NEW.evidence_ids) = 0 OR EXISTS (SELECT 1 FROM json_each(NEW.evidence_ids) citation LEFT JOIN evidence e ON e.id = citation.value AND e.tenant_id = NEW.tenant_id AND e.person_id = NEW.person_id WHERE e.id IS NULL OR e.deleted_at IS NOT NULL) OR EXISTS (SELECT 1 FROM json_each(NEW.child_ids) child LEFT JOIN summary_nodes s ON s.id = child.value AND s.tenant_id = NEW.tenant_id AND s.person_id = NEW.person_id WHERE s.id IS NULL OR s.stale_at IS NOT NULL) OR (NEW.supersedes_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM summary_nodes s WHERE s.id = NEW.supersedes_id AND s.tenant_id = NEW.tenant_id AND s.person_id = NEW.person_id AND s.stale_at IS NOT NULL)) BEGIN SELECT RAISE(ABORT, 'summary scope mismatch'); END;
          CREATE TRIGGER IF NOT EXISTS summary_node_scope_update BEFORE UPDATE OF tenant_id, person_id, evidence_ids, child_ids, supersedes_id ON summary_nodes FOR EACH ROW WHEN json_array_length(NEW.evidence_ids) = 0 OR EXISTS (SELECT 1 FROM json_each(NEW.evidence_ids) citation LEFT JOIN evidence e ON e.id = citation.value AND e.tenant_id = NEW.tenant_id AND e.person_id = NEW.person_id WHERE e.id IS NULL OR e.deleted_at IS NOT NULL) OR EXISTS (SELECT 1 FROM json_each(NEW.child_ids) child LEFT JOIN summary_nodes s ON s.id = child.value AND s.tenant_id = NEW.tenant_id AND s.person_id = NEW.person_id WHERE s.id IS NULL OR s.stale_at IS NOT NULL) OR (NEW.supersedes_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM summary_nodes s WHERE s.id = NEW.supersedes_id AND s.tenant_id = NEW.tenant_id AND s.person_id = NEW.person_id AND s.stale_at IS NOT NULL)) BEGIN SELECT RAISE(ABORT, 'summary scope mismatch'); END;",
+    )?;
+    Ok(())
+}
+
+fn migrate_v13(transaction: &Transaction<'_>) -> Result<()> {
+    // This is a disposable local retrieval projection. It is intentionally absent
+    // from authoritative commits/exports: scores never affect evidence or truth.
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS retrieval_stats(tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, target_kind TEXT NOT NULL CHECK(target_kind IN ('source', 'evidence', 'claim')), target_id TEXT NOT NULL, exposure_count INTEGER NOT NULL DEFAULT 0 CHECK(exposure_count >= 0), last_exposed_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(tenant_id, person_id, target_kind, target_id));
+         CREATE INDEX IF NOT EXISTS retrieval_stats_scope ON retrieval_stats(tenant_id, person_id, last_exposed_at);",
     )?;
     Ok(())
 }

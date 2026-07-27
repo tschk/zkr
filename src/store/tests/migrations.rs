@@ -42,6 +42,43 @@ fn migration_marks_existing_projections_for_lifecycle_revalidation() {
 }
 
 #[test]
+fn retrieval_stats_is_a_scoped_empty_projection_on_new_databases() {
+    let connection = Connection::open_in_memory().unwrap();
+    let mut db = MemoryDb { connection };
+    db.migrate().unwrap();
+
+    let version = db
+        .connection
+        .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+        .unwrap();
+    assert_eq!(version, 13);
+    let columns = db
+        .connection
+        .prepare("SELECT name FROM pragma_table_info('retrieval_stats') ORDER BY cid")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        columns,
+        [
+            "tenant_id",
+            "person_id",
+            "target_kind",
+            "target_id",
+            "exposure_count",
+            "last_exposed_at",
+        ]
+    );
+    let rows: i64 = db
+        .connection
+        .query_row("SELECT COUNT(*) FROM retrieval_stats", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(rows, 0);
+}
+
+#[test]
 fn new_database_accepts_point_locators() {
     let connection = Connection::open_in_memory().unwrap();
     connection
@@ -53,7 +90,7 @@ fn new_database_accepts_point_locators() {
         .connection
         .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
         .unwrap();
-    assert_eq!(version, 12);
+    assert_eq!(version, 13);
 
     let remembered = db
         .remember_with_locator(
@@ -176,7 +213,7 @@ fn migration_is_idempotent_for_supported_schema_versions() {
             .connection
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap();
-        assert_eq!(actual, 12);
+        assert_eq!(actual, 13);
         if version > 0 {
             let preserved = db
                 .connection
