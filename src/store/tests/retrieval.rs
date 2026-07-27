@@ -1,4 +1,126 @@
+use super::super::retrieval::rerank_score_basis_points;
 use super::*;
+
+#[test]
+fn rerank_preserves_relevance_floor_while_penalizing_age_and_reuse() {
+    let stale_reused = rerank_score_basis_points(10_000, 365 * 86_400, 4);
+    let fresh_unseen = rerank_score_basis_points(9_000, 0, 0);
+
+    assert!(stale_reused >= 6_000, "relevance must retain a 60% floor");
+    assert!(
+        fresh_unseen > stale_reused,
+        "novelty must break close relevance ties"
+    );
+}
+
+#[test]
+fn search_records_scoped_exposure_for_returned_items() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let remembered = db
+        .remember(remember_raw("a", "sam", "Marigold is a project codename"))
+        .unwrap();
+
+    let found = db
+        .search(SearchInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            query: "marigold".into(),
+            limit: 1,
+            query_embedding: None,
+            as_of: None,
+            enabled_features: Vec::new(),
+        })
+        .unwrap();
+    assert_eq!(found.items.len(), 1);
+    let exposure_count: i64 = db
+        .connection
+        .query_row(
+            "SELECT exposure_count FROM retrieval_stats WHERE tenant_id = ?1 AND person_id = ?2 AND target_kind = 'source' AND target_id = ?3",
+            params!["a", "sam", remembered.source_id.0],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(exposure_count, 1);
+}
+
+#[test]
+fn search_reranks_scoped_stats_without_mutating_canonical_timestamps() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let mut older_input = remember_raw("a", "sam", "Marigold project status");
+    older_input.captured_at = 10;
+    older_input.recorded_at = 10;
+    let older = db.remember(older_input).unwrap();
+    let mut newer_input = remember_raw("a", "sam", "Marigold project status");
+    newer_input.captured_at = 20;
+    newer_input.recorded_at = 20;
+    let newer = db.remember(newer_input).unwrap();
+    db.connection
+        .execute(
+            "INSERT INTO retrieval_stats(tenant_id, person_id, target_kind, target_id, exposure_count, last_exposed_at) VALUES ('a', 'sam', 'source', ?1, 4, 99)",
+            params![older.source_id.0],
+        )
+        .unwrap();
+    db.connection
+        .execute(
+            "INSERT INTO retrieval_stats(tenant_id, person_id, target_kind, target_id, exposure_count, last_exposed_at) VALUES ('b', 'sam', 'source', ?1, 999, 999)",
+            params![newer.source_id.0],
+        )
+        .unwrap();
+
+    let found = db
+        .search(SearchInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            query: "marigold project status".into(),
+            limit: 1,
+            query_embedding: None,
+            as_of: None,
+            enabled_features: Vec::new(),
+        })
+        .unwrap();
+    assert_eq!(
+        found.items[0].memory,
+        MemoryRef::Source(newer.source_id.clone())
+    );
+    assert_eq!(
+        db.connection
+            .query_row(
+                "SELECT recorded_at FROM sources WHERE id = ?1",
+                params![older.source_id.0],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        10
+    );
+    assert_eq!(
+        db.connection
+            .query_row(
+                "SELECT recorded_at FROM sources WHERE id = ?1",
+                params![newer.source_id.0],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        20
+    );
+    assert_eq!(
+        db.connection
+            .query_row("SELECT exposure_count FROM retrieval_stats WHERE tenant_id = 'a' AND person_id = 'sam' AND target_kind = 'source' AND target_id = ?1", params![newer.source_id.0], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        db.connection
+            .query_row("SELECT exposure_count FROM retrieval_stats WHERE tenant_id = 'b' AND person_id = 'sam' AND target_kind = 'source' AND target_id = ?1", params![newer.source_id.0], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        999
+    );
+}
 
 #[test]
 fn raw_sources_are_scoped_cited_and_deleted_from_retrieval() {
@@ -111,7 +233,18 @@ fn lexical_search_prefers_phrases_then_recalls_natural_language_tokens() {
     let first = search();
     let second = search();
 
-    assert_eq!(first.items, second.items);
+    assert_eq!(
+        first
+            .items
+            .iter()
+            .map(|item| &item.memory)
+            .collect::<Vec<_>>(),
+        second
+            .items
+            .iter()
+            .map(|item| &item.memory)
+            .collect::<Vec<_>>()
+    );
     assert_eq!(first.items.len(), 2);
     assert!(
         first

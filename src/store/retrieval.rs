@@ -59,7 +59,9 @@ impl MemoryDb {
         } else {
             Vec::new()
         };
-        let ranked = reciprocal_rank_fusion(&lexical, &dense, limit as usize);
+        let ranked = reciprocal_rank_fusion(&lexical, &dense, candidate_limit as usize);
+        let ranked =
+            self.rerank_candidates(&input.tenant_id, &input.person_id, ranked, limit as usize)?;
         let mut items = Vec::with_capacity(ranked.len());
         for (target, relevance_basis_points) in ranked {
             items.push(self.retrieval_item(
@@ -70,6 +72,7 @@ impl MemoryDb {
                 input.as_of.as_ref(),
             )?);
         }
+        self.record_exposures(&input.tenant_id, &input.person_id, &items)?;
         let gaps = if items.is_empty() {
             vec!["no cited memory matched".to_owned()]
         } else {
@@ -306,6 +309,132 @@ impl MemoryDb {
             evidence_ids: vec![EvidenceId(evidence_id)],
         })
     }
+    fn rerank_candidates(
+        &self,
+        tenant_id: &TenantId,
+        person_id: &PersonId,
+        candidates: Vec<(RetrievalTarget, u16)>,
+        limit: usize,
+    ) -> Result<Vec<(RetrievalTarget, u16)>> {
+        let mut candidates = candidates
+            .into_iter()
+            .map(|(target, relevance)| {
+                let (recorded_at, exposure_count) =
+                    self.retrieval_rank_metadata(tenant_id, person_id, &target)?;
+                Ok((target, relevance, recorded_at, exposure_count))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let newest_recorded_at = candidates
+            .iter()
+            .map(|(_, _, recorded_at, _)| *recorded_at)
+            .max()
+            .unwrap_or_default();
+        candidates.sort_by(|left, right| {
+            let left_score = rerank_score_basis_points(
+                left.1,
+                newest_recorded_at.saturating_sub(left.2),
+                left.3,
+            );
+            let right_score = rerank_score_basis_points(
+                right.1,
+                newest_recorded_at.saturating_sub(right.2),
+                right.3,
+            );
+            right_score
+                .cmp(&left_score)
+                .then_with(|| right.1.cmp(&left.1))
+                .then_with(|| left.0.cmp(&right.0))
+        });
+        candidates.truncate(limit);
+        Ok(candidates
+            .into_iter()
+            .map(|(target, relevance, recorded_at, exposure_count)| {
+                (
+                    target,
+                    rerank_score_basis_points(
+                        relevance,
+                        newest_recorded_at.saturating_sub(recorded_at),
+                        exposure_count,
+                    ),
+                )
+            })
+            .collect())
+    }
+
+    fn retrieval_rank_metadata(
+        &self,
+        tenant_id: &TenantId,
+        person_id: &PersonId,
+        target: &RetrievalTarget,
+    ) -> Result<(i64, i64)> {
+        let (sql, target_id) = match target {
+            RetrievalTarget::Source(id) => (
+                "SELECT s.recorded_at, COALESCE(rs.exposure_count, 0) FROM sources s LEFT JOIN retrieval_stats rs ON rs.tenant_id = s.tenant_id AND rs.person_id = s.person_id AND rs.target_kind = 'source' AND rs.target_id = s.id WHERE s.id = ?1 AND s.tenant_id = ?2 AND s.person_id = ?3",
+                &id.0,
+            ),
+            RetrievalTarget::Evidence(id) => (
+                "SELECT e.recorded_at, COALESCE(rs.exposure_count, 0) FROM evidence e LEFT JOIN retrieval_stats rs ON rs.tenant_id = e.tenant_id AND rs.person_id = e.person_id AND rs.target_kind = 'evidence' AND rs.target_id = e.id WHERE e.id = ?1 AND e.tenant_id = ?2 AND e.person_id = ?3",
+                &id.0,
+            ),
+            RetrievalTarget::Claim(id) => (
+                "SELECT c.recorded_from, COALESCE(rs.exposure_count, 0) FROM claims c LEFT JOIN retrieval_stats rs ON rs.tenant_id = c.tenant_id AND rs.person_id = c.person_id AND rs.target_kind = 'claim' AND rs.target_id = c.id WHERE c.id = ?1 AND c.tenant_id = ?2 AND c.person_id = ?3",
+                &id.0,
+            ),
+        };
+        self.connection
+            .query_row(sql, params![target_id, tenant_id.0, person_id.0], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .optional()?
+            .ok_or(Error::NotFound)
+    }
+
+    fn record_exposures(
+        &self,
+        tenant_id: &TenantId,
+        person_id: &PersonId,
+        items: &[RetrievalItem],
+    ) -> Result<()> {
+        let exposed_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            .min(i64::MAX as u64) as i64;
+        for item in items {
+            let Some((target_kind, target_id)) = (match &item.memory {
+                MemoryRef::Source(id) => Some(("source", &id.0)),
+                MemoryRef::Evidence(id) => Some(("evidence", &id.0)),
+                MemoryRef::Claim(id) => Some(("claim", &id.0)),
+                MemoryRef::ProfileEntry(_) | MemoryRef::DailyReview(_) => None,
+            }) else {
+                continue;
+            };
+            self.connection.execute(
+                "INSERT INTO retrieval_stats(tenant_id, person_id, target_kind, target_id, exposure_count, last_exposed_at)
+                 VALUES(?1, ?2, ?3, ?4, 1, ?5)
+                 ON CONFLICT(tenant_id, person_id, target_kind, target_id)
+                 DO UPDATE SET exposure_count = retrieval_stats.exposure_count + 1, last_exposed_at = excluded.last_exposed_at",
+                params![tenant_id.0, person_id.0, target_kind, target_id, exposed_at],
+            )?;
+        }
+        Ok(())
+    }
+}
+
+pub(super) fn rerank_score_basis_points(
+    relevance_basis_points: u16,
+    age_seconds: i64,
+    exposure_count: i64,
+) -> u16 {
+    const YEAR_SECONDS: i64 = 365 * 86_400;
+    const AGE_PENALTY: i64 = 2_500;
+    const EXPOSURE_PENALTY: i64 = 1_500;
+    const MAX_EXPOSURES: i64 = 4;
+
+    let age_penalty = age_seconds.clamp(0, YEAR_SECONDS) * AGE_PENALTY / YEAR_SECONDS;
+    let reuse_penalty = exposure_count.clamp(0, MAX_EXPOSURES) * EXPOSURE_PENALTY / MAX_EXPOSURES;
+    let multiplier = (10_000 - age_penalty - reuse_penalty).max(6_000);
+    (i64::from(relevance_basis_points) * multiplier / 10_000) as u16
 }
 
 fn lexical_queries(query: &str) -> (String, Option<String>) {
