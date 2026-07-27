@@ -146,6 +146,51 @@ fn json_cli_retrieves_raw_capture_without_a_claim() {
 }
 
 #[test]
+fn json_cli_wakes_and_naps_with_cited_memory() {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("zkr-session-{nonce}.db"));
+    let database = path.to_str().unwrap();
+    let remembered = run(
+        database,
+        "remember",
+        json!({
+            "tenant_id": "tenant",
+            "person_id": "person",
+            "kind": "conversation",
+            "text": "The rollout is Friday",
+            "captured_at": 10,
+            "recorded_at": 10
+        }),
+    );
+    let wake = run(
+        database,
+        "wake",
+        json!({ "tenant_id": "tenant", "person_id": "person", "query": "rollout", "limit": 1 }),
+    );
+    assert_eq!(
+        wake["items"][0]["evidence_ids"][0],
+        remembered["evidence_id"]
+    );
+    let nap = run(
+        database,
+        "nap",
+        json!({
+            "tenant_id": "tenant",
+            "person_id": "person",
+            "day": "2026-07-26",
+            "summary": "The rollout is Friday.",
+            "evidence_ids": [remembered["evidence_id"]],
+            "recorded_at": 11
+        }),
+    );
+    assert!(nap["id"].is_string());
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn json_cli_stores_a_profile_and_explicit_contradiction() {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
