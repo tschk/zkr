@@ -47,6 +47,42 @@ fn search_records_scoped_exposure_for_returned_items() {
 }
 
 #[test]
+fn historical_search_does_not_record_exposure() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let remembered = db
+        .remember(remember_raw("a", "sam", "Marigold historical project"))
+        .unwrap();
+
+    let found = db
+        .search(SearchInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            query: "marigold".into(),
+            limit: 1,
+            query_embedding: None,
+            as_of: Some(TemporalQuery {
+                valid_at: 100,
+                recorded_at: 100,
+            }),
+            enabled_features: Vec::new(),
+        })
+        .unwrap();
+    assert_eq!(found.items.len(), 1);
+    let exposure_count: i64 = db
+        .connection
+        .query_row(
+            "SELECT COUNT(*) FROM retrieval_stats WHERE tenant_id = ?1 AND person_id = ?2 AND target_kind = 'source' AND target_id = ?3",
+            params!["a", "sam", remembered.source_id.0],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(exposure_count, 0);
+}
+
+#[test]
 fn search_reranks_scoped_stats_without_mutating_canonical_timestamps() {
     let mut db = MemoryDb {
         connection: Connection::open_in_memory().unwrap(),

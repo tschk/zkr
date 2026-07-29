@@ -72,7 +72,9 @@ impl MemoryDb {
                 input.as_of.as_ref(),
             )?);
         }
-        self.record_exposures(&input.tenant_id, &input.person_id, &items)?;
+        if input.as_of.is_none() {
+            self.record_exposures(&input.tenant_id, &input.person_id, &items)?;
+        }
         let gaps = if items.is_empty() {
             vec!["no cited memory matched".to_owned()]
         } else {
