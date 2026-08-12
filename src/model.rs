@@ -334,6 +334,7 @@ mod tests {
                 }
             }
         }
+    }
 
     #[test]
     fn test_assert_legal_state_valid() {
@@ -386,5 +387,98 @@ mod tests {
                 "pending".to_owned()
             ))
         );
+    }
+
+    #[test]
+    fn validate_valid_claim_evidence() {
+        let evidence = ClaimEvidence {
+            tenant_id: TenantId("tenant".to_string()),
+            person_id: PersonId("person".to_string()),
+            claim_id: ClaimId("claim".to_string()),
+            evidence_id: EvidenceId("evidence".to_string()),
+            relation: EvidenceRelation::Supports,
+            confidence_basis_points: 10_000,
+        };
+        assert!(evidence.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_invalid_confidence() {
+        let evidence = ClaimEvidence {
+            tenant_id: TenantId("tenant".to_string()),
+            person_id: PersonId("person".to_string()),
+            claim_id: ClaimId("claim".to_string()),
+            evidence_id: EvidenceId("evidence".to_string()),
+            relation: EvidenceRelation::Supports,
+            confidence_basis_points: 10_001,
+        };
+        match evidence.validate() {
+            Err(ValidationError::InvalidConfidence(10_001)) => (),
+            _ => panic!("Expected InvalidConfidence error"),
+        }
+    }
+
+    #[test]
+    fn validate_empty_tenant_id() {
+        let evidence = ClaimEvidence {
+            tenant_id: TenantId("".to_string()),
+            person_id: PersonId("person".to_string()),
+            claim_id: ClaimId("claim".to_string()),
+            evidence_id: EvidenceId("evidence".to_string()),
+            relation: EvidenceRelation::Supports,
+            confidence_basis_points: 10_000,
+        };
+        match evidence.validate() {
+            Err(ValidationError::EmptyText("tenant id")) => (),
+            _ => panic!("Expected EmptyText error for tenant id"),
+        }
+    }
+
+    #[test]
+    fn validate_empty_person_id() {
+        let evidence = ClaimEvidence {
+            tenant_id: TenantId("tenant".to_string()),
+            person_id: PersonId(" ".to_string()),
+            claim_id: ClaimId("claim".to_string()),
+            evidence_id: EvidenceId("evidence".to_string()),
+            relation: EvidenceRelation::Supports,
+            confidence_basis_points: 10_000,
+        };
+        match evidence.validate() {
+            Err(ValidationError::EmptyText("person id")) => (),
+            _ => panic!("Expected EmptyText error for person id"),
+        }
+    }
+
+    #[test]
+    fn validate_empty_claim_id() {
+        let evidence = ClaimEvidence {
+            tenant_id: TenantId("tenant".to_string()),
+            person_id: PersonId("person".to_string()),
+            claim_id: ClaimId("   ".to_string()),
+            evidence_id: EvidenceId("evidence".to_string()),
+            relation: EvidenceRelation::Supports,
+            confidence_basis_points: 10_000,
+        };
+        match evidence.validate() {
+            Err(ValidationError::EmptyText("claim id")) => (),
+            _ => panic!("Expected EmptyText error for claim id"),
+        }
+    }
+
+    #[test]
+    fn validate_empty_evidence_id() {
+        let evidence = ClaimEvidence {
+            tenant_id: TenantId("tenant".to_string()),
+            person_id: PersonId("person".to_string()),
+            claim_id: ClaimId("claim".to_string()),
+            evidence_id: EvidenceId("".to_string()),
+            relation: EvidenceRelation::Supports,
+            confidence_basis_points: 10_000,
+        };
+        match evidence.validate() {
+            Err(ValidationError::EmptyText("evidence id")) => (),
+            _ => panic!("Expected EmptyText error for evidence id"),
+        }
     }
 }
