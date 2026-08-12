@@ -666,6 +666,16 @@ fn evidence_locator_returns_stored_locator_and_handles_missing_or_deleted() {
         .unwrap();
     assert_eq!(cross_scope_retrieved, None);
 
+    // A different person in the same tenant is also outside the scope.
+    let cross_person_retrieved = db
+        .evidence_locator(EvidenceLocatorInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("alex".into()),
+            evidence_id: remembered.evidence_id.clone(),
+        })
+        .unwrap();
+    assert_eq!(cross_person_retrieved, None);
+
     // After deletion, returns None
     db.delete_source(DeleteInput {
         tenant_id: TenantId("a".into()),
