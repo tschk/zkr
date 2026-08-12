@@ -501,8 +501,14 @@ fn test_record_identity() {
         predicate: "pred".into(),
         value: "val".into(),
         kind: ClaimKind::Fact,
-        valid_time: TimeRange { from: 1, until: None },
-        recorded_time: TimeRange { from: 1, until: None },
+        valid_time: TimeRange {
+            from: 1,
+            until: None,
+        },
+        recorded_time: TimeRange {
+            from: 1,
+            until: None,
+        },
         status: ClaimStatus::Accepted,
         tier: MemoryTier::LongTerm,
         processing_state: MemoryProcessingState::Processed,
@@ -556,12 +562,33 @@ fn test_record_identity() {
         deleted_at: 1,
     });
 
-    assert_eq!(record_identity(&source_record), ("source", "src-1".to_string()));
-    assert_eq!(record_identity(&evidence_record), ("evidence", "ev-1".to_string()));
-    assert_eq!(record_identity(&claim_record), ("claim", "claim-1".to_string()));
-    assert_eq!(record_identity(&claim_evidence), ("claim_evidence", "claim-1/ev-1".to_string()));
-    assert_eq!(record_identity(&correction), ("correction", "claim-0/claim-1".to_string()));
+    assert_eq!(
+        record_identity(&source_record),
+        ("source", "src-1".to_string())
+    );
+    assert_eq!(
+        record_identity(&evidence_record),
+        ("evidence", "ev-1".to_string())
+    );
+    assert_eq!(
+        record_identity(&claim_record),
+        ("claim", "claim-1".to_string())
+    );
+    assert_eq!(
+        record_identity(&claim_evidence),
+        ("claim_evidence", "claim-1/ev-1".to_string())
+    );
+    assert_eq!(
+        record_identity(&correction),
+        ("correction", "claim-0/claim-1".to_string())
+    );
     assert_eq!(record_identity(&profile), ("profile", "prof-1".to_string()));
-    assert_eq!(record_identity(&daily_review), ("daily_review", "rev-1".to_string()));
-    assert_eq!(record_identity(&deletion), ("deletion", "source:src-1".to_string()));
+    assert_eq!(
+        record_identity(&daily_review),
+        ("daily_review", "rev-1".to_string())
+    );
+    assert_eq!(
+        record_identity(&deletion),
+        ("deletion", "source:src-1".to_string())
+    );
 }
