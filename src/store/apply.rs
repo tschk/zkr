@@ -806,7 +806,7 @@ fn record_pass(record: &ExportRecord) -> u8 {
     }
 }
 
-fn record_identity(record: &ExportRecord) -> (&'static str, String) {
+pub(crate) fn record_identity(record: &ExportRecord) -> (&'static str, String) {
     match record {
         ExportRecord::Source(value) => ("source", value.source.id.0.clone()),
         ExportRecord::Evidence(value) => ("evidence", value.evidence.id.0.clone()),
