@@ -377,8 +377,12 @@ impl MemoryDb {
         require_scope(&input.tenant_id, &input.person_id)?;
         let transaction = self.connection.transaction()?;
 
-        let (evidence_ids, candidate_claim_ids, profile_ids, review_ids) =
-            find_deletion_targets(&transaction, &input.tenant_id, &input.person_id, &input.source_id)?;
+        let (evidence_ids, candidate_claim_ids, profile_ids, review_ids) = find_deletion_targets(
+            &transaction,
+            &input.tenant_id,
+            &input.person_id,
+            &input.source_id,
+        )?;
 
         validate_deletion_time(
             &transaction,
@@ -986,12 +990,7 @@ fn find_deletion_targets(
             |row| row.get::<_, String>(0).map(DailyReviewId),
         )?
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    Ok((
-        evidence_ids,
-        candidate_claim_ids,
-        profile_ids,
-        review_ids,
-    ))
+    Ok((evidence_ids, candidate_claim_ids, profile_ids, review_ids))
 }
 
 fn validate_deletion_time(
@@ -1040,13 +1039,7 @@ fn soft_delete_source_and_evidence(
         "UPDATE evidence SET deleted_at = ?1 WHERE source_id = ?2 AND tenant_id = ?3 AND person_id = ?4 AND deleted_at IS NULL",
         params![deleted_at, source_id.0, tenant_id.0, person_id.0],
     )? as u64;
-    invalidate_summaries_for_evidence(
-        transaction,
-        tenant_id,
-        person_id,
-        evidence_ids,
-        deleted_at,
-    )?;
+    invalidate_summaries_for_evidence(transaction, tenant_id, person_id, evidence_ids, deleted_at)?;
     Ok(evidence_count)
 }
 
@@ -1157,12 +1150,7 @@ fn build_deletion_records(
     deleted_at: i64,
 ) -> Result<Vec<ExportRecord>> {
     let mut records = vec![
-        ExportRecord::Source(source_record(
-            transaction,
-            tenant_id,
-            person_id,
-            source_id,
-        )?),
+        ExportRecord::Source(source_record(transaction, tenant_id, person_id, source_id)?),
         ExportRecord::Deletion(DeletionRecord {
             tenant_id: tenant_id.clone(),
             person_id: person_id.clone(),
