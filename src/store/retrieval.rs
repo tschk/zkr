@@ -400,6 +400,15 @@ impl MemoryDb {
             .unwrap_or_default()
             .as_secs()
             .min(i64::MAX as u64) as i64;
+        if items.is_empty() {
+            return Ok(());
+        }
+        let mut stmt = self.connection.prepare(
+            "INSERT INTO retrieval_stats(tenant_id, person_id, target_kind, target_id, exposure_count, last_exposed_at)
+             VALUES(?1, ?2, ?3, ?4, 1, ?5)
+             ON CONFLICT(tenant_id, person_id, target_kind, target_id)
+             DO UPDATE SET exposure_count = retrieval_stats.exposure_count + 1, last_exposed_at = excluded.last_exposed_at"
+        )?;
         for item in items {
             let Some((target_kind, target_id)) = (match &item.memory {
                 MemoryRef::Source(id) => Some(("source", &id.0)),
@@ -409,13 +418,13 @@ impl MemoryDb {
             }) else {
                 continue;
             };
-            self.connection.execute(
-                "INSERT INTO retrieval_stats(tenant_id, person_id, target_kind, target_id, exposure_count, last_exposed_at)
-                 VALUES(?1, ?2, ?3, ?4, 1, ?5)
-                 ON CONFLICT(tenant_id, person_id, target_kind, target_id)
-                 DO UPDATE SET exposure_count = retrieval_stats.exposure_count + 1, last_exposed_at = excluded.last_exposed_at",
-                params![tenant_id.0, person_id.0, target_kind, target_id, exposed_at],
-            )?;
+            stmt.execute(params![
+                tenant_id.0,
+                person_id.0,
+                target_kind,
+                target_id,
+                exposed_at
+            ])?;
         }
         Ok(())
     }
