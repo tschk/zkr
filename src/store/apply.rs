@@ -42,6 +42,12 @@ impl MemoryDb {
             records_applied: 0,
             records_skipped: 0,
         };
+        let mut check_seen = transaction.prepare_cached(
+            "SELECT EXISTS(SELECT 1 FROM memory_applied_records WHERE tenant_id = ?1 AND person_id = ?2 AND record_kind = ?3 AND record_id = ?4 AND payload_hash = ?5)",
+        )?;
+        let mut insert_seen = transaction.prepare_cached(
+            "INSERT INTO memory_applied_records(tenant_id, person_id, record_kind, record_id, payload_hash, applied_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+        )?;
         for commit in &input.commits {
             apply_commit(
                 &transaction,
@@ -50,8 +56,12 @@ impl MemoryDb {
                 commit,
                 applied_at,
                 &mut applied,
+                &mut check_seen,
+                &mut insert_seen,
             )?;
         }
+        drop(check_seen);
+        drop(insert_seen);
         record_operation(
             &transaction,
             &input.tenant_id,
@@ -118,6 +128,8 @@ fn apply_commit(
     commit: &ExportCommit,
     applied_at: Timestamp,
     applied: &mut Applied,
+    check_seen: &mut rusqlite::Statement<'_>,
+    insert_seen: &mut rusqlite::Statement<'_>,
 ) -> Result<()> {
     let mut accepted = vec![false; commit.records.len()];
     for pass in PASSES {
@@ -135,8 +147,7 @@ fn apply_commit(
             }
             let (record_kind, record_id) = record_identity(record);
             let payload_hash = record_hash(record)?;
-            let seen: bool = transaction.query_row(
-                "SELECT EXISTS(SELECT 1 FROM memory_applied_records WHERE tenant_id = ?1 AND person_id = ?2 AND record_kind = ?3 AND record_id = ?4 AND payload_hash = ?5)",
+            let seen: bool = check_seen.query_row(
                 params![tenant_id.0, person_id.0, record_kind, record_id, payload_hash],
                 |row| row.get(0),
             )?;
@@ -145,8 +156,7 @@ fn apply_commit(
                 continue;
             }
             apply_record(transaction, record, applied_at)?;
-            transaction.execute(
-                "INSERT INTO memory_applied_records(tenant_id, person_id, record_kind, record_id, payload_hash, applied_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+            insert_seen.execute(
                 params![tenant_id.0, person_id.0, record_kind, record_id, payload_hash, applied_at],
             )?;
             accepted[index] = true;
