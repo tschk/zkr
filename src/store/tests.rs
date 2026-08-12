@@ -81,6 +81,6 @@ mod embeddings;
 mod export;
 mod lifecycle;
 mod migrations;
+mod repair;
 mod retrieval;
 mod summaries;
-mod repair;
