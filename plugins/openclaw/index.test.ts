@@ -19,20 +19,15 @@ describe("zkr OpenClaw tools", () => {
   });
 
   test("rejects malformed successful CLI output", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "zkr-openclaw-"));
-    const command = join(directory, "malformed-output.js");
-    try {
-      writeFileSync(
-        command,
-        '#!/usr/bin/env bun\nprocess.stdout.write("not json");\n',
-      );
-      chmodSync(command, 0o700);
-      await expect(runZkr("search", {}, { command })).rejects.toThrow(
-        ZKR_COMMAND_FAILED,
-      );
-    } finally {
-      rmSync(directory, { force: true, recursive: true });
-    }
+    await expect(runZkr("search", {}, { command: "echo" })).rejects.toThrow(
+      ZKR_COMMAND_FAILED,
+    );
+  });
+
+  test("rejects CLI failure with non-zero exit code", async () => {
+    await expect(runZkr("search", {}, { command: "false" })).rejects.toThrow(
+      ZKR_COMMAND_FAILED,
+    );
   });
 
   for (const stream of ["stdout", "stderr"] as const) {
