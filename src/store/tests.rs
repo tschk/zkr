@@ -83,3 +83,4 @@ mod lifecycle;
 mod migrations;
 mod retrieval;
 mod summaries;
+mod repair;
