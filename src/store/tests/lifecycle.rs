@@ -614,3 +614,83 @@ fn reviews_require_live_same_scope_evidence() {
         .is_empty()
     );
 }
+
+#[test]
+fn evidence_locator_returns_stored_locator_and_handles_missing_or_deleted() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+
+    let locator = TranscriptLocator {
+        device_id: "device1".into(),
+        provider: "provider1".into(),
+        stream_id: "stream1".into(),
+        segment_id: "segment1".into(),
+        start_ms: 100,
+        end_ms: 200,
+    };
+
+    let remembered = db
+        .remember_with_locator(remember("a", "sam", "Acme"), Some(locator.clone()))
+        .unwrap();
+
+    // Successfully retrieve locator
+    let retrieved = db
+        .evidence_locator(EvidenceLocatorInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            evidence_id: remembered.evidence_id.clone(),
+        })
+        .unwrap();
+    assert_eq!(retrieved, Some(locator));
+
+    // Missing locator returns None
+    let remembered_without_locator = db.remember(remember("a", "sam", "Stark")).unwrap();
+    let retrieved_none = db
+        .evidence_locator(EvidenceLocatorInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            evidence_id: remembered_without_locator.evidence_id.clone(),
+        })
+        .unwrap();
+    assert_eq!(retrieved_none, None);
+
+    // Cross-scope returns None
+    let cross_scope_retrieved = db
+        .evidence_locator(EvidenceLocatorInput {
+            tenant_id: TenantId("b".into()),
+            person_id: PersonId("sam".into()),
+            evidence_id: remembered.evidence_id.clone(),
+        })
+        .unwrap();
+    assert_eq!(cross_scope_retrieved, None);
+
+    // A different person in the same tenant is also outside the scope.
+    let cross_person_retrieved = db
+        .evidence_locator(EvidenceLocatorInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("alex".into()),
+            evidence_id: remembered.evidence_id.clone(),
+        })
+        .unwrap();
+    assert_eq!(cross_person_retrieved, None);
+
+    // After deletion, returns None
+    db.delete_source(DeleteInput {
+        tenant_id: TenantId("a".into()),
+        person_id: PersonId("sam".into()),
+        source_id: remembered.source_id.clone(),
+        deleted_at: 20,
+    })
+    .unwrap();
+
+    let retrieved_after_delete = db
+        .evidence_locator(EvidenceLocatorInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            evidence_id: remembered.evidence_id.clone(),
+        })
+        .unwrap();
+    assert_eq!(retrieved_after_delete, None);
+}
