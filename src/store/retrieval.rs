@@ -446,7 +446,7 @@ pub(super) fn rerank_score_basis_points(
     (i64::from(relevance_basis_points) * multiplier / 10_000) as u16
 }
 
-fn lexical_queries(query: &str) -> (String, Option<String>) {
+pub(super) fn lexical_queries(query: &str) -> (String, Option<String>) {
     let quote = |value: &str| format!("\"{}\"", value.replace('"', "\"\""));
     let phrase = quote(query);
     let mut seen = HashSet::new();
