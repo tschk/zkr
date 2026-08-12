@@ -376,199 +376,65 @@ impl MemoryDb {
     pub fn delete_source(&mut self, input: DeleteInput) -> Result<Deleted> {
         require_scope(&input.tenant_id, &input.person_id)?;
         let transaction = self.connection.transaction()?;
-        let evidence_ids = transaction
-            .prepare(
-                "SELECT id FROM evidence WHERE source_id = ?1 AND tenant_id = ?2 AND person_id = ?3 ORDER BY id",
-            )?
-            .query_map(
-                params![input.source_id.0, input.tenant_id.0, input.person_id.0],
-                |row| row.get::<_, String>(0).map(EvidenceId),
-            )?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        let candidate_claim_ids = transaction
-            .prepare(
-                "SELECT DISTINCT c.id FROM claims c JOIN claim_evidence ce ON ce.claim_id = c.id AND ce.tenant_id = c.tenant_id AND ce.person_id = c.person_id JOIN evidence e ON e.id = ce.evidence_id AND e.tenant_id = ce.tenant_id AND e.person_id = ce.person_id WHERE e.source_id = ?1 AND c.tenant_id = ?2 AND c.person_id = ?3 AND c.status = 'accepted' ORDER BY c.id",
-            )?
-            .query_map(
-                params![input.source_id.0, input.tenant_id.0, input.person_id.0],
-                |row| row.get::<_, String>(0).map(ClaimId),
-            )?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        let profile_ids = transaction
-            .prepare(
-                "SELECT p.id FROM profile_entries p WHERE p.tenant_id = ?1 AND p.person_id = ?2 AND p.claim_id IN (SELECT DISTINCT ce.claim_id FROM claim_evidence ce JOIN evidence e ON e.id = ce.evidence_id AND e.tenant_id = ce.tenant_id AND e.person_id = ce.person_id WHERE e.source_id = ?3 AND ce.tenant_id = ?1 AND ce.person_id = ?2) ORDER BY p.id",
-            )?
-            .query_map(
-                params![input.tenant_id.0, input.person_id.0, input.source_id.0],
-                |row| row.get::<_, String>(0),
-            )?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        let review_ids = transaction
-            .prepare(
-                "SELECT r.id FROM daily_reviews r WHERE r.tenant_id = ?1 AND r.person_id = ?2 AND EXISTS (SELECT 1 FROM json_each(r.evidence_ids) citation JOIN evidence e ON e.id = citation.value WHERE e.source_id = ?3 AND e.tenant_id = ?1 AND e.person_id = ?2) ORDER BY r.id",
-            )?
-            .query_map(
-                params![input.tenant_id.0, input.person_id.0, input.source_id.0],
-                |row| row.get::<_, String>(0).map(DailyReviewId),
-            )?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        let recorded_at = transaction
-            .query_row(
-                "SELECT recorded_at FROM sources WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND deleted_at IS NULL",
-                params![input.source_id.0, input.tenant_id.0, input.person_id.0],
-                |row| row.get::<_, i64>(0),
-            )
-            .optional()?
-            .ok_or(Error::NotFound)?;
-        if input.deleted_at < recorded_at {
-            return Err(Error::Invalid(
-                "deleted_at cannot predate source recording".to_owned(),
-            ));
-        }
-        let changed = transaction.execute(
-            "UPDATE sources SET deleted_at = ?1, revision = revision + 1 WHERE id = ?2 AND tenant_id = ?3 AND person_id = ?4 AND deleted_at IS NULL",
-            params![input.deleted_at, input.source_id.0, input.tenant_id.0, input.person_id.0],
-        )?;
-        if changed == 0 {
-            return Err(Error::NotFound);
-        }
-        transaction.execute(
-            "DELETE FROM source_fts WHERE source_id = ?1 AND tenant_id = ?2 AND person_id = ?3",
-            params![input.source_id.0, input.tenant_id.0, input.person_id.0],
-        )?;
-        let evidence_count = transaction.execute(
-            "UPDATE evidence SET deleted_at = ?1 WHERE source_id = ?2 AND tenant_id = ?3 AND person_id = ?4 AND deleted_at IS NULL",
-            params![input.deleted_at, input.source_id.0, input.tenant_id.0, input.person_id.0],
-        )? as u64;
-        invalidate_summaries_for_evidence(
+
+        let (evidence_ids, candidate_claim_ids, profile_ids, review_ids) =
+            find_deletion_targets(&transaction, &input.tenant_id, &input.person_id, &input.source_id)?;
+
+        validate_deletion_time(
             &transaction,
             &input.tenant_id,
             &input.person_id,
+            &input.source_id,
+            input.deleted_at,
+        )?;
+
+        let evidence_count = soft_delete_source_and_evidence(
+            &transaction,
+            &input.tenant_id,
+            &input.person_id,
+            &input.source_id,
             &evidence_ids,
             input.deleted_at,
         )?;
-        let claim_count = transaction.execute(
-            "UPDATE claims SET status = 'retracted', recorded_until = ?1
-             WHERE tenant_id = ?2 AND person_id = ?3 AND status = 'accepted'
-             AND id IN (SELECT ce.claim_id FROM claim_evidence ce JOIN evidence e ON e.id = ce.evidence_id AND e.tenant_id = ce.tenant_id AND e.person_id = ce.person_id WHERE e.source_id = ?4)
-             AND NOT EXISTS (SELECT 1 FROM claim_evidence live_ce JOIN evidence live_e ON live_e.id = live_ce.evidence_id AND live_e.tenant_id = live_ce.tenant_id AND live_e.person_id = live_ce.person_id WHERE live_ce.claim_id = claims.id AND live_ce.relation = '\"supports\"' AND live_e.deleted_at IS NULL)",
-            params![input.deleted_at, input.tenant_id.0, input.person_id.0, input.source_id.0],
-        ).map_err(|error| match error {
-            rusqlite::Error::SqliteFailure(_, Some(message))
-                if message == schema::CLAIM_TIME_INTERVAL_ERROR =>
-            {
-                Error::Invalid(
-                    "deleted_at must advance affected claims' recorded intervals".to_owned(),
-                )
-            }
-            error => Error::Sql(error),
-        })? as u64;
-        let mut changed_claim_ids = Vec::new();
-        for claim_id in candidate_claim_ids {
-            let changed: bool = transaction.query_row(
-                "SELECT status = 'retracted' AND recorded_until = ?1 FROM claims WHERE id = ?2 AND tenant_id = ?3 AND person_id = ?4",
-                params![input.deleted_at, claim_id.0, input.tenant_id.0, input.person_id.0],
-                |row| row.get(0),
-            )?;
-            if changed {
-                changed_claim_ids.push(claim_id);
-            }
-        }
-        enqueue_projection_repair(
+
+        let (claim_count, changed_claim_ids) = retract_claims(
             &transaction,
             &input.tenant_id,
             &input.person_id,
-            EmbeddingTarget::Source(input.source_id.clone()),
-            "delete_sync",
+            &input.source_id,
+            &candidate_claim_ids,
             input.deleted_at,
         )?;
-        for evidence_id in &evidence_ids {
-            enqueue_projection_repair(
-                &transaction,
-                &input.tenant_id,
-                &input.person_id,
-                EmbeddingTarget::Evidence(evidence_id.clone()),
-                "delete_sync",
-                input.deleted_at,
-            )?;
-        }
-        for claim_id in &changed_claim_ids {
-            enqueue_projection_repair(
-                &transaction,
-                &input.tenant_id,
-                &input.person_id,
-                EmbeddingTarget::Claim(claim_id.clone()),
-                "delete_sync",
-                input.deleted_at,
-            )?;
-        }
-        transaction.execute(
-            "DELETE FROM profile_entries WHERE tenant_id = ?1 AND person_id = ?2 AND claim_id IN (SELECT id FROM claims WHERE tenant_id = ?1 AND person_id = ?2 AND status = 'retracted')",
-            params![input.tenant_id.0, input.person_id.0],
+
+        enqueue_deletion_repairs(
+            &transaction,
+            &input.tenant_id,
+            &input.person_id,
+            &input.source_id,
+            &evidence_ids,
+            &changed_claim_ids,
+            input.deleted_at,
         )?;
-        transaction.execute(
-            "DELETE FROM daily_reviews WHERE tenant_id = ?1 AND person_id = ?2 AND EXISTS (SELECT 1 FROM json_each(evidence_ids) citation JOIN evidence e ON e.id = citation.value WHERE e.source_id = ?3 AND e.tenant_id = ?1 AND e.person_id = ?2)",
-            params![input.tenant_id.0, input.person_id.0, input.source_id.0],
+
+        delete_dependent_projections(
+            &transaction,
+            &input.tenant_id,
+            &input.person_id,
+            &input.source_id,
         )?;
-        let mut records = vec![
-            ExportRecord::Source(source_record(
-                &transaction,
-                &input.tenant_id,
-                &input.person_id,
-                &input.source_id,
-            )?),
-            ExportRecord::Deletion(DeletionRecord {
-                tenant_id: input.tenant_id.clone(),
-                person_id: input.person_id.clone(),
-                target: MemoryRef::Source(input.source_id.clone()),
-                deleted_at: input.deleted_at,
-            }),
-        ];
-        for evidence_id in &evidence_ids {
-            records.push(ExportRecord::Evidence(evidence_record(
-                &transaction,
-                &input.tenant_id,
-                &input.person_id,
-                evidence_id,
-            )?));
-            records.push(ExportRecord::Deletion(DeletionRecord {
-                tenant_id: input.tenant_id.clone(),
-                person_id: input.person_id.clone(),
-                target: MemoryRef::Evidence(evidence_id.clone()),
-                deleted_at: input.deleted_at,
-            }));
-        }
-        for claim_id in &changed_claim_ids {
-            records.push(ExportRecord::Claim(claim_record(
-                &transaction,
-                &input.tenant_id,
-                &input.person_id,
-                claim_id,
-            )?));
-        }
-        for profile_id in profile_ids {
-            let remains: bool = transaction.query_row(
-                "SELECT EXISTS(SELECT 1 FROM profile_entries WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3)",
-                params![profile_id, input.tenant_id.0, input.person_id.0],
-                |row| row.get(0),
-            )?;
-            if !remains {
-                records.push(ExportRecord::Deletion(DeletionRecord {
-                    tenant_id: input.tenant_id.clone(),
-                    person_id: input.person_id.clone(),
-                    target: MemoryRef::ProfileEntry(ProfileEntryId(profile_id)),
-                    deleted_at: input.deleted_at,
-                }));
-            }
-        }
-        records.extend(review_ids.into_iter().map(|id| {
-            ExportRecord::Deletion(DeletionRecord {
-                tenant_id: input.tenant_id.clone(),
-                person_id: input.person_id.clone(),
-                target: MemoryRef::DailyReview(id),
-                deleted_at: input.deleted_at,
-            })
-        }));
+
+        let records = build_deletion_records(
+            &transaction,
+            &input.tenant_id,
+            &input.person_id,
+            &input.source_id,
+            &evidence_ids,
+            &changed_claim_ids,
+            profile_ids,
+            review_ids,
+            input.deleted_at,
+        )?;
+
         append_commit(
             &transaction,
             &input.tenant_id,
@@ -576,7 +442,9 @@ impl MemoryDb {
             input.deleted_at,
             records,
         )?;
+
         transaction.commit()?;
+
         Ok(Deleted {
             source_id: input.source_id,
             evidence_count,
@@ -1069,4 +937,283 @@ pub(super) fn validate_transcript_locator(locator: &TranscriptLocator) -> Result
 
 fn new_id(transaction: &Transaction<'_>) -> Result<String> {
     Ok(transaction.query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))?)
+}
+
+fn find_deletion_targets(
+    transaction: &rusqlite::Transaction<'_>,
+    tenant_id: &TenantId,
+    person_id: &PersonId,
+    source_id: &SourceId,
+) -> Result<(
+    Vec<EvidenceId>,
+    Vec<ClaimId>,
+    Vec<String>,
+    Vec<DailyReviewId>,
+)> {
+    let evidence_ids = transaction
+        .prepare(
+            "SELECT id FROM evidence WHERE source_id = ?1 AND tenant_id = ?2 AND person_id = ?3 ORDER BY id",
+        )?
+        .query_map(
+            params![source_id.0, tenant_id.0, person_id.0],
+            |row| row.get::<_, String>(0).map(EvidenceId),
+        )?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let candidate_claim_ids = transaction
+        .prepare(
+            "SELECT DISTINCT c.id FROM claims c JOIN claim_evidence ce ON ce.claim_id = c.id AND ce.tenant_id = c.tenant_id AND ce.person_id = c.person_id JOIN evidence e ON e.id = ce.evidence_id AND e.tenant_id = ce.tenant_id AND e.person_id = ce.person_id WHERE e.source_id = ?1 AND c.tenant_id = ?2 AND c.person_id = ?3 AND c.status = 'accepted' ORDER BY c.id",
+        )?
+        .query_map(
+            params![source_id.0, tenant_id.0, person_id.0],
+            |row| row.get::<_, String>(0).map(ClaimId),
+        )?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let profile_ids = transaction
+        .prepare(
+            "SELECT p.id FROM profile_entries p WHERE p.tenant_id = ?1 AND p.person_id = ?2 AND p.claim_id IN (SELECT DISTINCT ce.claim_id FROM claim_evidence ce JOIN evidence e ON e.id = ce.evidence_id AND e.tenant_id = ce.tenant_id AND e.person_id = ce.person_id WHERE e.source_id = ?3 AND ce.tenant_id = ?1 AND ce.person_id = ?2) ORDER BY p.id",
+        )?
+        .query_map(
+            params![tenant_id.0, person_id.0, source_id.0],
+            |row| row.get::<_, String>(0),
+        )?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let review_ids = transaction
+        .prepare(
+            "SELECT r.id FROM daily_reviews r WHERE r.tenant_id = ?1 AND r.person_id = ?2 AND EXISTS (SELECT 1 FROM json_each(r.evidence_ids) citation JOIN evidence e ON e.id = citation.value WHERE e.source_id = ?3 AND e.tenant_id = ?1 AND e.person_id = ?2) ORDER BY r.id",
+        )?
+        .query_map(
+            params![tenant_id.0, person_id.0, source_id.0],
+            |row| row.get::<_, String>(0).map(DailyReviewId),
+        )?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok((
+        evidence_ids,
+        candidate_claim_ids,
+        profile_ids,
+        review_ids,
+    ))
+}
+
+fn validate_deletion_time(
+    transaction: &rusqlite::Transaction<'_>,
+    tenant_id: &TenantId,
+    person_id: &PersonId,
+    source_id: &SourceId,
+    deleted_at: i64,
+) -> Result<()> {
+    let recorded_at = transaction
+        .query_row(
+            "SELECT recorded_at FROM sources WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND deleted_at IS NULL",
+            params![source_id.0, tenant_id.0, person_id.0],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?
+        .ok_or(Error::NotFound)?;
+    if deleted_at < recorded_at {
+        return Err(Error::Invalid(
+            "deleted_at cannot predate source recording".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn soft_delete_source_and_evidence(
+    transaction: &rusqlite::Transaction<'_>,
+    tenant_id: &TenantId,
+    person_id: &PersonId,
+    source_id: &SourceId,
+    evidence_ids: &[EvidenceId],
+    deleted_at: i64,
+) -> Result<u64> {
+    let changed = transaction.execute(
+        "UPDATE sources SET deleted_at = ?1, revision = revision + 1 WHERE id = ?2 AND tenant_id = ?3 AND person_id = ?4 AND deleted_at IS NULL",
+        params![deleted_at, source_id.0, tenant_id.0, person_id.0],
+    )?;
+    if changed == 0 {
+        return Err(Error::NotFound);
+    }
+    transaction.execute(
+        "DELETE FROM source_fts WHERE source_id = ?1 AND tenant_id = ?2 AND person_id = ?3",
+        params![source_id.0, tenant_id.0, person_id.0],
+    )?;
+    let evidence_count = transaction.execute(
+        "UPDATE evidence SET deleted_at = ?1 WHERE source_id = ?2 AND tenant_id = ?3 AND person_id = ?4 AND deleted_at IS NULL",
+        params![deleted_at, source_id.0, tenant_id.0, person_id.0],
+    )? as u64;
+    invalidate_summaries_for_evidence(
+        transaction,
+        tenant_id,
+        person_id,
+        evidence_ids,
+        deleted_at,
+    )?;
+    Ok(evidence_count)
+}
+
+fn retract_claims(
+    transaction: &rusqlite::Transaction<'_>,
+    tenant_id: &TenantId,
+    person_id: &PersonId,
+    source_id: &SourceId,
+    candidate_claim_ids: &[ClaimId],
+    deleted_at: i64,
+) -> Result<(u64, Vec<ClaimId>)> {
+    let claim_count = transaction.execute(
+        "UPDATE claims SET status = 'retracted', recorded_until = ?1
+         WHERE tenant_id = ?2 AND person_id = ?3 AND status = 'accepted'
+         AND id IN (SELECT ce.claim_id FROM claim_evidence ce JOIN evidence e ON e.id = ce.evidence_id AND e.tenant_id = ce.tenant_id AND e.person_id = ce.person_id WHERE e.source_id = ?4)
+         AND NOT EXISTS (SELECT 1 FROM claim_evidence live_ce JOIN evidence live_e ON live_e.id = live_ce.evidence_id AND live_e.tenant_id = live_ce.tenant_id AND live_e.person_id = live_ce.person_id WHERE live_ce.claim_id = claims.id AND live_ce.relation = '\"supports\"' AND live_e.deleted_at IS NULL)",
+        params![deleted_at, tenant_id.0, person_id.0, source_id.0],
+    ).map_err(|error| match error {
+        rusqlite::Error::SqliteFailure(_, Some(message))
+            if message == schema::CLAIM_TIME_INTERVAL_ERROR =>
+        {
+            Error::Invalid(
+                "deleted_at must advance affected claims' recorded intervals".to_owned(),
+            )
+        }
+        error => Error::Sql(error),
+    })? as u64;
+    let mut changed_claim_ids = Vec::new();
+    for claim_id in candidate_claim_ids {
+        let changed: bool = transaction.query_row(
+            "SELECT status = 'retracted' AND recorded_until = ?1 FROM claims WHERE id = ?2 AND tenant_id = ?3 AND person_id = ?4",
+            params![deleted_at, claim_id.0, tenant_id.0, person_id.0],
+            |row| row.get(0),
+        )?;
+        if changed {
+            changed_claim_ids.push(claim_id.clone());
+        }
+    }
+    Ok((claim_count, changed_claim_ids))
+}
+
+fn enqueue_deletion_repairs(
+    transaction: &rusqlite::Transaction<'_>,
+    tenant_id: &TenantId,
+    person_id: &PersonId,
+    source_id: &SourceId,
+    evidence_ids: &[EvidenceId],
+    changed_claim_ids: &[ClaimId],
+    deleted_at: i64,
+) -> Result<()> {
+    enqueue_projection_repair(
+        transaction,
+        tenant_id,
+        person_id,
+        EmbeddingTarget::Source(source_id.clone()),
+        "delete_sync",
+        deleted_at,
+    )?;
+    for evidence_id in evidence_ids {
+        enqueue_projection_repair(
+            transaction,
+            tenant_id,
+            person_id,
+            EmbeddingTarget::Evidence(evidence_id.clone()),
+            "delete_sync",
+            deleted_at,
+        )?;
+    }
+    for claim_id in changed_claim_ids {
+        enqueue_projection_repair(
+            transaction,
+            tenant_id,
+            person_id,
+            EmbeddingTarget::Claim(claim_id.clone()),
+            "delete_sync",
+            deleted_at,
+        )?;
+    }
+    Ok(())
+}
+
+fn delete_dependent_projections(
+    transaction: &rusqlite::Transaction<'_>,
+    tenant_id: &TenantId,
+    person_id: &PersonId,
+    source_id: &SourceId,
+) -> Result<()> {
+    transaction.execute(
+        "DELETE FROM profile_entries WHERE tenant_id = ?1 AND person_id = ?2 AND claim_id IN (SELECT id FROM claims WHERE tenant_id = ?1 AND person_id = ?2 AND status = 'retracted')",
+        params![tenant_id.0, person_id.0],
+    )?;
+    transaction.execute(
+        "DELETE FROM daily_reviews WHERE tenant_id = ?1 AND person_id = ?2 AND EXISTS (SELECT 1 FROM json_each(evidence_ids) citation JOIN evidence e ON e.id = citation.value WHERE e.source_id = ?3 AND e.tenant_id = ?1 AND e.person_id = ?2)",
+        params![tenant_id.0, person_id.0, source_id.0],
+    )?;
+    Ok(())
+}
+
+fn build_deletion_records(
+    transaction: &rusqlite::Transaction<'_>,
+    tenant_id: &TenantId,
+    person_id: &PersonId,
+    source_id: &SourceId,
+    evidence_ids: &[EvidenceId],
+    changed_claim_ids: &[ClaimId],
+    profile_ids: Vec<String>,
+    review_ids: Vec<DailyReviewId>,
+    deleted_at: i64,
+) -> Result<Vec<ExportRecord>> {
+    let mut records = vec![
+        ExportRecord::Source(source_record(
+            transaction,
+            tenant_id,
+            person_id,
+            source_id,
+        )?),
+        ExportRecord::Deletion(DeletionRecord {
+            tenant_id: tenant_id.clone(),
+            person_id: person_id.clone(),
+            target: MemoryRef::Source(source_id.clone()),
+            deleted_at,
+        }),
+    ];
+    for evidence_id in evidence_ids {
+        records.push(ExportRecord::Evidence(evidence_record(
+            transaction,
+            tenant_id,
+            person_id,
+            evidence_id,
+        )?));
+        records.push(ExportRecord::Deletion(DeletionRecord {
+            tenant_id: tenant_id.clone(),
+            person_id: person_id.clone(),
+            target: MemoryRef::Evidence(evidence_id.clone()),
+            deleted_at,
+        }));
+    }
+    for claim_id in changed_claim_ids {
+        records.push(ExportRecord::Claim(claim_record(
+            transaction,
+            tenant_id,
+            person_id,
+            claim_id,
+        )?));
+    }
+    for profile_id in profile_ids {
+        let remains: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM profile_entries WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3)",
+            params![profile_id, tenant_id.0, person_id.0],
+            |row| row.get(0),
+        )?;
+        if !remains {
+            records.push(ExportRecord::Deletion(DeletionRecord {
+                tenant_id: tenant_id.clone(),
+                person_id: person_id.clone(),
+                target: MemoryRef::ProfileEntry(ProfileEntryId(profile_id)),
+                deleted_at,
+            }));
+        }
+    }
+    records.extend(review_ids.into_iter().map(|id| {
+        ExportRecord::Deletion(DeletionRecord {
+            tenant_id: tenant_id.clone(),
+            person_id: person_id.clone(),
+            target: MemoryRef::DailyReview(id),
+            deleted_at,
+        })
+    }));
+    Ok(records)
 }
