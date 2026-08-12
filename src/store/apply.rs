@@ -82,6 +82,12 @@ impl MemoryDb {
             records_applied: 0,
             records_skipped: 0,
         };
+        let mut check_seen = transaction.prepare(
+            "SELECT EXISTS(SELECT 1 FROM memory_applied_records WHERE tenant_id = ?1 AND person_id = ?2 AND record_kind = ?3 AND record_id = ?4 AND payload_hash = ?5)"
+        )?;
+        let mut insert_applied = transaction.prepare(
+            "INSERT INTO memory_applied_records(tenant_id, person_id, record_kind, record_id, payload_hash, applied_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6)"
+        )?;
         for commit in &input.commits {
             let mut accepted = vec![false; commit.records.len()];
             for pass in PASSES {
@@ -99,9 +105,14 @@ impl MemoryDb {
                     }
                     let (record_kind, record_id) = record_identity(record);
                     let payload_hash = record_hash(record)?;
-                    let seen: bool = transaction.query_row(
-                        "SELECT EXISTS(SELECT 1 FROM memory_applied_records WHERE tenant_id = ?1 AND person_id = ?2 AND record_kind = ?3 AND record_id = ?4 AND payload_hash = ?5)",
-                        params![input.tenant_id.0, input.person_id.0, record_kind, record_id, payload_hash],
+                    let seen: bool = check_seen.query_row(
+                        params![
+                            input.tenant_id.0,
+                            input.person_id.0,
+                            record_kind,
+                            record_id,
+                            payload_hash
+                        ],
                         |row| row.get(0),
                     )?;
                     if seen {
@@ -109,10 +120,14 @@ impl MemoryDb {
                         continue;
                     }
                     apply_record(&transaction, record, applied_at)?;
-                    transaction.execute(
-                        "INSERT INTO memory_applied_records(tenant_id, person_id, record_kind, record_id, payload_hash, applied_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
-                        params![input.tenant_id.0, input.person_id.0, record_kind, record_id, payload_hash, applied_at],
-                    )?;
+                    insert_applied.execute(params![
+                        input.tenant_id.0,
+                        input.person_id.0,
+                        record_kind,
+                        record_id,
+                        payload_hash,
+                        applied_at
+                    ])?;
                     accepted[index] = true;
                     applied.records_applied += 1;
                 }
@@ -148,6 +163,8 @@ impl MemoryDb {
             None,
             applied_at,
         )?;
+        drop(check_seen);
+        drop(insert_applied);
         transaction.commit()?;
         Ok(applied)
     }
