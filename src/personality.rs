@@ -309,103 +309,9 @@ impl Personality {
         self.recent_events.push(event.clone());
         let epoch = event.epoch;
 
-        // --- Hard rules (veto rules checked first) ---
-        let mut action = TurnAction::StaySilent;
-        let mut strategy = "observe".to_string();
-        let mut confidence: u16 = 5000;
-        let mut rationale = String::new();
-        let mut hard_rule_hit = false;
-
-        // Rate limit: too soon after last reply — veto all other rules.
-        if self.rules.min_reply_interval > 0
-            && let Some(last) = self.last_agent_reply_epoch
-            && epoch - last < self.rules.min_reply_interval
-        {
-            action = TurnAction::StaySilent;
-            strategy = "rate_limited".into();
-            confidence = 8000;
-            rationale = format!(
-                "only {} epochs since last reply (min {})",
-                epoch - last,
-                self.rules.min_reply_interval
-            );
-            hard_rule_hit = true;
-        }
-
-        // Max consecutive turns: force silence — veto all other rules.
-        if !hard_rule_hit && self.consecutive_agent_turns >= self.rules.max_consecutive_turns {
-            action = TurnAction::StaySilent;
-            strategy = "consecutive_limit".into();
-            confidence = 8500;
-            rationale = format!(
-                "max consecutive turns ({}) reached",
-                self.rules.max_consecutive_turns
-            );
-            hard_rule_hit = true;
-        }
-
-        // Direct mention forces Speak (if not vetoed).
-        if !hard_rule_hit
-            && self.rules.mention_triggers_reply
-            && event.event_kind == "message"
-            && event.content.contains("@agent")
-        {
-            action = TurnAction::Speak;
-            strategy = "direct_reply".into();
-            confidence = 9500;
-            rationale = "direct mention detected".into();
-            hard_rule_hit = true;
-        }
-
-        // Command forces Speak (if not vetoed).
-        if !hard_rule_hit
-            && self.rules.command_triggers_reply
-            && event.event_kind == "message"
-            && (event.content.starts_with('/') || event.content.starts_with('!'))
-        {
-            action = TurnAction::Speak;
-            strategy = "command_response".into();
-            confidence = 9000;
-            rationale = "command detected".into();
-            hard_rule_hit = true;
-        }
-
-        // --- Learned policy (heuristic scoring) ---
-        if !hard_rule_hit {
-            let is_question = event.content.contains('?');
-            let is_message = event.event_kind == "message";
-            let agent_addressed = event.content.to_lowercase().contains("agent")
-                || event.content.to_lowercase().contains("assistant")
-                || event.content.to_lowercase().contains("help");
-
-            if is_message && is_question {
-                action = TurnAction::Speak;
-                strategy = "answer_question".into();
-                confidence = 7500;
-                rationale = "question detected, likely directed at agent".into();
-            } else if is_message && agent_addressed {
-                action = TurnAction::Speak;
-                strategy = "addressed_reply".into();
-                confidence = 7000;
-                rationale = "agent addressed in message".into();
-            } else if event.event_kind == "reaction" {
-                action = TurnAction::React;
-                strategy = "mirror_reaction".into();
-                confidence = 6000;
-                rationale = "reaction event, mirror with react".into();
-            } else if is_message {
-                // Non-addressed message: stay silent with moderate confidence.
-                action = TurnAction::StaySilent;
-                strategy = "listen".into();
-                confidence = 6500;
-                rationale = "message not directed at agent".into();
-            } else {
-                action = TurnAction::ContinuePending;
-                strategy = "await_context".into();
-                confidence = 5500;
-                rationale = "non-message event, await more context".into();
-            }
-        }
+        let (action, strategy, confidence, rationale) = self
+            .evaluate_hard_rules(event, epoch)
+            .unwrap_or_else(|| self.evaluate_learned_policy(event));
 
         // Track consecutive turns.
         match action {
@@ -440,6 +346,119 @@ impl Personality {
             decision,
             behavioral_context,
         })
+    }
+
+    fn evaluate_hard_rules(
+        &self,
+        event: &ConversationEvent,
+        epoch: u64,
+    ) -> Option<(TurnAction, String, u16, String)> {
+        // Rate limit: too soon after last reply — veto all other rules.
+        if self.rules.min_reply_interval > 0
+            && let Some(last) = self.last_agent_reply_epoch
+            && epoch - last < self.rules.min_reply_interval
+        {
+            return Some((
+                TurnAction::StaySilent,
+                "rate_limited".into(),
+                8000,
+                format!(
+                    "only {} epochs since last reply (min {})",
+                    epoch - last,
+                    self.rules.min_reply_interval
+                ),
+            ));
+        }
+
+        // Max consecutive turns: force silence — veto all other rules.
+        if self.consecutive_agent_turns >= self.rules.max_consecutive_turns {
+            return Some((
+                TurnAction::StaySilent,
+                "consecutive_limit".into(),
+                8500,
+                format!(
+                    "max consecutive turns ({}) reached",
+                    self.rules.max_consecutive_turns
+                ),
+            ));
+        }
+
+        // Direct mention forces Speak (if not vetoed).
+        if self.rules.mention_triggers_reply
+            && event.event_kind == "message"
+            && event.content.contains("@agent")
+        {
+            return Some((
+                TurnAction::Speak,
+                "direct_reply".into(),
+                9500,
+                "direct mention detected".into(),
+            ));
+        }
+
+        // Command forces Speak (if not vetoed).
+        if self.rules.command_triggers_reply
+            && event.event_kind == "message"
+            && (event.content.starts_with('/') || event.content.starts_with('!'))
+        {
+            return Some((
+                TurnAction::Speak,
+                "command_response".into(),
+                9000,
+                "command detected".into(),
+            ));
+        }
+
+        None
+    }
+
+    fn evaluate_learned_policy(
+        &self,
+        event: &ConversationEvent,
+    ) -> (TurnAction, String, u16, String) {
+        let is_question = event.content.contains('?');
+        let is_message = event.event_kind == "message";
+        let agent_addressed = event.content.to_lowercase().contains("agent")
+            || event.content.to_lowercase().contains("assistant")
+            || event.content.to_lowercase().contains("help");
+
+        if is_message && is_question {
+            (
+                TurnAction::Speak,
+                "answer_question".into(),
+                7500,
+                "question detected, likely directed at agent".into(),
+            )
+        } else if is_message && agent_addressed {
+            (
+                TurnAction::Speak,
+                "addressed_reply".into(),
+                7000,
+                "agent addressed in message".into(),
+            )
+        } else if event.event_kind == "reaction" {
+            (
+                TurnAction::React,
+                "mirror_reaction".into(),
+                6000,
+                "reaction event, mirror with react".into(),
+            )
+        } else if is_message {
+            // Non-addressed message: stay silent with moderate confidence.
+            (
+                TurnAction::StaySilent,
+                "listen".into(),
+                6500,
+                "message not directed at agent".into(),
+            )
+        } else {
+            (
+                TurnAction::ContinuePending,
+                "await_context".into(),
+                5500,
+                "non-message event, await more context".into(),
+            )
+        }
     }
 
     /// Retrieve behavioral context relevant to an incoming event.
