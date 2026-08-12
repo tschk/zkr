@@ -7,22 +7,37 @@ fn lexical_queries_handles_edge_cases() {
     assert_eq!(lexical_queries("hello"), ("\"hello\"".to_string(), None));
     assert_eq!(
         lexical_queries("hello world"),
-        ("\"hello world\"".to_string(), Some("\"hello\" OR \"world\"".to_string()))
+        (
+            "\"hello world\"".to_string(),
+            Some("\"hello\" OR \"world\"".to_string())
+        )
     );
     assert_eq!(
         lexical_queries("Hello hello HELLO world"),
-        ("\"Hello hello HELLO world\"".to_string(), Some("\"Hello\" OR \"world\"".to_string()))
+        (
+            "\"Hello hello HELLO world\"".to_string(),
+            Some("\"Hello\" OR \"world\"".to_string())
+        )
     );
     assert_eq!(
         lexical_queries("hello \"world\""),
-        ("\"hello \"\"world\"\"\"".to_string(), Some("\"hello\" OR \"world\"".to_string()))
+        (
+            "\"hello \"\"world\"\"\"".to_string(),
+            Some("\"hello\" OR \"world\"".to_string())
+        )
     );
     assert_eq!(
         lexical_queries("hello-world! test?"),
-        ("\"hello-world! test?\"".to_string(), Some("\"hello\" OR \"world\" OR \"test\"".to_string()))
+        (
+            "\"hello-world! test?\"".to_string(),
+            Some("\"hello\" OR \"world\" OR \"test\"".to_string())
+        )
     );
 
-    let long_query = (0..40).map(|i| format!("term{}", i)).collect::<Vec<_>>().join(" ");
+    let long_query = (0..40)
+        .map(|i| format!("term{}", i))
+        .collect::<Vec<_>>()
+        .join(" ");
     let (phrase, tokens) = lexical_queries(&long_query);
     assert_eq!(phrase, format!("\"{}\"", long_query));
     let tokens = tokens.unwrap();
