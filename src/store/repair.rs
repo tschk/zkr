@@ -70,6 +70,9 @@ impl MemoryDb {
         let processed_at: Timestamp =
             transaction.query_row("SELECT unixepoch()", [], |row| row.get(0))?;
         let mut processed = 0;
+        let mut statement = transaction.prepare(
+            "SELECT model, version, target_revision, input_hash, dimension, normalization, distance, vector FROM embeddings WHERE tenant_id = ?1 AND person_id = ?2 AND target_kind = ?3 AND target_id = ?4",
+        )?;
         for (id, target_kind, target_id) in rows {
             let target = match embedding_target(&target_kind, &target_id) {
                 Ok(target) => target,
@@ -88,9 +91,6 @@ impl MemoryDb {
                 target.clone(),
             ) {
                 Ok(current) => {
-                    let mut statement = transaction.prepare(
-                        "SELECT model, version, target_revision, input_hash, dimension, normalization, distance, vector FROM embeddings WHERE tenant_id = ?1 AND person_id = ?2 AND target_kind = ?3 AND target_id = ?4",
-                    )?;
                     let embedding_rows = statement.query_map(
                         params![input.tenant_id.0, input.person_id.0, target_kind, target_id],
                         |row| {
@@ -108,7 +108,6 @@ impl MemoryDb {
                     )?;
                     let embedding_rows: Vec<_> =
                         embedding_rows.collect::<std::result::Result<Vec<_>, _>>()?;
-                    drop(statement);
                     for (
                         model,
                         version,
@@ -170,6 +169,7 @@ impl MemoryDb {
             )?;
             processed += 1;
         }
+        drop(statement);
         let summaries_stale =
             stale_summary_count(&transaction, &input.tenant_id, &input.person_id)?;
         record_operation(
