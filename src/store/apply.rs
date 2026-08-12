@@ -121,6 +121,7 @@ fn validate_apply_input(input: &ApplyInput) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_commit(
     transaction: &Transaction<'_>,
     tenant_id: &TenantId,
@@ -148,7 +149,13 @@ fn apply_commit(
             let (record_kind, record_id) = record_identity(record);
             let payload_hash = record_hash(record)?;
             let seen: bool = check_seen.query_row(
-                params![tenant_id.0, person_id.0, record_kind, record_id, payload_hash],
+                params![
+                    tenant_id.0,
+                    person_id.0,
+                    record_kind,
+                    record_id,
+                    payload_hash
+                ],
                 |row| row.get(0),
             )?;
             if seen {
@@ -156,9 +163,14 @@ fn apply_commit(
                 continue;
             }
             apply_record(transaction, record, applied_at)?;
-            insert_seen.execute(
-                params![tenant_id.0, person_id.0, record_kind, record_id, payload_hash, applied_at],
-            )?;
+            insert_seen.execute(params![
+                tenant_id.0,
+                person_id.0,
+                record_kind,
+                record_id,
+                payload_hash,
+                applied_at
+            ])?;
             accepted[index] = true;
             applied.records_applied += 1;
         }

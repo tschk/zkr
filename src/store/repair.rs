@@ -73,12 +73,10 @@ fn process_repair_target(
     target_kind: &str,
     target_id: &str,
     target: EmbeddingTarget,
+    statement: &mut rusqlite::Statement<'_>,
 ) -> Result<()> {
     match projection_input_from(transaction, &input.tenant_id, &input.person_id, target) {
         Ok(current) => {
-            let mut statement = transaction.prepare(
-                "SELECT model, version, target_revision, input_hash, dimension, normalization, distance, vector FROM embeddings WHERE tenant_id = ?1 AND person_id = ?2 AND target_kind = ?3 AND target_id = ?4",
-            )?;
             let embedding_rows = statement.query_map(
                 params![input.tenant_id.0, input.person_id.0, target_kind, target_id],
                 |row| {
@@ -96,7 +94,6 @@ fn process_repair_target(
             )?;
             let embedding_rows: Vec<_> =
                 embedding_rows.collect::<std::result::Result<Vec<_>, _>>()?;
-            drop(statement);
             for (model, version, revision, hash, dimension, normalization, distance, vector) in
                 embedding_rows
             {
@@ -152,6 +149,9 @@ impl MemoryDb {
         let processed_at: Timestamp =
             transaction.query_row("SELECT unixepoch()", [], |row| row.get(0))?;
         let mut processed = 0;
+        let mut statement = transaction.prepare_cached(
+            "SELECT model, version, target_revision, input_hash, dimension, normalization, distance, vector FROM embeddings WHERE tenant_id = ?1 AND person_id = ?2 AND target_kind = ?3 AND target_id = ?4",
+        )?;
         for (id, target_kind, target_id) in rows {
             let target = match embedding_target(&target_kind, &target_id) {
                 Ok(target) => target,
@@ -163,13 +163,21 @@ impl MemoryDb {
                     continue;
                 }
             };
-            process_repair_target(&transaction, &input, &target_kind, &target_id, target)?;
+            process_repair_target(
+                &transaction,
+                &input,
+                &target_kind,
+                &target_id,
+                target,
+                &mut statement,
+            )?;
             transaction.execute(
                 "UPDATE memory_repair_outbox SET processed_at = ?1 WHERE id = ?2",
                 params![processed_at, id],
             )?;
             processed += 1;
         }
+        drop(statement);
         let summaries_stale =
             stale_summary_count(&transaction, &input.tenant_id, &input.person_id)?;
         record_operation(
