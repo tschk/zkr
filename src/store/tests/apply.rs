@@ -455,3 +455,140 @@ fn applied_records_stay_searchable_and_repairable() {
     );
     assert!(!issues.is_empty());
 }
+#[test]
+fn test_record_identity() {
+    use crate::TimeRange;
+    use crate::store::apply::record_identity;
+
+    let source_record = ExportRecord::Source(SourceRecord {
+        source: Source {
+            id: SourceId("src-1".into()),
+            tenant_id: TenantId("tenant-1".into()),
+            person_id: PersonId("person-1".into()),
+            revision: 1,
+            kind: SourceKind::Conversation,
+            content: "content".into(),
+            captured_at: 100,
+            recorded_at: 100,
+            deleted_at: None,
+            feature_flag: None,
+        },
+        ingestion_key: None,
+        origin_evidence_id: None,
+        origin_claim_id: None,
+    });
+
+    let evidence_record = ExportRecord::Evidence(EvidenceRecord {
+        evidence: Evidence {
+            id: EvidenceId("ev-1".into()),
+            tenant_id: TenantId("t".into()),
+            person_id: PersonId("p".into()),
+            source_id: SourceId("s".into()),
+            source_revision: 1,
+            quote: "q".into(),
+            byte_range: None,
+            recorded_at: 1,
+        },
+        locator: None,
+        deleted_at: None,
+    });
+
+    let claim_record = ExportRecord::Claim(Claim {
+        id: ClaimId("claim-1".into()),
+        tenant_id: TenantId("t".into()),
+        person_id: PersonId("p".into()),
+        subject: "sub".into(),
+        predicate: "pred".into(),
+        value: "val".into(),
+        kind: ClaimKind::Fact,
+        valid_time: TimeRange {
+            from: 1,
+            until: None,
+        },
+        recorded_time: TimeRange {
+            from: 1,
+            until: None,
+        },
+        status: ClaimStatus::Accepted,
+        tier: MemoryTier::LongTerm,
+        processing_state: MemoryProcessingState::Processed,
+    });
+
+    let claim_evidence = ExportRecord::ClaimEvidence(ClaimEvidence {
+        tenant_id: TenantId("t".into()),
+        person_id: PersonId("p".into()),
+        claim_id: ClaimId("claim-1".into()),
+        evidence_id: EvidenceId("ev-1".into()),
+        relation: EvidenceRelation::Supports,
+        confidence_basis_points: 100,
+    });
+
+    let correction = ExportRecord::Correction(CorrectionRecord {
+        tenant_id: TenantId("t".into()),
+        person_id: PersonId("p".into()),
+        superseded_claim_id: ClaimId("claim-0".into()),
+        claim_id: ClaimId("claim-1".into()),
+        source_id: SourceId("src-1".into()),
+        evidence_id: EvidenceId("ev-1".into()),
+        valid_at: 1,
+        recorded_at: 1,
+    });
+
+    let profile = ExportRecord::Profile(ProfileEntry {
+        id: ProfileEntryId("prof-1".into()),
+        tenant_id: TenantId("t".into()),
+        person_id: PersonId("p".into()),
+        key: "k".into(),
+        value: "v".into(),
+        stability: ProfileStability::Stable,
+        claim_id: ClaimId("claim-1".into()),
+        recorded_at: 1,
+    });
+
+    let daily_review = ExportRecord::DailyReview(DailyReview {
+        id: DailyReviewId("rev-1".into()),
+        tenant_id: TenantId("t".into()),
+        person_id: PersonId("p".into()),
+        day: "2023-01-01".into(),
+        summary: "sum".into(),
+        evidence_ids: vec![],
+        recorded_at: 1,
+    });
+
+    let deletion = ExportRecord::Deletion(DeletionRecord {
+        tenant_id: TenantId("t".into()),
+        person_id: PersonId("p".into()),
+        target: MemoryRef::Source(SourceId("src-1".into())),
+        deleted_at: 1,
+    });
+
+    assert_eq!(
+        record_identity(&source_record),
+        ("source", "src-1".to_string())
+    );
+    assert_eq!(
+        record_identity(&evidence_record),
+        ("evidence", "ev-1".to_string())
+    );
+    assert_eq!(
+        record_identity(&claim_record),
+        ("claim", "claim-1".to_string())
+    );
+    assert_eq!(
+        record_identity(&claim_evidence),
+        ("claim_evidence", "claim-1/ev-1".to_string())
+    );
+    assert_eq!(
+        record_identity(&correction),
+        ("correction", "claim-0/claim-1".to_string())
+    );
+    assert_eq!(record_identity(&profile), ("profile", "prof-1".to_string()));
+    assert_eq!(
+        record_identity(&daily_review),
+        ("daily_review", "rev-1".to_string())
+    );
+    assert_eq!(
+        record_identity(&deletion),
+        ("deletion", "source:src-1".to_string())
+    );
+}
