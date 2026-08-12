@@ -943,6 +943,7 @@ fn new_id(transaction: &Transaction<'_>) -> Result<String> {
     Ok(transaction.query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))?)
 }
 
+#[allow(clippy::type_complexity)]
 fn find_deletion_targets(
     transaction: &rusqlite::Transaction<'_>,
     tenant_id: &TenantId,
@@ -1138,6 +1139,7 @@ fn delete_dependent_projections(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_deletion_records(
     transaction: &rusqlite::Transaction<'_>,
     tenant_id: &TenantId,
