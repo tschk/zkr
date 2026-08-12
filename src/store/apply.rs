@@ -157,12 +157,7 @@ fn apply_commit(
         applied.commits_skipped += 1;
         return Ok(());
     }
-    let sequence = begin_commit(
-        transaction,
-        tenant_id,
-        person_id,
-        commit.recorded_at,
-    )?;
+    let sequence = begin_commit(transaction, tenant_id, person_id, commit.recorded_at)?;
     append_records(
         transaction,
         sequence,
