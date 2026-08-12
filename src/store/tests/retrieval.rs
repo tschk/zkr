@@ -1,5 +1,33 @@
-use super::super::retrieval::rerank_score_basis_points;
+use super::super::retrieval::{lexical_queries, rerank_score_basis_points};
 use super::*;
+
+#[test]
+fn lexical_queries_handles_edge_cases() {
+    assert_eq!(lexical_queries(""), ("\"\"".to_string(), None));
+    assert_eq!(lexical_queries("hello"), ("\"hello\"".to_string(), None));
+    assert_eq!(
+        lexical_queries("hello world"),
+        ("\"hello world\"".to_string(), Some("\"hello\" OR \"world\"".to_string()))
+    );
+    assert_eq!(
+        lexical_queries("Hello hello HELLO world"),
+        ("\"Hello hello HELLO world\"".to_string(), Some("\"Hello\" OR \"world\"".to_string()))
+    );
+    assert_eq!(
+        lexical_queries("hello \"world\""),
+        ("\"hello \"\"world\"\"\"".to_string(), Some("\"hello\" OR \"world\"".to_string()))
+    );
+    assert_eq!(
+        lexical_queries("hello-world! test?"),
+        ("\"hello-world! test?\"".to_string(), Some("\"hello\" OR \"world\" OR \"test\"".to_string()))
+    );
+
+    let long_query = (0..40).map(|i| format!("term{}", i)).collect::<Vec<_>>().join(" ");
+    let (phrase, tokens) = lexical_queries(&long_query);
+    assert_eq!(phrase, format!("\"{}\"", long_query));
+    let tokens = tokens.unwrap();
+    assert_eq!(tokens.matches(" OR ").count(), 31);
+}
 
 #[test]
 fn rerank_preserves_relevance_floor_while_penalizing_age_and_reuse() {
