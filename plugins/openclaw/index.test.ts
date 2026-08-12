@@ -117,6 +117,80 @@ describe("zkr OpenClaw tools", () => {
       manager.readFile({ relPath: "zkr://source/s-1", from: 0 }),
     ).rejects.toThrow("positive integers");
   });
+
+  test("rejects invalid zkr memory paths", async () => {
+    const manager = new ZkrMemoryHost({}, async () => ({}) as never).manager(
+      "agent-1",
+    );
+    await expect(
+      manager.readFile({ relPath: "invalid-path" }),
+    ).rejects.toThrow("invalid zkr memory path");
+    await expect(
+      manager.readFile({ relPath: "zkr://unknown/123" }),
+    ).rejects.toThrow("invalid zkr memory path");
+  });
+
+  test("maps exact reads to the zkr CLI contract", async () => {
+    const calls: unknown[][] = [];
+    const run = async (...args: unknown[]) => {
+      calls.push(args);
+      return { excerpt: "line1\nline2\nline3" };
+    };
+    const manager = new ZkrMemoryHost(
+      { tenant: "tenant", person: "person", database: "test.db" },
+      run as never,
+    ).manager("agent-1");
+
+    await manager.readFile({ relPath: "zkr://claim/c-1" });
+
+    expect(calls).toEqual([
+      [
+        "get",
+        {
+          tenant_id: "tenant",
+          person_id: "person",
+          target: { kind: "claim", id: "c-1" },
+        },
+        { tenant: "tenant", person: "person", database: "test.db" },
+      ],
+    ]);
+  });
+
+  test("slices exact reads using from and lines with pagination logic", async () => {
+    const run = async () => ({ excerpt: "line1\nline2\nline3\nline4\nline5" });
+    const manager = new ZkrMemoryHost({}, run as never).manager("agent-1");
+
+    // test default behaviour (from 1, lines 50, all fit)
+    const resultAll = await manager.readFile({ relPath: "zkr://source/s-1" });
+    expect(resultAll).toMatchObject({
+      text: "line1\nline2\nline3\nline4\nline5",
+      path: "zkr://source/s-1",
+      from: 1,
+      lines: 5,
+      truncated: false,
+    });
+    expect(resultAll).not.toHaveProperty("nextFrom");
+
+    // test specific slice that hits the end
+    const resultEnd = await manager.readFile({ relPath: "zkr://source/s-1", from: 4, lines: 2 });
+    expect(resultEnd).toMatchObject({
+      text: "line4\nline5",
+      from: 4,
+      lines: 2,
+      truncated: false,
+    });
+    expect(resultEnd).not.toHaveProperty("nextFrom");
+
+    // test truncation slice
+    const resultTruncated = await manager.readFile({ relPath: "zkr://source/s-1", from: 2, lines: 2 });
+    expect(resultTruncated).toMatchObject({
+      text: "line2\nline3",
+      from: 2,
+      lines: 2,
+      truncated: true,
+      nextFrom: 4,
+    });
+  });
 });
 
 describe("zkr OpenClaw memory capability", () => {
