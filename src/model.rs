@@ -334,5 +334,57 @@ mod tests {
                 }
             }
         }
+
+    #[test]
+    fn test_assert_legal_state_valid() {
+        assert_eq!(
+            assert_legal_state(
+                &MemoryTier::ShortTerm,
+                &ClaimStatus::Accepted,
+                &MemoryProcessingState::Pending
+            ),
+            Ok(())
+        );
+
+        assert_eq!(
+            assert_legal_state(
+                &MemoryTier::LongTerm,
+                &ClaimStatus::Accepted,
+                &MemoryProcessingState::Processed
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn test_assert_legal_state_archive_superseded() {
+        assert_eq!(
+            assert_legal_state(
+                &MemoryTier::Archive,
+                &ClaimStatus::Superseded,
+                &MemoryProcessingState::Processed
+            ),
+            Err(ValidationError::IllegalMemoryState(
+                "archive".to_owned(),
+                "superseded".to_owned(),
+                "processed".to_owned()
+            ))
+        );
+    }
+
+    #[test]
+    fn test_assert_legal_state_long_term_unprocessed() {
+        assert_eq!(
+            assert_legal_state(
+                &MemoryTier::LongTerm,
+                &ClaimStatus::Accepted,
+                &MemoryProcessingState::Pending
+            ),
+            Err(ValidationError::IllegalMemoryState(
+                "long_term".to_owned(),
+                "accepted".to_owned(),
+                "pending".to_owned()
+            ))
+        );
     }
 }
