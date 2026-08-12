@@ -262,55 +262,135 @@ fn sql_json_error(error: serde_json::Error) -> rusqlite::Error {
     rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(error))
 }
 
+fn pack_export_page(
+    events: Vec<(i64, Timestamp, i64, i64, String)>,
+    input: &ExportInput,
+    high_water_mark: i64,
+    limit: usize,
+) -> Result<ExportPage> {
+    let more_by_count = events.len() > limit;
+    let mut exported: Vec<ExportCommit> = Vec::new();
+    let mut payload_bytes = 0;
+    let mut truncated_by_bytes = false;
+    for (sequence, recorded_at, event_index, event_count, payload) in events.into_iter().take(limit)
+    {
+        if payload_bytes > 0 && payload_bytes + payload.len() > MAX_EXPORT_PAGE_BYTES {
+            truncated_by_bytes = true;
+            break;
+        }
+        let record = serde_json::from_str::<ExportRecord>(&payload)?;
+        validate_record_scope(&record, &input.tenant_id, &input.person_id)?;
+        payload_bytes += payload.len();
+        if let Some(commit) = exported.last_mut().filter(|item| item.sequence == sequence) {
+            commit.records.push(record);
+        } else {
+            exported.push(ExportCommit {
+                sequence,
+                recorded_at,
+                event_count,
+                first_event_index: event_index,
+                records: vec![record],
+            });
+        }
+    }
+    let complete = !more_by_count && !truncated_by_bytes;
+    let (next_after_commit, next_after_event_index) =
+        exported
+            .last()
+            .map_or((input.after_commit, input.after_event_index), |commit| {
+                (
+                    commit.sequence,
+                    commit.first_event_index + commit.records.len() as i64 - 1,
+                )
+            });
+    Ok(ExportPage {
+        export_format: EXPORT_FORMAT_VERSION,
+        database_schema_version: DATABASE_SCHEMA_VERSION,
+        high_water_mark,
+        next_after_commit,
+        next_after_event_index,
+        complete,
+        commits: exported,
+    })
+}
+
+fn validate_export_cursor(transaction: &Transaction<'_>, input: &ExportInput) -> Result<()> {
+    if input.after_commit > 0 {
+        let event_count = transaction
+            .query_row(
+                "SELECT COUNT(e.event_index) FROM memory_commits c LEFT JOIN memory_export_events e ON e.commit_sequence = c.sequence WHERE c.sequence = ?1 AND c.tenant_id = ?2 AND c.person_id = ?3 GROUP BY c.sequence",
+                params![input.after_commit, input.tenant_id.0, input.person_id.0],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .ok_or_else(|| Error::Invalid("after_commit is not in scope".to_owned()))?;
+        if input.after_event_index >= event_count {
+            return Err(Error::Invalid(
+                "after_event_index exceeds the commit event count".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn resolve_high_water_mark(transaction: &Transaction<'_>, input: &ExportInput) -> Result<i64> {
+    let current_high_water: i64 = transaction.query_row(
+        "SELECT COALESCE(MAX(sequence), 0) FROM memory_commits WHERE tenant_id = ?1 AND person_id = ?2",
+        params![input.tenant_id.0, input.person_id.0],
+        |row| row.get(0),
+    )?;
+    if input
+        .high_water_mark
+        .is_some_and(|value| value > current_high_water)
+    {
+        return Err(Error::Invalid(
+            "high_water_mark exceeds the current scoped maximum".to_owned(),
+        ));
+    }
+    Ok(input.high_water_mark.unwrap_or(current_high_water))
+}
+
+fn validate_export_request(input: &ExportInput) -> Result<()> {
+    require_scope(&input.tenant_id, &input.person_id)?;
+    if input.export_format != EXPORT_FORMAT_VERSION {
+        return Err(Error::Invalid(format!(
+            "unsupported export_format {}; expected {EXPORT_FORMAT_VERSION}",
+            input.export_format
+        )));
+    }
+    if input.after_commit < 0 {
+        return Err(Error::Invalid(
+            "after_commit must not be negative".to_owned(),
+        ));
+    }
+    if input.after_event_index < -1 {
+        return Err(Error::Invalid(
+            "after_event_index must be at least -1".to_owned(),
+        ));
+    }
+    if input.after_commit == 0 && input.after_event_index != -1 {
+        return Err(Error::Invalid(
+            "the initial cursor must use after_event_index -1".to_owned(),
+        ));
+    }
+    if input
+        .high_water_mark
+        .is_some_and(|high_water| high_water < input.after_commit)
+    {
+        return Err(Error::Invalid(
+            "high_water_mark must not precede after_commit".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 impl MemoryDb {
     pub fn export(&mut self, input: ExportInput) -> Result<ExportPage> {
-        require_scope(&input.tenant_id, &input.person_id)?;
-        if input.export_format != EXPORT_FORMAT_VERSION {
-            return Err(Error::Invalid(format!(
-                "unsupported export_format {}; expected {EXPORT_FORMAT_VERSION}",
-                input.export_format
-            )));
-        }
-        if input.after_commit < 0 {
-            return Err(Error::Invalid(
-                "after_commit must not be negative".to_owned(),
-            ));
-        }
-        if input.after_event_index < -1 {
-            return Err(Error::Invalid(
-                "after_event_index must be at least -1".to_owned(),
-            ));
-        }
-        if input.after_commit == 0 && input.after_event_index != -1 {
-            return Err(Error::Invalid(
-                "the initial cursor must use after_event_index -1".to_owned(),
-            ));
-        }
-        if input
-            .high_water_mark
-            .is_some_and(|high_water| high_water < input.after_commit)
-        {
-            return Err(Error::Invalid(
-                "high_water_mark must not precede after_commit".to_owned(),
-            ));
-        }
+        validate_export_request(&input)?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Deferred)?;
-        let current_high_water: i64 = transaction.query_row(
-                "SELECT COALESCE(MAX(sequence), 0) FROM memory_commits WHERE tenant_id = ?1 AND person_id = ?2",
-                params![input.tenant_id.0, input.person_id.0],
-                |row| row.get(0),
-            )?;
-        if input
-            .high_water_mark
-            .is_some_and(|value| value > current_high_water)
-        {
-            return Err(Error::Invalid(
-                "high_water_mark exceeds the current scoped maximum".to_owned(),
-            ));
-        }
-        let high_water_mark = input.high_water_mark.unwrap_or(current_high_water);
+        let high_water_mark = resolve_high_water_mark(&transaction, &input)?;
         let limit = bounded_limit(input.limit) as usize;
         let mut statement = transaction.prepare(
             "SELECT c.sequence, c.recorded_at, e.event_index, (SELECT COUNT(*) FROM memory_export_events all_events WHERE all_events.commit_sequence = c.sequence), e.payload
@@ -319,21 +399,7 @@ impl MemoryDb {
                AND (c.sequence > ?3 OR (c.sequence = ?3 AND e.event_index > ?4))
              ORDER BY c.sequence, e.event_index LIMIT ?6",
         )?;
-        if input.after_commit > 0 {
-            let event_count = transaction
-                .query_row(
-                    "SELECT COUNT(e.event_index) FROM memory_commits c LEFT JOIN memory_export_events e ON e.commit_sequence = c.sequence WHERE c.sequence = ?1 AND c.tenant_id = ?2 AND c.person_id = ?3 GROUP BY c.sequence",
-                    params![input.after_commit, input.tenant_id.0, input.person_id.0],
-                    |row| row.get::<_, i64>(0),
-                )
-                .optional()?
-                .ok_or_else(|| Error::Invalid("after_commit is not in scope".to_owned()))?;
-            if input.after_event_index >= event_count {
-                return Err(Error::Invalid(
-                    "after_event_index exceeds the commit event count".to_owned(),
-                ));
-            }
-        }
+        validate_export_cursor(&transaction, &input)?;
         let rows = statement.query_map(
             params![
                 input.tenant_id.0,
@@ -355,51 +421,8 @@ impl MemoryDb {
         )?;
         let events = rows.collect::<std::result::Result<Vec<_>, _>>()?;
         drop(statement);
-        let more_by_count = events.len() > limit;
-        let mut exported: Vec<ExportCommit> = Vec::new();
-        let mut payload_bytes = 0;
-        let mut truncated_by_bytes = false;
-        for (sequence, recorded_at, event_index, event_count, payload) in
-            events.into_iter().take(limit)
-        {
-            if payload_bytes > 0 && payload_bytes + payload.len() > MAX_EXPORT_PAGE_BYTES {
-                truncated_by_bytes = true;
-                break;
-            }
-            let record = serde_json::from_str::<ExportRecord>(&payload)?;
-            validate_record_scope(&record, &input.tenant_id, &input.person_id)?;
-            payload_bytes += payload.len();
-            if let Some(commit) = exported.last_mut().filter(|item| item.sequence == sequence) {
-                commit.records.push(record);
-            } else {
-                exported.push(ExportCommit {
-                    sequence,
-                    recorded_at,
-                    event_count,
-                    first_event_index: event_index,
-                    records: vec![record],
-                });
-            }
-        }
-        let complete = !more_by_count && !truncated_by_bytes;
-        let (next_after_commit, next_after_event_index) =
-            exported
-                .last()
-                .map_or((input.after_commit, input.after_event_index), |commit| {
-                    (
-                        commit.sequence,
-                        commit.first_event_index + commit.records.len() as i64 - 1,
-                    )
-                });
+        let export_page = pack_export_page(events, &input, high_water_mark, limit)?;
         transaction.commit()?;
-        Ok(ExportPage {
-            export_format: EXPORT_FORMAT_VERSION,
-            database_schema_version: DATABASE_SCHEMA_VERSION,
-            high_water_mark,
-            next_after_commit,
-            next_after_event_index,
-            complete,
-            commits: exported,
-        })
+        Ok(export_page)
     }
 }
