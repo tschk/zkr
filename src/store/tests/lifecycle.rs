@@ -614,3 +614,181 @@ fn reviews_require_live_same_scope_evidence() {
         .is_empty()
     );
 }
+
+#[test]
+fn correction_requires_valid_scope() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+
+    let err = db
+        .correct(CorrectInput {
+            tenant_id: TenantId("".into()),
+            person_id: PersonId("sam".into()),
+            claim_id: ClaimId("claim".into()),
+            text: "Sam works at Beta".into(),
+            value: "Beta".into(),
+            valid_at: 5,
+            recorded_at: 20,
+        })
+        .unwrap_err();
+    assert!(matches!(err, Error::Invalid(_)));
+
+    let err = db
+        .correct(CorrectInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("".into()),
+            claim_id: ClaimId("claim".into()),
+            text: "Sam works at Beta".into(),
+            value: "Beta".into(),
+            valid_at: 5,
+            recorded_at: 20,
+        })
+        .unwrap_err();
+    assert!(matches!(err, Error::Invalid(_)));
+}
+
+#[test]
+fn correction_requires_text_and_value() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+
+    let err = db
+        .correct(CorrectInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            claim_id: ClaimId("claim".into()),
+            text: "".into(),
+            value: "Beta".into(),
+            valid_at: 5,
+            recorded_at: 20,
+        })
+        .unwrap_err();
+    assert!(matches!(err, Error::Invalid(_)));
+
+    let err = db
+        .correct(CorrectInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            claim_id: ClaimId("claim".into()),
+            text: "Sam works at Beta".into(),
+            value: "".into(),
+            valid_at: 5,
+            recorded_at: 20,
+        })
+        .unwrap_err();
+    assert!(matches!(err, Error::Invalid(_)));
+}
+
+#[test]
+fn correction_rejects_invalid_timestamps() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let mut input = remember("a", "sam", "Acme");
+    input.captured_at = 10;
+    input.recorded_at = 10;
+    input.claim.as_mut().unwrap().valid_from = 10;
+    let remembered = db.remember(input).unwrap();
+    let claim_id = remembered.claim_id.unwrap();
+
+    let err = db
+        .correct(CorrectInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            claim_id: claim_id.clone(),
+            text: "Sam works at Beta".into(),
+            value: "Beta".into(),
+            valid_at: 10,
+            recorded_at: 20,
+        })
+        .unwrap_err();
+    assert!(matches!(err, Error::Invalid(_)));
+
+    let err = db
+        .correct(CorrectInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            claim_id: claim_id.clone(),
+            text: "Sam works at Beta".into(),
+            value: "Beta".into(),
+            valid_at: 20,
+            recorded_at: 10,
+        })
+        .unwrap_err();
+    assert!(matches!(err, Error::Invalid(_)));
+}
+
+#[test]
+fn correction_creates_superseding_claim_and_updates_old() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let mut input = remember("a", "sam", "Acme");
+    input.captured_at = 0;
+    input.recorded_at = 10;
+    input.claim.as_mut().unwrap().valid_from = 0;
+    let remembered = db.remember(input).unwrap();
+    let old_claim_id = remembered.claim_id.unwrap();
+
+    let corrected = db
+        .correct(CorrectInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            claim_id: old_claim_id.clone(),
+            text: "Sam works at Beta".into(),
+            value: "Beta".into(),
+            valid_at: 5,
+            recorded_at: 20,
+        })
+        .unwrap();
+
+    assert_eq!(corrected.superseded_claim_id, old_claim_id);
+
+    let old_status = db
+        .connection
+        .query_row(
+            "SELECT status, valid_until, recorded_until FROM claims WHERE id = ?1",
+            [&old_claim_id.0],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(old_status.0, "superseded");
+    assert_eq!(old_status.1, 5);
+    assert_eq!(old_status.2, 20);
+
+    let new_claim = db
+        .connection
+        .query_row(
+            "SELECT status, subject, predicate, valid_from, recorded_from, value FROM claims WHERE id = ?1",
+            [&corrected.claim_id.0],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(new_claim.0, "accepted");
+    assert_eq!(new_claim.1, "Sam");
+    assert_eq!(new_claim.2, "employer");
+    assert_eq!(new_claim.3, 5);
+    assert_eq!(new_claim.4, 20);
+    assert_eq!(new_claim.5, "Beta");
+}
