@@ -327,7 +327,9 @@ mod tests {
                         is_legal_state_combination(tier, status, state),
                         expected,
                         "Failed for tier={:?}, status={:?}, processing_state={:?}",
-                        tier, status, state
+                        tier,
+                        status,
+                        state
                     );
                 }
             }
