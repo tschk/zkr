@@ -30,47 +30,7 @@ const PASSES: [u8; 9] = [
 
 impl MemoryDb {
     pub fn apply(&mut self, input: ApplyInput) -> Result<Applied> {
-        require_scope(&input.tenant_id, &input.person_id)?;
-        if input.export_format != EXPORT_FORMAT_VERSION {
-            return Err(Error::Invalid(format!(
-                "unsupported export_format {}; expected {EXPORT_FORMAT_VERSION}",
-                input.export_format
-            )));
-        }
-        if input
-            .database_schema_version
-            .is_some_and(|version| version > DATABASE_SCHEMA_VERSION)
-        {
-            return Err(Error::Invalid(format!(
-                "applied records use a schema newer than supported version {DATABASE_SCHEMA_VERSION}"
-            )));
-        }
-        let mut previous_sequence = 0;
-        for commit in &input.commits {
-            if commit.sequence <= previous_sequence {
-                return Err(Error::Invalid(
-                    "applied commits must use strictly ascending sequences".to_owned(),
-                ));
-            }
-            previous_sequence = commit.sequence;
-            if commit.first_event_index != 0 {
-                return Err(Error::Invalid(format!(
-                    "commit {} is partial; apply requires event index 0",
-                    commit.sequence
-                )));
-            }
-            if commit.records.len() as i64 != commit.event_count {
-                return Err(Error::Invalid(format!(
-                    "commit {} declares {} events but carries {}",
-                    commit.sequence,
-                    commit.event_count,
-                    commit.records.len()
-                )));
-            }
-            for record in &commit.records {
-                validate_record_scope(record, &input.tenant_id, &input.person_id)?;
-            }
-        }
+        validate_apply_input(&input)?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -83,61 +43,14 @@ impl MemoryDb {
             records_skipped: 0,
         };
         for commit in &input.commits {
-            let mut accepted = vec![false; commit.records.len()];
-            for pass in PASSES {
-                for (index, record) in commit.records.iter().enumerate() {
-                    if pass == ORIGIN_PASS {
-                        if let ExportRecord::Source(record) = record {
-                            if accepted[index] {
-                                apply_source_origin(&transaction, record)?;
-                            }
-                        }
-                        continue;
-                    }
-                    if record_pass(record) != pass {
-                        continue;
-                    }
-                    let (record_kind, record_id) = record_identity(record);
-                    let payload_hash = record_hash(record)?;
-                    let seen: bool = transaction.query_row(
-                        "SELECT EXISTS(SELECT 1 FROM memory_applied_records WHERE tenant_id = ?1 AND person_id = ?2 AND record_kind = ?3 AND record_id = ?4 AND payload_hash = ?5)",
-                        params![input.tenant_id.0, input.person_id.0, record_kind, record_id, payload_hash],
-                        |row| row.get(0),
-                    )?;
-                    if seen {
-                        applied.records_skipped += 1;
-                        continue;
-                    }
-                    apply_record(&transaction, record, applied_at)?;
-                    transaction.execute(
-                        "INSERT INTO memory_applied_records(tenant_id, person_id, record_kind, record_id, payload_hash, applied_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
-                        params![input.tenant_id.0, input.person_id.0, record_kind, record_id, payload_hash, applied_at],
-                    )?;
-                    accepted[index] = true;
-                    applied.records_applied += 1;
-                }
-            }
-            if !accepted.iter().any(|accepted| *accepted) {
-                applied.commits_skipped += 1;
-                continue;
-            }
-            let sequence = begin_commit(
+            apply_commit(
                 &transaction,
                 &input.tenant_id,
                 &input.person_id,
-                commit.recorded_at,
+                commit,
+                applied_at,
+                &mut applied,
             )?;
-            append_records(
-                &transaction,
-                sequence,
-                commit
-                    .records
-                    .iter()
-                    .zip(&accepted)
-                    .filter(|(_, accepted)| **accepted)
-                    .map(|(record, _)| record.clone()),
-            )?;
-            applied.commits_applied += 1;
         }
         record_operation(
             &transaction,
@@ -151,6 +64,117 @@ impl MemoryDb {
         transaction.commit()?;
         Ok(applied)
     }
+}
+
+fn validate_apply_input(input: &ApplyInput) -> Result<()> {
+    require_scope(&input.tenant_id, &input.person_id)?;
+    if input.export_format != EXPORT_FORMAT_VERSION {
+        return Err(Error::Invalid(format!(
+            "unsupported export_format {}; expected {EXPORT_FORMAT_VERSION}",
+            input.export_format
+        )));
+    }
+    if input
+        .database_schema_version
+        .is_some_and(|version| version > DATABASE_SCHEMA_VERSION)
+    {
+        return Err(Error::Invalid(format!(
+            "applied records use a schema newer than supported version {DATABASE_SCHEMA_VERSION}"
+        )));
+    }
+    let mut previous_sequence = 0;
+    for commit in &input.commits {
+        if commit.sequence <= previous_sequence {
+            return Err(Error::Invalid(
+                "applied commits must use strictly ascending sequences".to_owned(),
+            ));
+        }
+        previous_sequence = commit.sequence;
+        if commit.first_event_index != 0 {
+            return Err(Error::Invalid(format!(
+                "commit {} is partial; apply requires event index 0",
+                commit.sequence
+            )));
+        }
+        if commit.records.len() as i64 != commit.event_count {
+            return Err(Error::Invalid(format!(
+                "commit {} declares {} events but carries {}",
+                commit.sequence,
+                commit.event_count,
+                commit.records.len()
+            )));
+        }
+        for record in &commit.records {
+            validate_record_scope(record, &input.tenant_id, &input.person_id)?;
+        }
+    }
+    Ok(())
+}
+
+fn apply_commit(
+    transaction: &Transaction<'_>,
+    tenant_id: &TenantId,
+    person_id: &PersonId,
+    commit: &ExportCommit,
+    applied_at: Timestamp,
+    applied: &mut Applied,
+) -> Result<()> {
+    let mut accepted = vec![false; commit.records.len()];
+    for pass in PASSES {
+        for (index, record) in commit.records.iter().enumerate() {
+            if pass == ORIGIN_PASS {
+                if let ExportRecord::Source(record) = record {
+                    if accepted[index] {
+                        apply_source_origin(transaction, record)?;
+                    }
+                }
+                continue;
+            }
+            if record_pass(record) != pass {
+                continue;
+            }
+            let (record_kind, record_id) = record_identity(record);
+            let payload_hash = record_hash(record)?;
+            let seen: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM memory_applied_records WHERE tenant_id = ?1 AND person_id = ?2 AND record_kind = ?3 AND record_id = ?4 AND payload_hash = ?5)",
+                params![tenant_id.0, person_id.0, record_kind, record_id, payload_hash],
+                |row| row.get(0),
+            )?;
+            if seen {
+                applied.records_skipped += 1;
+                continue;
+            }
+            apply_record(transaction, record, applied_at)?;
+            transaction.execute(
+                "INSERT INTO memory_applied_records(tenant_id, person_id, record_kind, record_id, payload_hash, applied_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+                params![tenant_id.0, person_id.0, record_kind, record_id, payload_hash, applied_at],
+            )?;
+            accepted[index] = true;
+            applied.records_applied += 1;
+        }
+    }
+    if !accepted.iter().any(|accepted| *accepted) {
+        applied.commits_skipped += 1;
+        return Ok(());
+    }
+    let sequence = begin_commit(
+        transaction,
+        tenant_id,
+        person_id,
+        commit.recorded_at,
+    )?;
+    append_records(
+        transaction,
+        sequence,
+        commit
+            .records
+            .iter()
+            .zip(&accepted)
+            .filter(|(_, accepted)| **accepted)
+            .map(|(record, _)| record.clone()),
+    )?;
+    applied.commits_applied += 1;
+    Ok(())
 }
 
 fn apply_record(
