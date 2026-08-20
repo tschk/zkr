@@ -393,6 +393,22 @@ class PluginTest(unittest.TestCase):
             self.assertEqual(pending, ("legacy", 0, None))
             self.assertEqual(failed_table, 1)
 
+    def test_invalid_binary_name_raises_error(self):
+        original = plugin.os.environ.get("ZKR_BIN")
+        try:
+            plugin.os.environ["ZKR_BIN"] = "rm"
+            with self.assertRaisesRegex(ValueError, "Invalid zkr binary"):
+                plugin.ZkrMemoryProvider()
+
+            plugin.os.environ["ZKR_BIN"] = "/usr/bin/python3"
+            with self.assertRaisesRegex(ValueError, "Invalid zkr binary"):
+                plugin.ZkrMemoryProvider()
+        finally:
+            if original is None:
+                del plugin.os.environ["ZKR_BIN"]
+            else:
+                plugin.os.environ["ZKR_BIN"] = original
+
 
 if __name__ == "__main__":
     unittest.main()

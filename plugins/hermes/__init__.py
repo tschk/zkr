@@ -116,6 +116,8 @@ SCHEMAS = [
 class ZkrMemoryProvider(MemoryProvider):
     def __init__(self) -> None:
         self._binary = os.environ.get("ZKR_BIN", "zkr")
+        if Path(self._binary).name not in ("zkr", "zkr.exe"):
+            raise ValueError(f"Invalid zkr binary: {self._binary}")
         self._db = Path(os.environ.get("ZKR_DB", "zkr.db"))
         self._tenant_id = os.environ.get("ZKR_TENANT_ID", "hermes")
         self._person_id = os.environ.get("ZKR_PERSON_ID", "default")
