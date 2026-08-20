@@ -545,3 +545,107 @@ fn expired_claims_do_not_fall_back_to_stale_raw_evidence() {
         .unwrap();
     assert!(found.items.is_empty());
 }
+
+#[test]
+fn get_retrieves_source_evidence_and_claim_targets() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let raw = db
+        .remember(remember_raw("a", "sam", "A raw source without claim"))
+        .unwrap();
+    let claimed = db.remember(remember("a", "sam", "Acme")).unwrap();
+
+    // Source target
+    let item = db
+        .get(GetInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            target: EmbeddingTarget::Source(raw.source_id.clone()),
+        })
+        .unwrap();
+    assert_eq!(item.memory, MemoryRef::Source(raw.source_id));
+
+    // Evidence target
+    let item = db
+        .get(GetInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            target: EmbeddingTarget::Evidence(raw.evidence_id.clone()),
+        })
+        .unwrap();
+    assert_eq!(item.memory, MemoryRef::Evidence(raw.evidence_id));
+
+    // Claim target
+    let item = db
+        .get(GetInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            target: EmbeddingTarget::Claim(claimed.claim_id.clone().unwrap()),
+        })
+        .unwrap();
+    assert_eq!(item.memory, MemoryRef::Claim(claimed.claim_id.unwrap()));
+}
+
+#[test]
+fn get_returns_error_on_mismatched_scope() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let raw = db
+        .remember(remember_raw("a", "sam", "A raw source"))
+        .unwrap();
+
+    // Mismatched tenant
+    let result = db.get(GetInput {
+        tenant_id: TenantId("b".into()),
+        person_id: PersonId("sam".into()),
+        target: EmbeddingTarget::Source(raw.source_id.clone()),
+    });
+    assert!(matches!(result, Err(Error::NotFound)));
+
+    // Mismatched person
+    let result = db.get(GetInput {
+        tenant_id: TenantId("a".into()),
+        person_id: PersonId("alice".into()),
+        target: EmbeddingTarget::Source(raw.source_id.clone()),
+    });
+    assert!(matches!(result, Err(Error::NotFound)));
+}
+
+#[test]
+fn get_returns_not_found_for_missing_or_deleted_targets() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let raw = db
+        .remember(remember_raw("a", "sam", "A raw source"))
+        .unwrap();
+
+    // Missing source ID
+    let result = db.get(GetInput {
+        tenant_id: TenantId("a".into()),
+        person_id: PersonId("sam".into()),
+        target: EmbeddingTarget::Source(SourceId("missing".into())),
+    });
+    assert!(matches!(result, Err(Error::NotFound)));
+
+    // Deleted source
+    db.delete_source(DeleteInput {
+        tenant_id: TenantId("a".into()),
+        person_id: PersonId("sam".into()),
+        source_id: raw.source_id.clone(),
+        deleted_at: 20,
+    })
+    .unwrap();
+
+    let result = db.get(GetInput {
+        tenant_id: TenantId("a".into()),
+        person_id: PersonId("sam".into()),
+        target: EmbeddingTarget::Source(raw.source_id),
+    });
+    assert!(matches!(result, Err(Error::NotFound)));
+}
