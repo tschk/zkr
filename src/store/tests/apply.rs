@@ -256,6 +256,50 @@ fn apply_round_trips_an_exported_replica() {
 }
 
 #[test]
+fn apply_tracks_applied_records() {
+    let mut origin = populated();
+    let commits = export_all(&mut origin, "a");
+    let mut replica = empty();
+
+    // First apply
+    let applied = replica.apply(apply_input(commits.clone())).unwrap();
+    let total_records: u64 = commits.iter().map(|c| c.records.len() as u64).sum();
+    assert_eq!(applied.commits_applied, commits.len() as u64);
+    assert_eq!(applied.records_applied, total_records);
+    assert_eq!(applied.commits_skipped, 0);
+    assert_eq!(applied.records_skipped, 0);
+
+    // Check memory_applied_records table
+    let applied_count: i64 = replica
+        .connection
+        .query_row(
+            "SELECT COUNT(*) FROM memory_applied_records WHERE tenant_id = 'a'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(applied_count as u64, total_records);
+
+    // Second apply
+    let replayed = replica.apply(apply_input(commits.clone())).unwrap();
+    assert_eq!(replayed.commits_applied, 0);
+    assert_eq!(replayed.records_applied, 0);
+    assert_eq!(replayed.commits_skipped, commits.len() as u64);
+    assert_eq!(replayed.records_skipped, total_records);
+
+    // Check memory_applied_records table again, should not have increased
+    let applied_count_after: i64 = replica
+        .connection
+        .query_row(
+            "SELECT COUNT(*) FROM memory_applied_records WHERE tenant_id = 'a'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(applied_count_after as u64, total_records);
+}
+
+#[test]
 fn apply_is_idempotent_across_replays() {
     let mut origin = populated();
     let commits = export_all(&mut origin, "a");
