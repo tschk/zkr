@@ -67,17 +67,30 @@ impl MemoryDb {
                 "merge recorded_at cannot predate its children".to_owned(),
             ));
         }
-        for child in &children {
-            let has_parent: bool = transaction.query_row(
-                "SELECT EXISTS(SELECT 1 FROM summary_nodes parent JOIN json_each(parent.child_ids) child_id WHERE parent.tenant_id = ?1 AND parent.person_id = ?2 AND parent.stale_at IS NULL AND child_id.value = ?3)",
-                params![input.tenant_id.0, input.person_id.0, child.id.0],
-                |row| row.get(0),
-            )?;
-            if has_parent {
-                return Err(Error::Invalid(
-                    "summary child already has a live parent".to_owned(),
-                ));
-            }
+        let placeholders = (3..3 + children.len())
+            .map(|index| format!("?{index}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let query = format!(
+            "SELECT EXISTS(SELECT 1 FROM summary_nodes parent JOIN json_each(parent.child_ids) child_id WHERE parent.tenant_id = ?1 AND parent.person_id = ?2 AND parent.stale_at IS NULL AND child_id.value IN ({}))",
+            placeholders
+        );
+        let mut query_params: Vec<&dyn rusqlite::ToSql> =
+            vec![&input.tenant_id.0, &input.person_id.0];
+        query_params.extend(
+            children
+                .iter()
+                .map(|child| &child.id.0 as &dyn rusqlite::ToSql),
+        );
+
+        let has_parent: bool =
+            transaction.query_row(&query, rusqlite::params_from_iter(query_params), |row| {
+                row.get(0)
+            })?;
+        if has_parent {
+            return Err(Error::Invalid(
+                "summary child already has a live parent".to_owned(),
+            ));
         }
         let evidence_ids = unique_evidence(&children);
         let child_ids = children
