@@ -405,10 +405,6 @@ fn scoped_ids(
     tenant_id: &TenantId,
     person_id: &PersonId,
 ) -> Result<Vec<String>> {
-    if !is_valid_identifier(table) || !is_valid_identifier(column) {
-        return Err(Error::Invalid("invalid table or column identifier".into()));
-    }
-
     let mut statement = transaction.prepare(&format!(
         "SELECT {column} FROM {table} WHERE tenant_id = ?1 AND person_id = ?2 ORDER BY {column}"
     ))?;
@@ -423,10 +419,6 @@ fn ensure_column(
     column: &str,
     definition: &str,
 ) -> Result<()> {
-    if !is_valid_identifier(table) || !is_valid_identifier(column) {
-        return Err(Error::Invalid("invalid table or column identifier".into()));
-    }
-
     let exists = transaction.query_row(
         &format!("SELECT EXISTS(SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1)"),
         [column],
@@ -439,10 +431,6 @@ fn ensure_column(
         )?;
     }
     Ok(())
-}
-
-fn is_valid_identifier(ident: &str) -> bool {
-    !ident.is_empty() && ident.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 fn set_version(transaction: &Transaction<'_>, version: i64) -> Result<()> {
