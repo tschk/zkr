@@ -2,6 +2,8 @@ use super::embeddings::{
     current_embedding_lane, embedding_target, embedding_target_parts, projection_input_from,
     stored_embedding_is_valid,
 };
+use std::collections::HashMap;
+
 use super::summaries::stale_summary_count;
 use super::*;
 use rusqlite::{Transaction, params};
@@ -67,52 +69,53 @@ fn fetch_repair_outbox_rows(
     Ok(rows)
 }
 
+struct EmbeddingRow {
+    model: String,
+    version: String,
+    revision: i64,
+    hash: String,
+    dimension: usize,
+    normalization: String,
+    distance: String,
+    vector: String,
+}
+
 fn process_repair_target(
     transaction: &Transaction<'_>,
     input: &RepairInput,
     target_kind: &str,
     target_id: &str,
     target: EmbeddingTarget,
-    statement: &mut rusqlite::Statement<'_>,
+    embedding_rows: &[EmbeddingRow],
 ) -> Result<()> {
     match projection_input_from(transaction, &input.tenant_id, &input.person_id, target) {
         Ok(current) => {
-            let embedding_rows = statement.query_map(
-                params![input.tenant_id.0, input.person_id.0, target_kind, target_id],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, i64>(2)?,
-                        row.get::<_, String>(3)?,
-                        row.get::<_, usize>(4)?,
-                        row.get::<_, String>(5)?,
-                        row.get::<_, String>(6)?,
-                        row.get::<_, String>(7)?,
-                    ))
-                },
-            )?;
-            let embedding_rows: Vec<_> =
-                embedding_rows.collect::<std::result::Result<Vec<_>, _>>()?;
-            for (model, version, revision, hash, dimension, normalization, distance, vector) in
-                embedding_rows
-            {
+            for row in embedding_rows {
+                let model = &row.model;
+                let version = &row.version;
+                let revision = row.revision;
+                let hash = &row.hash;
+                let dimension = row.dimension;
+                let normalization = &row.normalization;
+                let distance = &row.distance;
+                let vector = &row.vector;
+
                 let lane = (
                     dimension,
-                    serde_json::from_str::<VectorNormalization>(&normalization)?,
-                    serde_json::from_str::<VectorDistance>(&distance)?,
+                    serde_json::from_str::<VectorNormalization>(normalization)?,
+                    serde_json::from_str::<VectorDistance>(distance)?,
                 );
                 let expected = current_embedding_lane(
                     transaction,
                     &input.tenant_id,
                     &input.person_id,
-                    &model,
-                    &version,
+                    model,
+                    version,
                     Some((target_kind, target_id)),
                 )?;
                 let should_delete = revision != current.target_revision
-                    || hash != current.input_hash
-                    || !stored_embedding_is_valid(dimension, &normalization, &distance, &vector)
+                    || *hash != current.input_hash
+                    || !stored_embedding_is_valid(dimension, normalization, distance, vector)
                     || expected.is_some_and(|expected| expected != lane);
                 if should_delete {
                     transaction.execute(
@@ -148,10 +151,59 @@ impl MemoryDb {
         let rows = fetch_repair_outbox_rows(&transaction, &input)?;
         let processed_at: Timestamp =
             transaction.query_row("SELECT unixepoch()", [], |row| row.get(0))?;
+
+        let mut embeddings_by_target: HashMap<(String, String), Vec<EmbeddingRow>> = HashMap::new();
+
+        if !rows.is_empty() {
+            let mut query = String::from(
+                "SELECT target_kind, target_id, model, version, target_revision, input_hash, dimension, normalization, distance, vector FROM embeddings WHERE tenant_id = ? AND person_id = ? AND (target_kind, target_id) IN (",
+            );
+
+            for (i, _) in rows.iter().enumerate() {
+                if i > 0 {
+                    query.push_str(", ");
+                }
+                query.push_str("(?, ?)");
+            }
+            query.push(')');
+
+            let mut sql_params: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(2 + rows.len() * 2);
+            sql_params.push(&input.tenant_id.0);
+            sql_params.push(&input.person_id.0);
+            for (_, target_kind, target_id) in &rows {
+                sql_params.push(target_kind);
+                sql_params.push(target_id);
+            }
+
+            let mut statement = transaction.prepare(&query)?;
+            let embedding_rows =
+                statement.query_map(rusqlite::params_from_iter(sql_params), |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        EmbeddingRow {
+                            model: row.get::<_, String>(2)?,
+                            version: row.get::<_, String>(3)?,
+                            revision: row.get::<_, i64>(4)?,
+                            hash: row.get::<_, String>(5)?,
+                            dimension: row.get::<_, usize>(6)?,
+                            normalization: row.get::<_, String>(7)?,
+                            distance: row.get::<_, String>(8)?,
+                            vector: row.get::<_, String>(9)?,
+                        },
+                    ))
+                })?;
+
+            for row in embedding_rows {
+                let (target_kind, target_id, embed_row) = row?;
+                embeddings_by_target
+                    .entry((target_kind, target_id))
+                    .or_default()
+                    .push(embed_row);
+            }
+        }
+
         let mut processed = 0;
-        let mut statement = transaction.prepare_cached(
-            "SELECT model, version, target_revision, input_hash, dimension, normalization, distance, vector FROM embeddings WHERE tenant_id = ?1 AND person_id = ?2 AND target_kind = ?3 AND target_id = ?4",
-        )?;
         for (id, target_kind, target_id) in rows {
             let target = match embedding_target(&target_kind, &target_id) {
                 Ok(target) => target,
@@ -163,13 +215,18 @@ impl MemoryDb {
                     continue;
                 }
             };
+            let empty_vec = Vec::new();
+            let target_embeddings = embeddings_by_target
+                .get(&(target_kind.clone(), target_id.clone()))
+                .unwrap_or(&empty_vec);
+
             process_repair_target(
                 &transaction,
                 &input,
                 &target_kind,
                 &target_id,
                 target,
-                &mut statement,
+                target_embeddings,
             )?;
             transaction.execute(
                 "UPDATE memory_repair_outbox SET processed_at = ?1 WHERE id = ?2",
@@ -177,7 +234,6 @@ impl MemoryDb {
             )?;
             processed += 1;
         }
-        drop(statement);
         let summaries_stale =
             stale_summary_count(&transaction, &input.tenant_id, &input.person_id)?;
         record_operation(
