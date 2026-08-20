@@ -41,28 +41,32 @@ fn search_filters_by_enabled_features() {
     db.remember(gamma_mem).unwrap();
 
     // With no features enabled, only public is returned
-    let found = db.search(SearchInput {
-        tenant_id: TenantId("a".into()),
-        person_id: PersonId("sam".into()),
-        query: "Secret project".into(),
-        limit: 5,
-        query_embedding: None,
-        as_of: None,
-        enabled_features: Vec::new(),
-    }).unwrap();
+    let found = db
+        .search(SearchInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            query: "Secret project".into(),
+            limit: 5,
+            query_embedding: None,
+            as_of: None,
+            enabled_features: Vec::new(),
+        })
+        .unwrap();
     assert_eq!(found.items.len(), 1);
     assert!(found.items[0].excerpt.contains("Alpha"));
 
     // With "beta" enabled, public and beta are returned
-    let found_beta = db.search(SearchInput {
-        tenant_id: TenantId("a".into()),
-        person_id: PersonId("sam".into()),
-        query: "Secret project".into(),
-        limit: 5,
-        query_embedding: None,
-        as_of: None,
-        enabled_features: vec!["beta".into()],
-    }).unwrap();
+    let found_beta = db
+        .search(SearchInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            query: "Secret project".into(),
+            limit: 5,
+            query_embedding: None,
+            as_of: None,
+            enabled_features: vec!["beta".into()],
+        })
+        .unwrap();
     assert_eq!(found_beta.items.len(), 2);
     let excerpts: Vec<_> = found_beta.items.iter().map(|i| i.excerpt.clone()).collect();
     assert!(excerpts.iter().any(|e| e.contains("Alpha")));
@@ -112,18 +116,20 @@ fn search_temporal_as_of_filters_future_memories() {
     db.remember(newer_mem).unwrap();
 
     // Searching as of 15 should only find the older memory
-    let found = db.search(SearchInput {
-        tenant_id: TenantId("a".into()),
-        person_id: PersonId("sam".into()),
-        query: "Target spotted".into(),
-        limit: 5,
-        query_embedding: None,
-        as_of: Some(TemporalQuery {
-            valid_at: 15,
-            recorded_at: 15,
-        }),
-        enabled_features: Vec::new(),
-    }).unwrap();
+    let found = db
+        .search(SearchInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            query: "Target spotted".into(),
+            limit: 5,
+            query_embedding: None,
+            as_of: Some(TemporalQuery {
+                valid_at: 15,
+                recorded_at: 15,
+            }),
+            enabled_features: Vec::new(),
+        })
+        .unwrap();
 
     assert_eq!(found.items.len(), 1);
     assert!(found.items[0].excerpt.contains("London"));
