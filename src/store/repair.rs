@@ -16,9 +16,37 @@ pub(super) fn enqueue_projection_repair(
 ) -> Result<()> {
     let (target_kind, target_id) = embedding_target_parts(&target);
     transaction.execute(
-        "INSERT INTO memory_repair_outbox(id, tenant_id, person_id, target_kind, target_id, reason, created_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![new_id(transaction)?, tenant_id.0, person_id.0, target_kind, target_id, reason, created_at],
+        "INSERT INTO memory_repair_outbox(id, tenant_id, person_id, target_kind, target_id, reason, created_at) VALUES(lower(hex(randomblob(16))), ?1, ?2, ?3, ?4, ?5, ?6)",
+        params![tenant_id.0, person_id.0, target_kind, target_id, reason, created_at],
     )?;
+    Ok(())
+}
+
+pub(super) fn enqueue_projection_repairs<I>(
+    transaction: &Transaction<'_>,
+    tenant_id: &TenantId,
+    person_id: &PersonId,
+    targets: I,
+    reason: &str,
+    created_at: Timestamp,
+) -> Result<()>
+where
+    I: IntoIterator<Item = EmbeddingTarget>,
+{
+    let mut stmt = transaction.prepare_cached(
+        "INSERT INTO memory_repair_outbox(id, tenant_id, person_id, target_kind, target_id, reason, created_at) VALUES(lower(hex(randomblob(16))), ?1, ?2, ?3, ?4, ?5, ?6)",
+    )?;
+    for target in targets {
+        let (target_kind, target_id) = embedding_target_parts(&target);
+        stmt.execute(params![
+            tenant_id.0,
+            person_id.0,
+            target_kind,
+            target_id,
+            reason,
+            created_at
+        ])?;
+    }
     Ok(())
 }
 

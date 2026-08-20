@@ -1,7 +1,7 @@
 use super::export::{
     append_commit, claim_evidence_record, claim_record, evidence_record, source_record,
 };
-use super::repair::{enqueue_projection_repair, record_operation};
+use super::repair::{enqueue_projection_repair, enqueue_projection_repairs, record_operation};
 use super::summaries::invalidate_summaries_for_evidence;
 use super::*;
 
@@ -1104,34 +1104,27 @@ fn enqueue_deletion_repairs(
     changed_claim_ids: &[ClaimId],
     deleted_at: i64,
 ) -> Result<()> {
-    enqueue_projection_repair(
+    let targets = std::iter::once(EmbeddingTarget::Source(source_id.clone()))
+        .chain(
+            evidence_ids
+                .iter()
+                .map(|id| EmbeddingTarget::Evidence(id.clone())),
+        )
+        .chain(
+            changed_claim_ids
+                .iter()
+                .map(|id| EmbeddingTarget::Claim(id.clone())),
+        );
+
+    enqueue_projection_repairs(
         transaction,
         tenant_id,
         person_id,
-        EmbeddingTarget::Source(source_id.clone()),
+        targets,
         "delete_sync",
         deleted_at,
     )?;
-    for evidence_id in evidence_ids {
-        enqueue_projection_repair(
-            transaction,
-            tenant_id,
-            person_id,
-            EmbeddingTarget::Evidence(evidence_id.clone()),
-            "delete_sync",
-            deleted_at,
-        )?;
-    }
-    for claim_id in changed_claim_ids {
-        enqueue_projection_repair(
-            transaction,
-            tenant_id,
-            person_id,
-            EmbeddingTarget::Claim(claim_id.clone()),
-            "delete_sync",
-            deleted_at,
-        )?;
-    }
+
     Ok(())
 }
 
