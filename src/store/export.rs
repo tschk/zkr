@@ -246,31 +246,30 @@ pub(super) fn claim_evidence_record(
     ).map_err(Error::from)
 }
 
-pub(super) fn profile_record(
+
+pub(super) fn profile_records(
     transaction: &Transaction<'_>,
     tenant_id: &TenantId,
     person_id: &PersonId,
-    profile_id: &ProfileEntryId,
-) -> Result<ProfileEntry> {
-    transaction
-        .query_row(
-            "SELECT key, value, stability, claim_id, recorded_at FROM profile_entries WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3",
-            params![profile_id.0, tenant_id.0, person_id.0],
-            |row| {
-                let stability: String = row.get(2)?;
-                Ok(ProfileEntry {
-                    id: profile_id.clone(),
-                    tenant_id: tenant_id.clone(),
-                    person_id: person_id.clone(),
-                    key: row.get(0)?,
-                    value: row.get(1)?,
-                    stability: serde_json::from_str(&stability).map_err(sql_json_error)?,
-                    claim_id: ClaimId(row.get(3)?),
-                    recorded_at: row.get(4)?,
-                })
-            },
-        )
-        .map_err(Error::from)
+) -> Result<Vec<ProfileEntry>> {
+    let mut stmt = transaction.prepare(
+        "SELECT id, key, value, stability, claim_id, recorded_at FROM profile_entries WHERE tenant_id = ?1 AND person_id = ?2 ORDER BY id"
+    )?;
+    let entries = stmt.query_map(params![tenant_id.0, person_id.0], |row| {
+        let stability: String = row.get(3)?;
+        Ok(ProfileEntry {
+            id: ProfileEntryId(row.get(0)?),
+            tenant_id: tenant_id.clone(),
+            person_id: person_id.clone(),
+            key: row.get(1)?,
+            value: row.get(2)?,
+            stability: serde_json::from_str(&stability).map_err(sql_json_error)?,
+            claim_id: ClaimId(row.get(4)?),
+            recorded_at: row.get(5)?,
+        })
+    })?
+    .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(entries)
 }
 
 pub(super) fn review_record(
