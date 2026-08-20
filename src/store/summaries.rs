@@ -280,18 +280,42 @@ fn validate_evidence(
                 "summary evidence_ids must be unique".to_owned(),
             ));
         }
-        let live: bool = transaction.query_row(
-            "SELECT EXISTS(SELECT 1 FROM evidence WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND deleted_at IS NULL)",
-            params![evidence_id.0, tenant_id.0, person_id.0],
-            |row| row.get(0),
-        )?;
-        if !live {
-            return Err(Error::Invalid(format!(
-                "evidence {} is unavailable",
-                evidence_id.0
-            )));
+    }
+
+    for chunk in evidence_ids.chunks(900) {
+        let placeholders = (3..3 + chunk.len())
+            .map(|index| format!("?{index}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let query = format!(
+            "SELECT COUNT(*) FROM evidence WHERE tenant_id = ?1 AND person_id = ?2 AND deleted_at IS NULL AND id IN ({placeholders})"
+        );
+
+        let mut params: Vec<&dyn rusqlite::ToSql> = vec![&tenant_id.0, &person_id.0];
+        params.extend(chunk.iter().map(|id| &id.0 as &dyn rusqlite::ToSql));
+
+        let count: usize =
+            transaction.query_row(&query, rusqlite::params_from_iter(params), |row| row.get(0))?;
+
+        if count != chunk.len() {
+            // Find the specific missing evidence to produce the exact error message
+            for evidence_id in chunk {
+                let live: bool = transaction.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM evidence WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND deleted_at IS NULL)",
+                    params![evidence_id.0, tenant_id.0, person_id.0],
+                    |row| row.get(0),
+                )?;
+                if !live {
+                    return Err(Error::Invalid(format!(
+                        "evidence {} is unavailable",
+                        evidence_id.0
+                    )));
+                }
+            }
         }
     }
+
     Ok(())
 }
 
