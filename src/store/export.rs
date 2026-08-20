@@ -105,6 +105,47 @@ pub(super) fn source_record(
     ).map_err(Error::from)
 }
 
+pub(super) fn claim_records(
+    transaction: &Transaction<'_>,
+    tenant_id: &TenantId,
+    person_id: &PersonId,
+) -> Result<Vec<Claim>> {
+    let mut statement = transaction.prepare(
+        "SELECT id, subject, predicate, value, kind, valid_from, valid_until, recorded_from, recorded_until, status, tier, processing_state FROM claims WHERE tenant_id = ?1 AND person_id = ?2 ORDER BY id"
+    )?;
+    statement
+        .query_map(params![tenant_id.0, person_id.0], |row| {
+            let claim_id_str: String = row.get(0)?;
+            let kind: String = row.get(4)?;
+            let status: String = row.get(9)?;
+            let tier: String = row.get(10)?;
+            let processing_state: String = row.get(11)?;
+            Ok(Claim {
+                id: ClaimId(claim_id_str),
+                tenant_id: tenant_id.clone(),
+                person_id: person_id.clone(),
+                subject: row.get(1)?,
+                predicate: row.get(2)?,
+                value: row.get(3)?,
+                kind: serde_json::from_str(&format!("\"{kind}\"")).map_err(sql_json_error)?,
+                valid_time: crate::TimeRange {
+                    from: row.get(5)?,
+                    until: row.get(6)?,
+                },
+                recorded_time: crate::TimeRange {
+                    from: row.get(7)?,
+                    until: row.get(8)?,
+                },
+                status: serde_json::from_str(&format!("\"{status}\"")).map_err(sql_json_error)?,
+                tier: serde_json::from_str(&format!("\"{tier}\"")).map_err(sql_json_error)?,
+                processing_state: serde_json::from_str(&format!("\"{processing_state}\""))
+                    .map_err(sql_json_error)?,
+            })
+        })?
+        .map(|result| result.map_err(Error::from))
+        .collect()
+}
+
 pub(super) fn evidence_record(
     transaction: &Transaction<'_>,
     tenant_id: &TenantId,
