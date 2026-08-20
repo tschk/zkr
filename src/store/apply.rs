@@ -146,31 +146,18 @@ fn apply_commit(
             if record_pass(record) != pass {
                 continue;
             }
-            let (record_kind, record_id) = record_identity(record);
-            let payload_hash = record_hash(record)?;
-            let seen: bool = check_seen.query_row(
-                params![
-                    tenant_id.0,
-                    person_id.0,
-                    record_kind,
-                    record_id,
-                    payload_hash
-                ],
-                |row| row.get(0),
-            )?;
-            if seen {
+            if !try_apply_record(
+                transaction,
+                tenant_id,
+                person_id,
+                record,
+                applied_at,
+                check_seen,
+                insert_seen,
+            )? {
                 applied.records_skipped += 1;
                 continue;
             }
-            apply_record(transaction, record, applied_at)?;
-            insert_seen.execute(params![
-                tenant_id.0,
-                person_id.0,
-                record_kind,
-                record_id,
-                payload_hash,
-                applied_at
-            ])?;
             accepted[index] = true;
             applied.records_applied += 1;
         }
@@ -192,6 +179,43 @@ fn apply_commit(
     )?;
     applied.commits_applied += 1;
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn try_apply_record(
+    transaction: &Transaction<'_>,
+    tenant_id: &TenantId,
+    person_id: &PersonId,
+    record: &ExportRecord,
+    applied_at: Timestamp,
+    check_seen: &mut rusqlite::Statement<'_>,
+    insert_seen: &mut rusqlite::Statement<'_>,
+) -> Result<bool> {
+    let (record_kind, record_id) = record_identity(record);
+    let payload_hash = record_hash(record)?;
+    let seen: bool = check_seen.query_row(
+        params![
+            tenant_id.0,
+            person_id.0,
+            record_kind,
+            record_id,
+            payload_hash
+        ],
+        |row| row.get(0),
+    )?;
+    if seen {
+        return Ok(false);
+    }
+    apply_record(transaction, record, applied_at)?;
+    insert_seen.execute(params![
+        tenant_id.0,
+        person_id.0,
+        record_kind,
+        record_id,
+        payload_hash,
+        applied_at
+    ])?;
+    Ok(true)
 }
 
 fn apply_record(
