@@ -29,7 +29,9 @@ unsafe_code = "forbid"
 
 [lints.clippy]
 all = "deny"
-
 [[bench]]
 name = "lifecycle_deletion_repairs"
+
+[[bench]]
+name = "claims_nplus1"
 harness = false
