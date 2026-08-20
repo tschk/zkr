@@ -6,6 +6,7 @@ use super::lifecycle::{
 use super::repair::{enqueue_projection_repair, record_operation};
 use super::*;
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 
 const SOURCE_PASS: u8 = 0;
 const EVIDENCE_PASS: u8 = 1;
@@ -43,7 +44,7 @@ impl MemoryDb {
             records_skipped: 0,
         };
         let mut check_seen = transaction.prepare_cached(
-            "SELECT EXISTS(SELECT 1 FROM memory_applied_records WHERE tenant_id = ?1 AND person_id = ?2 AND record_kind = ?3 AND record_id = ?4 AND payload_hash = ?5)",
+            "SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'), json_extract(value, '$[2]') FROM json_each(?3) INNER JOIN memory_applied_records m ON m.tenant_id = ?1 AND m.person_id = ?2 AND m.record_kind = json_extract(value, '$[0]') AND m.record_id = json_extract(value, '$[1]') AND m.payload_hash = json_extract(value, '$[2]')",
         )?;
         let mut insert_seen = transaction.prepare_cached(
             "INSERT INTO memory_applied_records(tenant_id, person_id, record_kind, record_id, payload_hash, applied_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
@@ -133,8 +134,32 @@ fn apply_commit(
     insert_seen: &mut rusqlite::Statement<'_>,
 ) -> Result<()> {
     let mut accepted = vec![false; commit.records.len()];
+
+    let mut precomputed_keys = Vec::with_capacity(commit.records.len());
+    for record in &commit.records {
+        let (record_kind, record_id) = record_identity(record);
+        let payload_hash = record_hash(record)?;
+        precomputed_keys.push((record_kind, record_id, payload_hash));
+    }
+
+    let keys_json = serde_json::to_string(&precomputed_keys)?;
+
+    let mut seen_records: HashSet<(String, String, String)> = HashSet::new();
+    let mut rows = check_seen.query(params![tenant_id.0, person_id.0, keys_json])?;
+    while let Some(row) = rows.next()? {
+        let kind: String = row.get(0)?;
+        let id: String = row.get(1)?;
+        let hash: String = row.get(2)?;
+        seen_records.insert((kind, id, hash));
+    }
+
     for pass in PASSES {
-        for (index, record) in commit.records.iter().enumerate() {
+        for (index, (record, (record_kind, record_id, payload_hash))) in commit
+            .records
+            .iter()
+            .zip(precomputed_keys.iter())
+            .enumerate()
+        {
             if pass == ORIGIN_PASS {
                 if let ExportRecord::Source(record) = record {
                     if accepted[index] {
@@ -146,19 +171,11 @@ fn apply_commit(
             if record_pass(record) != pass {
                 continue;
             }
-            let (record_kind, record_id) = record_identity(record);
-            let payload_hash = record_hash(record)?;
-            let seen: bool = check_seen.query_row(
-                params![
-                    tenant_id.0,
-                    person_id.0,
-                    record_kind,
-                    record_id,
-                    payload_hash
-                ],
-                |row| row.get(0),
-            )?;
-            if seen {
+            if seen_records.contains(&(
+                record_kind.to_string(),
+                record_id.clone(),
+                payload_hash.clone(),
+            )) {
                 applied.records_skipped += 1;
                 continue;
             }
@@ -171,6 +188,11 @@ fn apply_commit(
                 payload_hash,
                 applied_at
             ])?;
+            seen_records.insert((
+                record_kind.to_string(),
+                record_id.clone(),
+                payload_hash.clone(),
+            ));
             accepted[index] = true;
             applied.records_applied += 1;
         }
