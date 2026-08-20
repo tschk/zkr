@@ -627,14 +627,12 @@ fn apply_profile(transaction: &Transaction<'_>, record: &ProfileEntry) -> Result
 }
 
 fn apply_review(transaction: &Transaction<'_>, record: &DailyReview) -> Result<()> {
-    for evidence_id in &record.evidence_ids {
-        require_evidence(
-            transaction,
-            &record.tenant_id,
-            &record.person_id,
-            evidence_id,
-        )?;
-    }
+    require_all_evidence(
+        transaction,
+        &record.tenant_id,
+        &record.person_id,
+        &record.evidence_ids,
+    )?;
     let evidence_ids = serde_json::to_string(&record.evidence_ids)?;
     let stored = transaction
         .query_row(
@@ -814,6 +812,45 @@ fn require_evidence(
         "applied record references unknown evidence {}",
         evidence_id.0
     )))
+}
+
+fn require_all_evidence(
+    transaction: &Transaction<'_>,
+    tenant_id: &TenantId,
+    person_id: &PersonId,
+    evidence_ids: &[EvidenceId],
+) -> Result<()> {
+    if evidence_ids.is_empty() {
+        return Ok(());
+    }
+
+    let placeholders = (3..3 + evidence_ids.len())
+        .map(|index| format!("?{index}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let query = format!(
+        "SELECT id FROM evidence WHERE tenant_id = ?1 AND person_id = ?2 AND id IN ({placeholders})"
+    );
+
+    let mut params: Vec<&dyn rusqlite::ToSql> = vec![&tenant_id.0, &person_id.0];
+    params.extend(evidence_ids.iter().map(|id| &id.0 as &dyn rusqlite::ToSql));
+
+    let mut stmt = transaction.prepare_cached(&query)?;
+    let found_ids_iter = stmt.query_map(rusqlite::params_from_iter(params), |row| {
+        row.get::<_, String>(0)
+    })?;
+    let found_ids: std::collections::HashSet<String> =
+        found_ids_iter.filter_map(std::result::Result::ok).collect();
+    for evidence_id in evidence_ids {
+        if !found_ids.contains(&evidence_id.0) {
+            return Err(Error::Invalid(format!(
+                "applied record references unknown evidence {}",
+                evidence_id.0
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn unknown_target(target: &MemoryRef) -> Error {
