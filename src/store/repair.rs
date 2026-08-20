@@ -67,18 +67,22 @@ fn fetch_repair_outbox_rows(
     Ok(rows)
 }
 
+struct RepairContext<'a, 'conn> {
+    transaction: &'a Transaction<'conn>,
+    input: &'a RepairInput,
+    statement: &'a mut rusqlite::Statement<'conn>,
+}
+
 fn process_repair_target(
-    transaction: &Transaction<'_>,
-    input: &RepairInput,
+    ctx: &mut RepairContext<'_, '_>,
     target_kind: &str,
     target_id: &str,
     target: EmbeddingTarget,
-    statement: &mut rusqlite::Statement<'_>,
 ) -> Result<()> {
-    match projection_input_from(transaction, &input.tenant_id, &input.person_id, target) {
+    match projection_input_from(ctx.transaction, &ctx.input.tenant_id, &ctx.input.person_id, target) {
         Ok(current) => {
-            let embedding_rows = statement.query_map(
-                params![input.tenant_id.0, input.person_id.0, target_kind, target_id],
+            let embedding_rows = ctx.statement.query_map(
+                params![ctx.input.tenant_id.0, ctx.input.person_id.0, target_kind, target_id],
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
@@ -103,9 +107,9 @@ fn process_repair_target(
                     serde_json::from_str::<VectorDistance>(&distance)?,
                 );
                 let expected = current_embedding_lane(
-                    transaction,
-                    &input.tenant_id,
-                    &input.person_id,
+                    ctx.transaction,
+                    &ctx.input.tenant_id,
+                    &ctx.input.person_id,
                     &model,
                     &version,
                     Some((target_kind, target_id)),
@@ -115,22 +119,22 @@ fn process_repair_target(
                     || !stored_embedding_is_valid(dimension, &normalization, &distance, &vector)
                     || expected.is_some_and(|expected| expected != lane);
                 if should_delete {
-                    transaction.execute(
+                    ctx.transaction.execute(
                         "DELETE FROM embeddings WHERE tenant_id = ?1 AND person_id = ?2 AND target_kind = ?3 AND target_id = ?4 AND model = ?5 AND version = ?6",
-                        params![input.tenant_id.0, input.person_id.0, target_kind, target_id, model, version],
+                        params![ctx.input.tenant_id.0, ctx.input.person_id.0, target_kind, target_id, model, version],
                     )?;
                 }
             }
         }
         Err(Error::NotFound) => {
-            transaction.execute(
+            ctx.transaction.execute(
                 "DELETE FROM embeddings WHERE tenant_id = ?1 AND person_id = ?2 AND target_kind = ?3 AND target_id = ?4",
-                params![input.tenant_id.0, input.person_id.0, target_kind, target_id],
+                params![ctx.input.tenant_id.0, ctx.input.person_id.0, target_kind, target_id],
             )?;
             if target_kind == "source" {
-                transaction.execute(
+                ctx.transaction.execute(
                     "DELETE FROM source_fts WHERE source_id = ?1 AND tenant_id = ?2 AND person_id = ?3",
-                    params![target_id, input.tenant_id.0, input.person_id.0],
+                    params![target_id, ctx.input.tenant_id.0, ctx.input.person_id.0],
                 )?;
             }
         }
@@ -163,13 +167,16 @@ impl MemoryDb {
                     continue;
                 }
             };
+            let mut ctx = RepairContext {
+                transaction: &transaction,
+                input: &input,
+                statement: &mut statement,
+            };
             process_repair_target(
-                &transaction,
-                &input,
+                &mut ctx,
                 &target_kind,
                 &target_id,
                 target,
-                &mut statement,
             )?;
             transaction.execute(
                 "UPDATE memory_repair_outbox SET processed_at = ?1 WHERE id = ?2",
