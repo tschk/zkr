@@ -1069,14 +1069,27 @@ fn retract_claims(
         error => Error::Sql(error),
     })? as u64;
     let mut changed_claim_ids = Vec::new();
-    for claim_id in candidate_claim_ids {
-        let changed: bool = transaction.query_row(
-            "SELECT status = 'retracted' AND recorded_until = ?1 FROM claims WHERE id = ?2 AND tenant_id = ?3 AND person_id = ?4",
-            params![deleted_at, claim_id.0, tenant_id.0, person_id.0],
-            |row| row.get(0),
-        )?;
-        if changed {
-            changed_claim_ids.push(claim_id.clone());
+    for chunk in candidate_claim_ids.chunks(900) {
+        let placeholders = (0..chunk.len())
+            .map(|i| format!("?{}", i + 4))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT id FROM claims WHERE status = 'retracted' AND recorded_until = ?1 AND tenant_id = ?2 AND person_id = ?3 AND id IN ({})",
+            placeholders
+        );
+
+        let mut params: Vec<&dyn rusqlite::ToSql> = vec![&deleted_at, &tenant_id.0, &person_id.0];
+        for claim_id in chunk {
+            params.push(&claim_id.0);
+        }
+
+        let mut stmt = transaction.prepare_cached(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
+            row.get::<_, String>(0)
+        })?;
+        for id in rows {
+            changed_claim_ids.push(ClaimId(id?));
         }
     }
     Ok((claim_count, changed_claim_ids))
