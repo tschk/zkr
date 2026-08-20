@@ -39,8 +39,23 @@ export async function runZkr(
   input: unknown,
   options: ZkrOptions = {},
 ): Promise<unknown> {
+if (options.command !== undefined && typeof options.command !== "string") {
+    throw new Error("zkr command must be a string");
+  }
+  if (options.database !== undefined && typeof options.database !== "string") {
+    throw new Error("zkr database must be a string");
+  }
+
   const executable = resolveZkrExecutable(options.command);
   const database = options.database ?? join(homedir(), ".zkr", "memory.db");
+
+  if (database.includes("\0")) {
+    throw new Error("zkr database path must not contain null bytes");
+  }
+
+  if (database.startsWith("-")) {
+    throw new Error("zkr database path must not start with a hyphen");
+  }
   mkdirSync(dirname(database), { recursive: true });
 
   return new Promise((resolve, reject) => {
