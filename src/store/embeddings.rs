@@ -124,7 +124,16 @@ pub(super) fn current_embedding_lane(
     replacement_target: Option<(&str, &str)>,
 ) -> Result<Option<EmbeddingLane>> {
     let mut statement = connection.prepare(
-        "SELECT target_kind, target_id, dimension, normalization, distance, vector, target_revision, input_hash FROM embeddings WHERE tenant_id = ?1 AND person_id = ?2 AND model = ?3 AND version = ?4 ORDER BY target_kind, target_id",
+        "SELECT embeddings.target_kind, embeddings.target_id, embeddings.dimension, embeddings.normalization, embeddings.distance, embeddings.vector, embeddings.target_revision, embeddings.input_hash,
+                sources.revision, sources.content,
+                evidence.source_revision, evidence.quote,
+                claims.recorded_from, claims.subject || ' ' || claims.predicate || ' ' || claims.value
+         FROM embeddings
+         LEFT JOIN sources ON embeddings.target_kind = 'source' AND embeddings.target_id = sources.id AND sources.tenant_id = embeddings.tenant_id AND sources.person_id = embeddings.person_id AND sources.deleted_at IS NULL
+         LEFT JOIN evidence ON embeddings.target_kind = 'evidence' AND embeddings.target_id = evidence.id AND evidence.tenant_id = embeddings.tenant_id AND evidence.person_id = embeddings.person_id AND evidence.deleted_at IS NULL
+         LEFT JOIN claims ON embeddings.target_kind = 'claim' AND embeddings.target_id = claims.id AND claims.tenant_id = embeddings.tenant_id AND claims.person_id = embeddings.person_id AND claims.status = 'accepted' AND claims.valid_until IS NULL AND claims.recorded_until IS NULL AND claims.tier IN ('short_term', 'long_term') AND claims.processing_state = 'processed'
+         WHERE embeddings.tenant_id = ?1 AND embeddings.person_id = ?2 AND embeddings.model = ?3 AND embeddings.version = ?4
+         ORDER BY embeddings.target_kind, embeddings.target_id",
     )?;
     let rows = statement.query_map(params![tenant_id.0, person_id.0, model, version], |row| {
         Ok((
@@ -136,25 +145,65 @@ pub(super) fn current_embedding_lane(
             row.get::<_, String>(5)?,
             row.get::<_, i64>(6)?,
             row.get::<_, String>(7)?,
+            row.get::<_, Option<i64>>(8)?,
+            row.get::<_, Option<String>>(9)?,
+            row.get::<_, Option<i64>>(10)?,
+            row.get::<_, Option<String>>(11)?,
+            row.get::<_, Option<i64>>(12)?,
+            row.get::<_, Option<String>>(13)?,
         ))
     })?;
     let mut live = Vec::new();
     for row in rows {
-        let (kind, id, dimension, normalization, distance, vector, revision, hash) = row?;
+        let (
+            kind,
+            id,
+            dimension,
+            normalization,
+            distance,
+            vector,
+            revision,
+            hash,
+            s_rev,
+            s_content,
+            e_rev,
+            e_quote,
+            c_rev,
+            c_value,
+        ) = row?;
         if !stored_embedding_is_valid(dimension, &normalization, &distance, &vector) {
             continue;
         }
-        let Ok(target) = embedding_target(&kind, &id) else {
-            continue;
+
+        let (target_revision, text) = match kind.as_str() {
+            "source" => {
+                if let (Some(r), Some(t)) = (s_rev, s_content) {
+                    (r, t)
+                } else {
+                    continue;
+                }
+            }
+            "evidence" => {
+                if let (Some(r), Some(t)) = (e_rev, e_quote) {
+                    (r, t)
+                } else {
+                    continue;
+                }
+            }
+            "claim" => {
+                if let (Some(r), Some(t)) = (c_rev, c_value) {
+                    (r, t)
+                } else {
+                    continue;
+                }
+            }
+            _ => continue,
         };
-        let current = match projection_input_from(connection, tenant_id, person_id, target) {
-            Ok(current) => current,
-            Err(Error::NotFound) => continue,
-            Err(error) => return Err(error),
-        };
-        if current.target_revision != revision || current.input_hash != hash {
+
+        if target_revision != revision || input_hash(&text) != hash {
             continue;
         }
+
         live.push((
             kind,
             id,
@@ -272,8 +321,14 @@ impl MemoryDb {
             None,
         )?;
         let mut statement = self.connection.prepare(
-            "SELECT embeddings.target_kind, embeddings.target_id, embeddings.dimension, embeddings.normalization, embeddings.distance, embeddings.vector, embeddings.target_revision, embeddings.input_hash
+            "SELECT embeddings.target_kind, embeddings.target_id, embeddings.dimension, embeddings.normalization, embeddings.distance, embeddings.vector, embeddings.target_revision, embeddings.input_hash,
+                    sources.revision, sources.content,
+                    evidence.source_revision, evidence.quote,
+                    claims.recorded_from, claims.subject || ' ' || claims.predicate || ' ' || claims.value
              FROM embeddings
+             LEFT JOIN sources ON embeddings.target_kind = 'source' AND embeddings.target_id = sources.id AND sources.tenant_id = embeddings.tenant_id AND sources.person_id = embeddings.person_id AND sources.deleted_at IS NULL
+             LEFT JOIN evidence ON embeddings.target_kind = 'evidence' AND embeddings.target_id = evidence.id AND evidence.tenant_id = embeddings.tenant_id AND evidence.person_id = embeddings.person_id AND evidence.deleted_at IS NULL
+             LEFT JOIN claims ON embeddings.target_kind = 'claim' AND embeddings.target_id = claims.id AND claims.tenant_id = embeddings.tenant_id AND claims.person_id = embeddings.person_id AND claims.status = 'accepted' AND claims.valid_until IS NULL AND claims.recorded_until IS NULL AND claims.tier IN ('short_term', 'long_term') AND claims.processing_state = 'processed'
              WHERE embeddings.tenant_id = ?1 AND embeddings.person_id = ?2 AND embeddings.model = ?3 AND embeddings.version = ?4
              ORDER BY embeddings.target_kind, embeddings.target_id",
         )?;
@@ -289,6 +344,12 @@ impl MemoryDb {
                     row.get::<_, String>(5)?,
                     row.get::<_, i64>(6)?,
                     row.get::<_, String>(7)?,
+                    row.get::<_, Option<i64>>(8)?,
+                    row.get::<_, Option<String>>(9)?,
+                    row.get::<_, Option<i64>>(10)?,
+                    row.get::<_, Option<String>>(11)?,
+                    row.get::<_, Option<i64>>(12)?,
+                    row.get::<_, Option<String>>(13)?,
                 ))
             },
         )?;
@@ -301,20 +362,47 @@ impl MemoryDb {
                 normalization,
                 distance,
                 vector,
-                target_revision,
-                input_hash,
+                stored_target_revision,
+                stored_input_hash,
+                s_rev,
+                s_content,
+                e_rev,
+                e_quote,
+                c_rev,
+                c_value,
             ) = row?;
-            let Ok(target) = embedding_target(&target_kind, &target_id) else {
-                continue;
+
+            let (current_target_revision, text) = match target_kind.as_str() {
+                "source" => {
+                    if let (Some(r), Some(t)) = (s_rev, s_content) {
+                        (r, t)
+                    } else {
+                        continue;
+                    }
+                }
+                "evidence" => {
+                    if let (Some(r), Some(t)) = (e_rev, e_quote) {
+                        (r, t)
+                    } else {
+                        continue;
+                    }
+                }
+                "claim" => {
+                    if let (Some(r), Some(t)) = (c_rev, c_value) {
+                        (r, t)
+                    } else {
+                        continue;
+                    }
+                }
+                _ => continue,
             };
-            let current = match self.projection_input(tenant_id, person_id, target) {
-                Ok(current) => current,
-                Err(Error::NotFound) => continue,
-                Err(error) => return Err(error),
-            };
-            if current.target_revision != target_revision || current.input_hash != input_hash {
+
+            if current_target_revision != stored_target_revision
+                || crate::store::embeddings::input_hash(&text) != stored_input_hash
+            {
                 continue;
             }
+
             if !stored_embedding_is_valid(dimension, &normalization, &distance, &vector) {
                 continue;
             }
