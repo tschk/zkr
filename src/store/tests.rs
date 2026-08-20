@@ -82,5 +82,6 @@ mod export;
 mod lifecycle;
 mod migrations;
 mod repair;
+mod repair_perf;
 mod retrieval;
 mod summaries;
