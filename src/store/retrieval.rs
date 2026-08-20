@@ -425,13 +425,9 @@ impl MemoryDb {
         }
 
         if !targets.is_empty() {
-            let targets_json = serde_json::to_string(&targets).map_err(|e| Error::Invalid(e.to_string()))?;
-            stmt.execute(params![
-                tenant_id.0,
-                person_id.0,
-                exposed_at,
-                targets_json
-            ])?;
+            let targets_json =
+                serde_json::to_string(&targets).map_err(|e| Error::Invalid(e.to_string()))?;
+            stmt.execute(params![tenant_id.0, person_id.0, exposed_at, targets_json])?;
         }
         Ok(())
     }

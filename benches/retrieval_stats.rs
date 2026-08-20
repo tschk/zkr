@@ -33,7 +33,10 @@ fn main() -> Result<(), rusqlite::Error> {
     }
     drop(stmt);
     let unoptimized = start.elapsed();
-    println!("Unoptimized (Prepared loop implicit tx) for {}: {:?}", num_items, unoptimized);
+    println!(
+        "Unoptimized (Prepared loop implicit tx) for {}: {:?}",
+        num_items, unoptimized
+    );
 
     // json bulk without TX
     let start = Instant::now();
@@ -48,7 +51,9 @@ fn main() -> Result<(), rusqlite::Error> {
 
     let mut json_arr = "[".to_string();
     for i in 0..num_items {
-        if i > 0 { json_arr.push(','); }
+        if i > 0 {
+            json_arr.push(',');
+        }
         json_arr.push_str(&format!("[\"source\",\"{}\"]", i + num_items));
     }
     json_arr.push(']');
@@ -56,7 +61,10 @@ fn main() -> Result<(), rusqlite::Error> {
     stmt.execute(params!["t1", "p1", 123456i64, json_arr])?;
     drop(stmt);
     let optimized_json = start.elapsed();
-    println!("Optimized (json_each) for {}: {:?}", num_items, optimized_json);
+    println!(
+        "Optimized (json_each) for {}: {:?}",
+        num_items, optimized_json
+    );
 
     Ok(())
 }
