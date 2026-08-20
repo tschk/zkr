@@ -410,15 +410,7 @@ impl MemoryDb {
             input.deleted_at,
         )?;
 
-        enqueue_deletion_repairs(
-            &transaction,
-            &input.tenant_id,
-            &input.person_id,
-            &input.source_id,
-            &evidence_ids,
-            &changed_claim_ids,
-            input.deleted_at,
-        )?;
+        enqueue_deletion_repairs(&transaction, &input, &evidence_ids, &changed_claim_ids)?;
 
         delete_dependent_projections(
             &transaction,
@@ -1097,14 +1089,11 @@ fn retract_claims(
 
 fn enqueue_deletion_repairs(
     transaction: &rusqlite::Transaction<'_>,
-    tenant_id: &TenantId,
-    person_id: &PersonId,
-    source_id: &SourceId,
+    input: &DeleteInput,
     evidence_ids: &[EvidenceId],
     changed_claim_ids: &[ClaimId],
-    deleted_at: i64,
 ) -> Result<()> {
-    let targets = std::iter::once(EmbeddingTarget::Source(source_id.clone()))
+    let targets = std::iter::once(EmbeddingTarget::Source(input.source_id.clone()))
         .chain(
             evidence_ids
                 .iter()
@@ -1118,11 +1107,11 @@ fn enqueue_deletion_repairs(
 
     enqueue_projection_repairs(
         transaction,
-        tenant_id,
-        person_id,
+        &input.tenant_id,
+        &input.person_id,
         targets,
         "delete_sync",
-        deleted_at,
+        input.deleted_at,
     )?;
 
     Ok(())
