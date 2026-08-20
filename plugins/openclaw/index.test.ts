@@ -7,33 +7,57 @@ import { tools, ZkrMemoryHost, zkrPlugin } from "./index.ts";
 
 describe("zkr OpenClaw tools", () => {
   test("redacts local CLI failures", async () => {
-    const command = "zkr-command-that-must-not-exist";
-    const failure = await runZkr(
-      "search",
-      { tenant_id: "tenant", person_id: "person", query: "memory" },
-      { command },
-    ).catch((error: unknown) => error);
+    const directory = mkdtempSync(join(tmpdir(), "zkr-openclaw-"));
+    const command = join(directory, "zkr");
+    try {
+      const failure = await runZkr(
+        "search",
+        { tenant_id: "tenant", person_id: "person", query: "memory" },
+        { command },
+      ).catch((error: unknown) => error);
 
-    expect(String(failure)).toBe(`Error: ${ZKR_COMMAND_FAILED}`);
-    expect(String(failure)).not.toContain(command);
+      expect(String(failure)).toBe(`Error: ${ZKR_COMMAND_FAILED}`);
+      expect(String(failure)).not.toContain(command);
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
   });
 
   test("rejects malformed successful CLI output", async () => {
-    await expect(runZkr("search", {}, { command: "echo" })).rejects.toThrow(
-      ZKR_COMMAND_FAILED,
-    );
+    const directory = mkdtempSync(join(tmpdir(), "zkr-openclaw-"));
+    const command = join(directory, "zkr");
+    try {
+      writeFileSync(
+        command,
+        `#!/usr/bin/env bun\nconsole.log("invalid json");\n`,
+      );
+      chmodSync(command, 0o700);
+      await expect(runZkr("search", {}, { command })).rejects.toThrow(
+        ZKR_COMMAND_FAILED,
+      );
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
   });
 
   test("rejects CLI failure with non-zero exit code", async () => {
-    await expect(runZkr("search", {}, { command: "false" })).rejects.toThrow(
-      ZKR_COMMAND_FAILED,
-    );
+    const directory = mkdtempSync(join(tmpdir(), "zkr-openclaw-"));
+    const command = join(directory, "zkr");
+    try {
+      writeFileSync(command, `#!/usr/bin/env bun\nprocess.exit(1);\n`);
+      chmodSync(command, 0o700);
+      await expect(runZkr("search", {}, { command })).rejects.toThrow(
+        ZKR_COMMAND_FAILED,
+      );
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
   });
 
   for (const stream of ["stdout", "stderr"] as const) {
     test(`rejects oversized ${stream} without leaking it`, async () => {
       const directory = mkdtempSync(join(tmpdir(), "zkr-openclaw-"));
-      const command = join(directory, "oversized-output.js");
+      const command = join(directory, "zkr");
       const marker = `secret-${stream}-output`;
       try {
         writeFileSync(
