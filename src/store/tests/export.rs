@@ -85,13 +85,19 @@ fn export_rejects_invalid_requests() {
     assert!(matches!(db.export(neg_commit), Err(Error::Invalid(m)) if m.contains("negative")));
 
     let neg_event_index = input(0, -2, None, 10);
-    assert!(matches!(db.export(neg_event_index), Err(Error::Invalid(m)) if m.contains("at least -1")));
+    assert!(
+        matches!(db.export(neg_event_index), Err(Error::Invalid(m)) if m.contains("at least -1"))
+    );
 
     let inconsistent_initial = input(0, 0, None, 10);
-    assert!(matches!(db.export(inconsistent_initial), Err(Error::Invalid(m)) if m.contains("initial cursor must use after_event_index -1")));
+    assert!(
+        matches!(db.export(inconsistent_initial), Err(Error::Invalid(m)) if m.contains("initial cursor must use after_event_index -1"))
+    );
 
     let hw_precedes_commit = input(10, 0, Some(5), 10);
-    assert!(matches!(db.export(hw_precedes_commit), Err(Error::Invalid(m)) if m.contains("must not precede after_commit")));
+    assert!(
+        matches!(db.export(hw_precedes_commit), Err(Error::Invalid(m)) if m.contains("must not precede after_commit"))
+    );
 }
 
 #[test]
@@ -113,23 +119,27 @@ fn export_paginates_correctly_by_limit() {
     assert!(!page1.complete);
 
     // 2nd query: use cursor from page1 to get next 3 items
-    let page2 = db.export(input(
-        page1.next_after_commit,
-        page1.next_after_event_index,
-        Some(page1.high_water_mark),
-        3,
-    )).unwrap();
+    let page2 = db
+        .export(input(
+            page1.next_after_commit,
+            page1.next_after_event_index,
+            Some(page1.high_water_mark),
+            3,
+        ))
+        .unwrap();
     let count2: usize = page2.commits.iter().map(|c| c.records.len()).sum();
     assert_eq!(count2, 3);
     assert!(!page2.complete);
 
     // Continue fetching the rest (the total items depend on memory internals but will eventually complete)
-    let page3 = db.export(input(
-        page2.next_after_commit,
-        page2.next_after_event_index,
-        Some(page2.high_water_mark),
-        100, // large limit to get the rest
-    )).unwrap();
+    let page3 = db
+        .export(input(
+            page2.next_after_commit,
+            page2.next_after_event_index,
+            Some(page2.high_water_mark),
+            100, // large limit to get the rest
+        ))
+        .unwrap();
     let count3: usize = page3.commits.iter().map(|c| c.records.len()).sum();
     assert!(count3 > 0);
     assert!(page3.complete);
@@ -147,7 +157,9 @@ fn export_rejects_invalid_cursor() {
     db.migrate().unwrap();
 
     let bad_commit = input(99, 0, None, 10);
-    assert!(matches!(db.export(bad_commit), Err(Error::Invalid(m)) if m.contains("after_commit is not in scope")));
+    assert!(
+        matches!(db.export(bad_commit), Err(Error::Invalid(m)) if m.contains("after_commit is not in scope"))
+    );
 
     db.remember(remember("a", "sam", "Acme")).unwrap();
 
@@ -158,7 +170,9 @@ fn export_rejects_invalid_cursor() {
 
     // test after_event_index >= event_count
     let bad_event_index = input(commit_seq, count, None, 10);
-    assert!(matches!(db.export(bad_event_index), Err(Error::Invalid(m)) if m.contains("exceeds the commit event count")));
+    assert!(
+        matches!(db.export(bad_event_index), Err(Error::Invalid(m)) if m.contains("exceeds the commit event count"))
+    );
 }
 
 #[test]
