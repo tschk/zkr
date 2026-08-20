@@ -1,5 +1,5 @@
 use super::export::{
-    append_records, claim_evidence_record, claim_record, evidence_record, profile_record,
+    append_records, claim_evidence_record, claim_records, evidence_record, profile_record,
     review_record, source_record,
 };
 use super::*;
@@ -353,13 +353,8 @@ fn bootstrap_records(
             &EvidenceId(evidence_id),
         )?));
     }
-    for claim_id in scoped_ids(transaction, "claims", "id", tenant_id, person_id)? {
-        records.push(ExportRecord::Claim(claim_record(
-            transaction,
-            tenant_id,
-            person_id,
-            &ClaimId(claim_id),
-        )?));
+    for claim in claim_records(transaction, tenant_id, person_id)? {
+        records.push(ExportRecord::Claim(claim));
     }
     let mut statement = transaction.prepare(
         "SELECT claim_id, evidence_id FROM claim_evidence WHERE tenant_id = ?1 AND person_id = ?2 ORDER BY claim_id, evidence_id",
