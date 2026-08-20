@@ -2,54 +2,108 @@ import { describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runZkr, ZKR_COMMAND_FAILED } from "./cli.ts";
+import { resolveZkrExecutable, runZkr, ZKR_COMMAND_FAILED } from "./cli.ts";
 import { tools, ZkrMemoryHost, zkrPlugin } from "./index.ts";
 
-describe("zkr OpenClaw tools", () => {
-  test("redacts local CLI failures", async () => {
-    const command = "zkr-command-that-must-not-exist";
-    const failure = await runZkr(
-      "search",
-      { tenant_id: "tenant", person_id: "person", query: "memory" },
-      { command },
-    ).catch((error: unknown) => error);
+async function withTempZkr(
+  script: string | null,
+  run: (command: string) => Promise<void>,
+) {
+  const directory = mkdtempSync(join(tmpdir(), "zkr-openclaw-"));
+  const command = join(directory, "zkr");
+  try {
+    if (script !== null) {
+      writeFileSync(command, script);
+      chmodSync(command, 0o700);
+    }
+    await run(command);
+  } finally {
+    rmSync(directory, { force: true, recursive: true });
+  }
+}
 
-    expect(String(failure)).toBe(`Error: ${ZKR_COMMAND_FAILED}`);
-    expect(String(failure)).not.toContain(command);
+describe("zkr OpenClaw tools", () => {
+  test("allows PATH and custom zkr install locations", () => {
+    expect(resolveZkrExecutable(undefined)).toBe("zkr");
+    expect(resolveZkrExecutable("zkr")).toBe("zkr");
+    expect(resolveZkrExecutable("zkr.exe")).toBe("zkr.exe");
+    expect(resolveZkrExecutable("/usr/local/bin/zkr")).toBe(
+      "/usr/local/bin/zkr",
+    );
+    expect(resolveZkrExecutable("./target/release/zkr")).toBe(
+      "./target/release/zkr",
+    );
+  });
+
+  test("rejects non-zkr executables without leaking the command", async () => {
+    const rejected = [
+      "echo",
+      "false",
+      "python",
+      "node",
+      "/usr/bin/python",
+      "zkr-command-that-must-not-exist",
+      join(tmpdir(), "not-zkr"),
+      "zkr\0python",
+    ];
+    for (const command of rejected) {
+      const failure = await runZkr("search", {}, { command }).catch(
+        (error: unknown) => error,
+      );
+      expect(String(failure)).toBe(`Error: ${ZKR_COMMAND_FAILED}`);
+      expect(String(failure)).not.toContain(command.replaceAll("\0", ""));
+    }
+  });
+
+  test("redacts local CLI failures", async () => {
+    await withTempZkr(null, async (command) => {
+      const failure = await runZkr(
+        "search",
+        { tenant_id: "tenant", person_id: "person", query: "memory" },
+        { command },
+      ).catch((error: unknown) => error);
+
+      expect(String(failure)).toBe(`Error: ${ZKR_COMMAND_FAILED}`);
+      expect(String(failure)).not.toContain(command);
+    });
   });
 
   test("rejects malformed successful CLI output", async () => {
-    await expect(runZkr("search", {}, { command: "echo" })).rejects.toThrow(
-      ZKR_COMMAND_FAILED,
+    await withTempZkr(
+      `#!/usr/bin/env bun\nconsole.log("invalid json");\n`,
+      async (command) => {
+        await expect(runZkr("search", {}, { command })).rejects.toThrow(
+          ZKR_COMMAND_FAILED,
+        );
+      },
     );
   });
 
   test("rejects CLI failure with non-zero exit code", async () => {
-    await expect(runZkr("search", {}, { command: "false" })).rejects.toThrow(
-      ZKR_COMMAND_FAILED,
+    await withTempZkr(
+      `#!/usr/bin/env bun\nprocess.exit(1);\n`,
+      async (command) => {
+        await expect(runZkr("search", {}, { command })).rejects.toThrow(
+          ZKR_COMMAND_FAILED,
+        );
+      },
     );
   });
 
   for (const stream of ["stdout", "stderr"] as const) {
     test(`rejects oversized ${stream} without leaking it`, async () => {
-      const directory = mkdtempSync(join(tmpdir(), "zkr-openclaw-"));
-      const command = join(directory, "oversized-output.js");
       const marker = `secret-${stream}-output`;
-      try {
-        writeFileSync(
-          command,
-          `#!/usr/bin/env bun\nprocess.${stream}.write(${JSON.stringify(marker)}.repeat(65536));\n`,
-        );
-        chmodSync(command, 0o700);
-        const failure = await runZkr("search", {}, { command }).catch(
-          (error: unknown) => error,
-        );
+      await withTempZkr(
+        `#!/usr/bin/env bun\nprocess.${stream}.write(${JSON.stringify(marker)}.repeat(65536));\n`,
+        async (command) => {
+          const failure = await runZkr("search", {}, { command }).catch(
+            (error: unknown) => error,
+          );
 
-        expect(String(failure)).toBe(`Error: ${ZKR_COMMAND_FAILED}`);
-        expect(String(failure)).not.toContain(marker);
-      } finally {
-        rmSync(directory, { force: true, recursive: true });
-      }
+          expect(String(failure)).toBe(`Error: ${ZKR_COMMAND_FAILED}`);
+          expect(String(failure)).not.toContain(marker);
+        },
+      );
     });
   }
 
