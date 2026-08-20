@@ -543,6 +543,74 @@ impl Personality {
 
     // --- Social signals: derivation -----------------------------------------
 
+    fn derive_response_latency_signal(&self, event: &ConversationEvent) -> Option<SocialSignal> {
+        if event.event_kind == "message" {
+            if let Some(prev) = self.recent_events.iter().rev().nth(1) {
+                if prev.participant != event.participant && prev.event_kind == "message" {
+                    let latency = event.epoch.saturating_sub(prev.epoch);
+                    return Some(SocialSignal {
+                        signal_kind: "response_latency".into(),
+                        participant: event.participant.clone(),
+                        value: format!("{}epochs", latency),
+                        epoch: event.epoch,
+                    });
+                }
+            }
+        }
+        None
+    }
+
+    fn derive_typing_without_send_signal(&self, event: &ConversationEvent) -> Option<SocialSignal> {
+        if event.event_kind == "typing" {
+            let followed_by_message = self
+                .recent_events
+                .iter()
+                .rev()
+                .take(5)
+                .any(|e| e.participant == event.participant && e.event_kind == "message");
+            if !followed_by_message {
+                return Some(SocialSignal {
+                    signal_kind: "typing_without_send".into(),
+                    participant: event.participant.clone(),
+                    value: "true".into(),
+                    epoch: event.epoch,
+                });
+            }
+        }
+        None
+    }
+
+    fn derive_reaction_removal_signal(&self, event: &ConversationEvent) -> Option<SocialSignal> {
+        if event.event_kind == "reaction_removed" {
+            return Some(SocialSignal {
+                signal_kind: "reaction_removal".into(),
+                participant: event.participant.clone(),
+                value: event.content.clone(),
+                epoch: event.epoch,
+            });
+        }
+        None
+    }
+
+    fn derive_conversation_velocity_signal(
+        &self,
+        event: &ConversationEvent,
+    ) -> Option<SocialSignal> {
+        let recent_msg_count = self
+            .recent_events
+            .iter()
+            .filter(|e| e.event_kind == "message")
+            .count() as f64;
+        let epoch_span = event.epoch.max(1) as f64;
+        let velocity = recent_msg_count / epoch_span;
+        Some(SocialSignal {
+            signal_kind: "conversation_velocity".into(),
+            participant: event.participant.clone(),
+            value: format!("{velocity:.2}"),
+            epoch: event.epoch,
+        })
+    }
+
     /// Derive social signals from a conversation event.
     ///
     /// Computes response latency, participation balance, conversation
@@ -552,63 +620,21 @@ impl Personality {
         let participant = &event.participant;
         let mut signals: Vec<SocialSignal> = Vec::new();
 
-        // Response latency: time between consecutive messages from different participants.
-        if event.event_kind == "message" {
-            if let Some(prev) = self.recent_events.iter().rev().nth(1) {
-                if prev.participant != *participant && prev.event_kind == "message" {
-                    let latency = event.epoch.saturating_sub(prev.epoch);
-                    signals.push(SocialSignal {
-                        signal_kind: "response_latency".into(),
-                        participant: participant.clone(),
-                        value: format!("{}epochs", latency),
-                        epoch: event.epoch,
-                    });
-                }
-            }
+        if let Some(signal) = self.derive_response_latency_signal(event) {
+            signals.push(signal);
         }
 
-        // Typing-without-send: typing event not followed by a message from same participant.
-        if event.event_kind == "typing" {
-            let followed_by_message = self
-                .recent_events
-                .iter()
-                .rev()
-                .take(5)
-                .any(|e| e.participant == *participant && e.event_kind == "message");
-            if !followed_by_message {
-                signals.push(SocialSignal {
-                    signal_kind: "typing_without_send".into(),
-                    participant: participant.clone(),
-                    value: "true".into(),
-                    epoch: event.epoch,
-                });
-            }
+        if let Some(signal) = self.derive_typing_without_send_signal(event) {
+            signals.push(signal);
         }
 
-        // Reaction removal: deletion of a reaction.
-        if event.event_kind == "reaction_removed" {
-            signals.push(SocialSignal {
-                signal_kind: "reaction_removal".into(),
-                participant: participant.clone(),
-                value: event.content.clone(),
-                epoch: event.epoch,
-            });
+        if let Some(signal) = self.derive_reaction_removal_signal(event) {
+            signals.push(signal);
         }
 
-        // Conversation velocity: messages per epoch window.
-        let recent_msg_count = self
-            .recent_events
-            .iter()
-            .filter(|e| e.event_kind == "message")
-            .count() as f64;
-        let epoch_span = event.epoch.max(1) as f64;
-        let velocity = recent_msg_count / epoch_span;
-        signals.push(SocialSignal {
-            signal_kind: "conversation_velocity".into(),
-            participant: participant.clone(),
-            value: format!("{velocity:.2}"),
-            epoch: event.epoch,
-        });
+        if let Some(signal) = self.derive_conversation_velocity_signal(event) {
+            signals.push(signal);
+        }
 
         // Persist derived signals.
         for signal in &signals {
