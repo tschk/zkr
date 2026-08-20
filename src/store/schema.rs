@@ -413,17 +413,28 @@ fn scoped_ids(
         .collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
+fn is_valid_identifier(name: &str) -> bool {
+    !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
 fn ensure_column(
     transaction: &Transaction<'_>,
     table: &str,
     column: &str,
     definition: &str,
 ) -> Result<()> {
+    if !is_valid_identifier(table) || !is_valid_identifier(column) {
+        return Err(Error::Invalid(format!(
+            "invalid table or column name in schema migration: {table}.{column}"
+        )));
+    }
+
     let exists = transaction.query_row(
-        &format!("SELECT EXISTS(SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1)"),
-        [column],
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2)",
+        rusqlite::params![table, column],
         |row| row.get::<_, bool>(0),
     )?;
+
     if !exists {
         transaction.execute(
             &format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"),
