@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 export type ZkrCommand =
   | "remember"
@@ -21,12 +21,25 @@ export type ZkrOptions = {
 export const ZKR_COMMAND_FAILED = "zkr command failed";
 const MAX_ZKR_OUTPUT_BYTES = 1024 * 1024;
 
+export function resolveZkrExecutable(command: string | undefined): string {
+  const executable = command ?? "zkr";
+  if (typeof executable !== "string" || executable.includes("\0")) {
+    throw new Error(ZKR_COMMAND_FAILED);
+  }
+  const name = basename(executable);
+  const candidate = process.platform === "win32" ? name.toLowerCase() : name;
+  if (candidate !== "zkr" && candidate !== "zkr.exe") {
+    throw new Error(ZKR_COMMAND_FAILED);
+  }
+  return executable;
+}
+
 export async function runZkr(
   operation: ZkrCommand,
   input: unknown,
   options: ZkrOptions = {},
 ): Promise<unknown> {
-  const executable = options.command ?? "zkr";
+  const executable = resolveZkrExecutable(options.command);
   const database = options.database ?? join(homedir(), ".zkr", "memory.db");
   mkdirSync(dirname(database), { recursive: true });
 
