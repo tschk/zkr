@@ -22,6 +22,48 @@ pub(super) fn enqueue_projection_repair(
     Ok(())
 }
 
+pub(super) fn enqueue_projection_repair_bulk(
+    transaction: &Transaction<'_>,
+    tenant_id: &TenantId,
+    person_id: &PersonId,
+    targets: &[EmbeddingTarget],
+    reason: &str,
+    created_at: Timestamp,
+) -> Result<()> {
+    if targets.is_empty() {
+        return Ok(());
+    }
+
+    if targets.len() == 1 {
+        return enqueue_projection_repair(
+            transaction,
+            tenant_id,
+            person_id,
+            targets[0].clone(),
+            reason,
+            created_at,
+        );
+    }
+
+    let mut data = Vec::with_capacity(targets.len());
+    for target in targets {
+        let (kind, id) = embedding_target_parts(target);
+        data.push(serde_json::json!({
+            "kind": kind,
+            "id": id,
+        }));
+    }
+    let json_str = serde_json::to_string(&data)?;
+
+    transaction.execute(
+        "INSERT INTO memory_repair_outbox(id, tenant_id, person_id, target_kind, target_id, reason, created_at) \
+         SELECT lower(hex(randomblob(16))), ?1, ?2, json_extract(value, '$.kind'), json_extract(value, '$.id'), ?3, ?4 \
+         FROM json_each(?5)",
+        params![tenant_id.0, person_id.0, reason, created_at, json_str],
+    )?;
+    Ok(())
+}
+
 pub(super) fn record_operation(
     transaction: &Transaction<'_>,
     tenant_id: &TenantId,

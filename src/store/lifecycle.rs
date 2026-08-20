@@ -1091,34 +1091,23 @@ fn enqueue_deletion_repairs(
     changed_claim_ids: &[ClaimId],
     deleted_at: i64,
 ) -> Result<()> {
-    enqueue_projection_repair(
+    let mut targets = Vec::with_capacity(1 + evidence_ids.len() + changed_claim_ids.len());
+    targets.push(EmbeddingTarget::Source(source_id.clone()));
+    for evidence_id in evidence_ids {
+        targets.push(EmbeddingTarget::Evidence(evidence_id.clone()));
+    }
+    for claim_id in changed_claim_ids {
+        targets.push(EmbeddingTarget::Claim(claim_id.clone()));
+    }
+
+    super::repair::enqueue_projection_repair_bulk(
         transaction,
         tenant_id,
         person_id,
-        EmbeddingTarget::Source(source_id.clone()),
+        &targets,
         "delete_sync",
         deleted_at,
     )?;
-    for evidence_id in evidence_ids {
-        enqueue_projection_repair(
-            transaction,
-            tenant_id,
-            person_id,
-            EmbeddingTarget::Evidence(evidence_id.clone()),
-            "delete_sync",
-            deleted_at,
-        )?;
-    }
-    for claim_id in changed_claim_ids {
-        enqueue_projection_repair(
-            transaction,
-            tenant_id,
-            person_id,
-            EmbeddingTarget::Claim(claim_id.clone()),
-            "delete_sync",
-            deleted_at,
-        )?;
-    }
     Ok(())
 }
 
