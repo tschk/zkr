@@ -79,10 +79,20 @@ fn process_repair_target(
     target_id: &str,
     target: EmbeddingTarget,
 ) -> Result<()> {
-    match projection_input_from(ctx.transaction, &ctx.input.tenant_id, &ctx.input.person_id, target) {
+    match projection_input_from(
+        ctx.transaction,
+        &ctx.input.tenant_id,
+        &ctx.input.person_id,
+        target,
+    ) {
         Ok(current) => {
             let embedding_rows = ctx.statement.query_map(
-                params![ctx.input.tenant_id.0, ctx.input.person_id.0, target_kind, target_id],
+                params![
+                    ctx.input.tenant_id.0,
+                    ctx.input.person_id.0,
+                    target_kind,
+                    target_id
+                ],
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
@@ -172,12 +182,7 @@ impl MemoryDb {
                 input: &input,
                 statement: &mut statement,
             };
-            process_repair_target(
-                &mut ctx,
-                &target_kind,
-                &target_id,
-                target,
-            )?;
+            process_repair_target(&mut ctx, &target_kind, &target_id, target)?;
             transaction.execute(
                 "UPDATE memory_repair_outbox SET processed_at = ?1 WHERE id = ?2",
                 params![processed_at, id],
