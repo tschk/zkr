@@ -204,3 +204,124 @@ fn correction_stales_its_cited_summary() {
         Err(Error::NotFound)
     ));
 }
+
+#[test]
+fn nap_validates_inputs() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let (tenant_id, person_id) = scope();
+
+    // 1. Empty scope/text
+    assert!(matches!(
+        db.nap(NapInput {
+            tenant_id: TenantId("".into()),
+            person_id: person_id.clone(),
+            summary: "summary".into(),
+            evidence_ids: vec![EvidenceId("1".into())],
+            recorded_at: 1,
+        }),
+        Err(Error::Invalid(_))
+    ));
+    assert!(matches!(
+        db.nap(NapInput {
+            tenant_id: tenant_id.clone(),
+            person_id: PersonId("".into()),
+            summary: "summary".into(),
+            evidence_ids: vec![EvidenceId("1".into())],
+            recorded_at: 1,
+        }),
+        Err(Error::Invalid(_))
+    ));
+    assert!(matches!(
+        db.nap(NapInput {
+            tenant_id: tenant_id.clone(),
+            person_id: person_id.clone(),
+            summary: "".into(),
+            evidence_ids: vec![EvidenceId("1".into())],
+            recorded_at: 1,
+        }),
+        Err(Error::Invalid(_))
+    ));
+
+    // 2. Empty evidence_ids
+    assert!(matches!(
+        db.nap(NapInput {
+            tenant_id: tenant_id.clone(),
+            person_id: person_id.clone(),
+            summary: "summary".into(),
+            evidence_ids: vec![],
+            recorded_at: 1,
+        }),
+        Err(Error::Invalid(_))
+    ));
+
+    let memory1 = db.remember(remember_raw("a", "sam", "item 1")).unwrap();
+    let memory2 = db.remember(remember_raw("a", "sam", "item 2")).unwrap();
+
+    // 3. Duplicate evidence_ids
+    assert!(matches!(
+        db.nap(NapInput {
+            tenant_id: tenant_id.clone(),
+            person_id: person_id.clone(),
+            summary: "summary".into(),
+            evidence_ids: vec![memory1.evidence_id.clone(), memory1.evidence_id.clone()],
+            recorded_at: 1,
+        }),
+        Err(Error::Invalid(_))
+    ));
+
+    // 4. Missing evidence
+    assert!(matches!(
+        db.nap(NapInput {
+            tenant_id: tenant_id.clone(),
+            person_id: person_id.clone(),
+            summary: "summary".into(),
+            evidence_ids: vec![EvidenceId("missing".into())],
+            recorded_at: 1,
+        }),
+        Err(Error::Invalid(_))
+    ));
+
+    // 5. Deleted evidence
+    db.delete_source(DeleteInput {
+        tenant_id: tenant_id.clone(),
+        person_id: person_id.clone(),
+        source_id: memory1.source_id.clone(),
+        deleted_at: 100,
+    })
+    .unwrap();
+    assert!(matches!(
+        db.nap(NapInput {
+            tenant_id: tenant_id.clone(),
+            person_id: person_id.clone(),
+            summary: "summary".into(),
+            evidence_ids: vec![memory1.evidence_id.clone()],
+            recorded_at: 1,
+        }),
+        Err(Error::Invalid(_))
+    ));
+
+    // 6. Success
+    let napped = db
+        .nap(NapInput {
+            tenant_id: tenant_id.clone(),
+            person_id: person_id.clone(),
+            summary: "summary".into(),
+            evidence_ids: vec![memory2.evidence_id.clone()],
+            recorded_at: 101,
+        })
+        .unwrap();
+
+    let zoomed = db
+        .zoom(ZoomInput {
+            tenant_id,
+            person_id,
+            summary_id: napped.summary_id,
+        })
+        .unwrap();
+
+    assert_eq!(zoomed.summary.summary, "summary");
+    assert_eq!(zoomed.summary.evidence_ids, vec![memory2.evidence_id]);
+}
