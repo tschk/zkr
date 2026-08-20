@@ -405,10 +405,13 @@ impl MemoryDb {
         }
         let mut stmt = self.connection.prepare(
             "INSERT INTO retrieval_stats(tenant_id, person_id, target_kind, target_id, exposure_count, last_exposed_at)
-             VALUES(?1, ?2, ?3, ?4, 1, ?5)
+             SELECT ?1, ?2, value->>'$[0]', value->>'$[1]', 1, ?3
+             FROM json_each(?4)
+             WHERE true
              ON CONFLICT(tenant_id, person_id, target_kind, target_id)
              DO UPDATE SET exposure_count = retrieval_stats.exposure_count + 1, last_exposed_at = excluded.last_exposed_at"
         )?;
+        let mut targets = Vec::new();
         for item in items {
             let Some((target_kind, target_id)) = (match &item.memory {
                 MemoryRef::Source(id) => Some(("source", &id.0)),
@@ -418,13 +421,13 @@ impl MemoryDb {
             }) else {
                 continue;
             };
-            stmt.execute(params![
-                tenant_id.0,
-                person_id.0,
-                target_kind,
-                target_id,
-                exposed_at
-            ])?;
+            targets.push((target_kind, target_id));
+        }
+
+        if !targets.is_empty() {
+            let targets_json =
+                serde_json::to_string(&targets).map_err(|e| Error::Invalid(e.to_string()))?;
+            stmt.execute(params![tenant_id.0, person_id.0, exposed_at, targets_json])?;
         }
         Ok(())
     }
