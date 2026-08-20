@@ -197,6 +197,142 @@ fn repair_projections_deletes_embeddings_when_target_deleted() {
 }
 
 #[test]
+fn repair_projections_keeps_valid_embeddings() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+
+    let raw = db
+        .remember(remember_raw("a", "sam", "A quiet desk"))
+        .unwrap();
+    let target = EmbeddingTarget::Source(raw.source_id.clone());
+
+    // Insert embedding
+    db.upsert_embedding(EmbeddingInput {
+        tenant_id: TenantId("a".into()),
+        person_id: PersonId("sam".into()),
+        target: target.clone(),
+        embedding: Embedding {
+            vector: vec![1.0, 0.0],
+            model: "test/model".into(),
+            version: "1".into(),
+            input_hash: hash_for(&db, target.clone()),
+            normalization: VectorNormalization::L2,
+            distance: VectorDistance::Cosine,
+        },
+    })
+    .unwrap();
+
+    // Insert to memory_repair_outbox
+    let (target_kind, target_id) = embedding_target_parts(&target);
+    db.connection.execute(
+        "INSERT INTO memory_repair_outbox(id, tenant_id, person_id, target_kind, target_id, reason, created_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params!["outbox_id_valid", "a", "sam", target_kind, target_id, "test", 100],
+    ).unwrap();
+
+    let result = db
+        .repair_projections(RepairInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            limit: 10,
+        })
+        .unwrap();
+
+    assert_eq!(result.processed, 1);
+
+    // Verify embedding was NOT deleted because it is valid
+    let count: i64 = db
+        .connection
+        .query_row(
+            "SELECT COUNT(*) FROM embeddings WHERE target_id = ?1",
+            [&raw.source_id.0],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 1);
+
+    // Verify outbox was marked as processed
+    let processed_at: i64 = db
+        .connection
+        .query_row(
+            "SELECT processed_at FROM memory_repair_outbox WHERE id = 'outbox_id_valid'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(processed_at > 0);
+}
+
+#[test]
+fn repair_projections_fails_on_invalid_scope() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+
+    let result = db.repair_projections(RepairInput {
+        tenant_id: TenantId("".into()),
+        person_id: PersonId("sam".into()),
+        limit: 10,
+    });
+
+    assert!(matches!(result, Err(Error::Invalid(_))));
+
+    let result2 = db.repair_projections(RepairInput {
+        tenant_id: TenantId("a".into()),
+        person_id: PersonId("".into()),
+        limit: 10,
+    });
+
+    assert!(matches!(result2, Err(Error::Invalid(_))));
+}
+
+#[test]
+fn repair_projections_respects_limit() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+
+    // Insert 5 rows to memory_repair_outbox
+    for i in 1..=5 {
+        db.connection.execute(
+            "INSERT INTO memory_repair_outbox(id, tenant_id, person_id, target_kind, target_id, reason, created_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![format!("outbox_id_{}", i), "a", "sam", "invalid_kind", "invalid_id", "test", 100],
+        ).unwrap();
+    }
+
+    let result = db
+        .repair_projections(RepairInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            limit: 3,
+        })
+        .unwrap();
+
+    // The current logic handles "invalid target" by updating processed_at but `continue`ing in loop,
+    // so `processed` does NOT get incremented.
+    // Wait, let's verify what `fetch_repair_outbox_rows` returns and does.
+    // fetch_repair_outbox_rows uses LIMIT limit. So it fetches 3 rows.
+    // invalid_kind triggers error branch of `embedding_target`, processed_at updated, `continue`.
+    // result.processed will be 0.
+
+    assert_eq!(result.processed, 0);
+
+    // Verify exactly 3 were processed
+    let processed_count: i64 = db
+        .connection
+        .query_row(
+            "SELECT COUNT(*) FROM memory_repair_outbox WHERE processed_at IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(processed_count, 3);
+}
+
+#[test]
 fn repair_projections_handles_invalid_target_kind() {
     let mut db = MemoryDb {
         connection: Connection::open_in_memory().unwrap(),
