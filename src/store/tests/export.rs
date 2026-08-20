@@ -75,6 +75,93 @@ fn export_is_scoped_frozen_and_event_bounded() {
 }
 
 #[test]
+fn export_rejects_invalid_requests() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+
+    let neg_commit = input(-1, -1, None, 10);
+    assert!(matches!(db.export(neg_commit), Err(Error::Invalid(m)) if m.contains("negative")));
+
+    let neg_event_index = input(0, -2, None, 10);
+    assert!(matches!(db.export(neg_event_index), Err(Error::Invalid(m)) if m.contains("at least -1")));
+
+    let inconsistent_initial = input(0, 0, None, 10);
+    assert!(matches!(db.export(inconsistent_initial), Err(Error::Invalid(m)) if m.contains("initial cursor must use after_event_index -1")));
+
+    let hw_precedes_commit = input(10, 0, Some(5), 10);
+    assert!(matches!(db.export(hw_precedes_commit), Err(Error::Invalid(m)) if m.contains("must not precede after_commit")));
+}
+
+#[test]
+fn export_paginates_correctly_by_limit() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+
+    // Remember a few things to generate multiple commits with multiple events
+    db.remember(remember("a", "sam", "Acme")).unwrap();
+    db.remember(remember("a", "sam", "Beta")).unwrap();
+    db.remember(remember("a", "sam", "Gamma")).unwrap();
+
+    // 1st query: get 3 items
+    let page1 = db.export(input(0, -1, None, 3)).unwrap();
+    let count1: usize = page1.commits.iter().map(|c| c.records.len()).sum();
+    assert_eq!(count1, 3);
+    assert!(!page1.complete);
+
+    // 2nd query: use cursor from page1 to get next 3 items
+    let page2 = db.export(input(
+        page1.next_after_commit,
+        page1.next_after_event_index,
+        Some(page1.high_water_mark),
+        3,
+    )).unwrap();
+    let count2: usize = page2.commits.iter().map(|c| c.records.len()).sum();
+    assert_eq!(count2, 3);
+    assert!(!page2.complete);
+
+    // Continue fetching the rest (the total items depend on memory internals but will eventually complete)
+    let page3 = db.export(input(
+        page2.next_after_commit,
+        page2.next_after_event_index,
+        Some(page2.high_water_mark),
+        100, // large limit to get the rest
+    )).unwrap();
+    let count3: usize = page3.commits.iter().map(|c| c.records.len()).sum();
+    assert!(count3 > 0);
+    assert!(page3.complete);
+
+    // Ensure high water mark remains consistent
+    assert_eq!(page1.high_water_mark, page2.high_water_mark);
+    assert_eq!(page2.high_water_mark, page3.high_water_mark);
+}
+
+#[test]
+fn export_rejects_invalid_cursor() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+
+    let bad_commit = input(99, 0, None, 10);
+    assert!(matches!(db.export(bad_commit), Err(Error::Invalid(m)) if m.contains("after_commit is not in scope")));
+
+    db.remember(remember("a", "sam", "Acme")).unwrap();
+
+    // Acme adds multiple events to the first commit (sequence=1). Let's fetch it to know the count.
+    let page = db.export(input(0, -1, None, 10)).unwrap();
+    let commit_seq = page.commits[0].sequence;
+    let count = page.commits[0].event_count;
+
+    // test after_event_index >= event_count
+    let bad_event_index = input(commit_seq, count, None, 10);
+    assert!(matches!(db.export(bad_event_index), Err(Error::Invalid(m)) if m.contains("exceeds the commit event count")));
+}
+
+#[test]
 fn export_rejects_forged_watermark_and_version() {
     let mut db = MemoryDb {
         connection: Connection::open_in_memory().unwrap(),
