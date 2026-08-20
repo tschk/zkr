@@ -397,7 +397,9 @@ impl MemoryDb {
                 _ => continue,
             };
 
-            if current_target_revision != stored_target_revision || crate::store::embeddings::input_hash(&text) != stored_input_hash {
+            if current_target_revision != stored_target_revision
+                || crate::store::embeddings::input_hash(&text) != stored_input_hash
+            {
                 continue;
             }
 
