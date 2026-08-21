@@ -14,36 +14,7 @@ impl MemoryDb {
         require_text("query", &input.query)?;
         let limit = bounded_limit(input.limit);
         let candidate_limit = limit * 4;
-        let (phrase_query, token_query) = lexical_queries(&input.query);
-        let mut lexical = self.lexical_targets(
-            &input.tenant_id,
-            &input.person_id,
-            &phrase_query,
-            candidate_limit,
-            input.as_of.as_ref(),
-            &input.enabled_features,
-        )?;
-        let mut seen = HashSet::new();
-        lexical.retain(|target| seen.insert(target.clone()));
-        if lexical.len() < candidate_limit as usize {
-            if let Some(token_query) = token_query {
-                for target in self.lexical_targets(
-                    &input.tenant_id,
-                    &input.person_id,
-                    &token_query,
-                    candidate_limit,
-                    input.as_of.as_ref(),
-                    &input.enabled_features,
-                )? {
-                    if seen.insert(target.clone()) {
-                        lexical.push(target);
-                        if lexical.len() >= candidate_limit as usize {
-                            break;
-                        }
-                    }
-                }
-            }
-        }
+        let lexical = self.search_lexical(&input, candidate_limit)?;
         let dense = if input.enabled_features.is_empty() {
             input
                 .query_embedding
@@ -83,6 +54,44 @@ impl MemoryDb {
             items,
             gaps,
         })
+    }
+
+    fn search_lexical(
+        &self,
+        input: &SearchInput,
+        candidate_limit: u32,
+    ) -> Result<Vec<RetrievalTarget>> {
+        let (phrase_query, token_query) = lexical_queries(&input.query);
+        let mut lexical = self.lexical_targets(
+            &input.tenant_id,
+            &input.person_id,
+            &phrase_query,
+            candidate_limit,
+            input.as_of.as_ref(),
+            &input.enabled_features,
+        )?;
+        let mut seen = HashSet::new();
+        lexical.retain(|target| seen.insert(target.clone()));
+        if lexical.len() < candidate_limit as usize {
+            if let Some(token_query) = token_query {
+                for target in self.lexical_targets(
+                    &input.tenant_id,
+                    &input.person_id,
+                    &token_query,
+                    candidate_limit,
+                    input.as_of.as_ref(),
+                    &input.enabled_features,
+                )? {
+                    if seen.insert(target.clone()) {
+                        lexical.push(target);
+                        if lexical.len() >= candidate_limit as usize {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        Ok(lexical)
     }
 
     fn lexical_targets(
