@@ -2,6 +2,140 @@ use super::super::retrieval::{lexical_queries, rerank_score_basis_points};
 use super::*;
 
 #[test]
+fn search_rejects_empty_query() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+
+    let result = db.search(SearchInput {
+        tenant_id: TenantId("a".into()),
+        person_id: PersonId("sam".into()),
+        query: "".into(),
+        limit: 5,
+        query_embedding: None,
+        as_of: None,
+        enabled_features: Vec::new(),
+    });
+
+    assert!(matches!(result, Err(Error::Invalid(_))));
+}
+
+#[test]
+fn search_filters_by_enabled_features() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+
+    let mut public_mem = remember_raw("a", "sam", "Secret project is Alpha");
+    public_mem.feature_flag = None;
+    db.remember(public_mem).unwrap();
+
+    let mut beta_mem = remember_raw("a", "sam", "Secret project is Beta");
+    beta_mem.feature_flag = Some("beta".into());
+    db.remember(beta_mem).unwrap();
+
+    let mut gamma_mem = remember_raw("a", "sam", "Secret project is Gamma");
+    gamma_mem.feature_flag = Some("gamma".into());
+    db.remember(gamma_mem).unwrap();
+
+    // With no features enabled, only public is returned
+    let found = db
+        .search(SearchInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            query: "Secret project".into(),
+            limit: 5,
+            query_embedding: None,
+            as_of: None,
+            enabled_features: Vec::new(),
+        })
+        .unwrap();
+    assert_eq!(found.items.len(), 1);
+    assert!(found.items[0].excerpt.contains("Alpha"));
+
+    // With "beta" enabled, public and beta are returned
+    let found_beta = db
+        .search(SearchInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            query: "Secret project".into(),
+            limit: 5,
+            query_embedding: None,
+            as_of: None,
+            enabled_features: vec!["beta".into()],
+        })
+        .unwrap();
+    assert_eq!(found_beta.items.len(), 2);
+    let excerpts: Vec<_> = found_beta.items.iter().map(|i| i.excerpt.clone()).collect();
+    assert!(excerpts.iter().any(|e| e.contains("Alpha")));
+    assert!(excerpts.iter().any(|e| e.contains("Beta")));
+    assert!(!excerpts.iter().any(|e| e.contains("Gamma")));
+}
+
+#[test]
+fn search_rejects_dense_query_with_enabled_features() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+
+    let result = db.search(SearchInput {
+        tenant_id: TenantId("a".into()),
+        person_id: PersonId("sam".into()),
+        query: "test".into(),
+        limit: 5,
+        query_embedding: Some(DenseQuery {
+            vector: vec![1.0, 0.0],
+            model: "test/model".into(),
+            version: "1".into(),
+        }),
+        as_of: None,
+        enabled_features: vec!["beta".into()],
+    });
+
+    assert!(matches!(result, Err(Error::Invalid(_))));
+}
+
+#[test]
+fn search_temporal_as_of_filters_future_memories() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+
+    let mut older_mem = remember_raw("a", "sam", "Target spotted in London");
+    older_mem.captured_at = 10;
+    older_mem.recorded_at = 10;
+    db.remember(older_mem).unwrap();
+
+    let mut newer_mem = remember_raw("a", "sam", "Target spotted in Paris");
+    newer_mem.captured_at = 20;
+    newer_mem.recorded_at = 20;
+    db.remember(newer_mem).unwrap();
+
+    // Searching as of 15 should only find the older memory
+    let found = db
+        .search(SearchInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            query: "Target spotted".into(),
+            limit: 5,
+            query_embedding: None,
+            as_of: Some(TemporalQuery {
+                valid_at: 15,
+                recorded_at: 15,
+            }),
+            enabled_features: Vec::new(),
+        })
+        .unwrap();
+
+    assert_eq!(found.items.len(), 1);
+    assert!(found.items[0].excerpt.contains("London"));
+}
+
+#[test]
 fn lexical_queries_handles_edge_cases() {
     assert_eq!(lexical_queries(""), ("\"\"".to_string(), None));
     assert_eq!(lexical_queries("hello"), ("\"hello\"".to_string(), None));
