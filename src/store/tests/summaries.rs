@@ -325,3 +325,134 @@ fn nap_validates_inputs() {
     assert_eq!(zoomed.summary.summary, "summary");
     assert_eq!(zoomed.summary.evidence_ids, vec![memory2.evidence_id]);
 }
+
+#[test]
+fn zoom_requires_scope() {
+    let db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    assert!(matches!(
+        db.zoom(ZoomInput {
+            tenant_id: TenantId("".into()),
+            person_id: PersonId("sam".into()),
+            summary_id: SummaryId("sum-1".into()),
+        }),
+        Err(Error::Invalid(_))
+    ));
+    assert!(matches!(
+        db.zoom(ZoomInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("".into()),
+            summary_id: SummaryId("sum-1".into()),
+        }),
+        Err(Error::Invalid(_))
+    ));
+}
+
+#[test]
+fn zoom_enforces_isolation() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let (tenant_id, person_id) = scope();
+    let remembered = db.remember(remember("a", "sam", "Test")).unwrap();
+    let summary_id = db
+        .nap(NapInput {
+            tenant_id: tenant_id.clone(),
+            person_id: person_id.clone(),
+            summary: "Test summary".into(),
+            evidence_ids: vec![remembered.evidence_id],
+            recorded_at: 11,
+        })
+        .unwrap()
+        .summary_id;
+
+    assert!(matches!(
+        db.zoom(ZoomInput {
+            tenant_id: TenantId("other".into()),
+            person_id: person_id.clone(),
+            summary_id: summary_id.clone(),
+        }),
+        Err(Error::NotFound)
+    ));
+    assert!(matches!(
+        db.zoom(ZoomInput {
+            tenant_id: tenant_id.clone(),
+            person_id: PersonId("other".into()),
+            summary_id: summary_id.clone(),
+        }),
+        Err(Error::NotFound)
+    ));
+}
+
+#[test]
+fn zoom_missing_child_returns_error() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let (tenant_id, person_id) = scope();
+    let r1 = db.remember(remember("a", "sam", "A")).unwrap();
+    let r2 = db.remember(remember("a", "sam", "B")).unwrap();
+
+    let s1 = db
+        .nap(NapInput {
+            tenant_id: tenant_id.clone(),
+            person_id: person_id.clone(),
+            summary: "summary A".into(),
+            evidence_ids: vec![r1.evidence_id],
+            recorded_at: 10,
+        })
+        .unwrap()
+        .summary_id;
+
+    let s2 = db
+        .nap(NapInput {
+            tenant_id: tenant_id.clone(),
+            person_id: person_id.clone(),
+            summary: "summary B".into(),
+            evidence_ids: vec![r2.evidence_id],
+            recorded_at: 11,
+        })
+        .unwrap()
+        .summary_id;
+
+    let root = db
+        .merge(MergeInput {
+            tenant_id: tenant_id.clone(),
+            person_id: person_id.clone(),
+            summary: "root".into(),
+            child_ids: vec![s1.clone(), s2.clone()],
+            recorded_at: 12,
+        })
+        .unwrap()
+        .summary_id;
+
+    // Everything is healthy, zoom works
+    let zoomed = db
+        .zoom(ZoomInput {
+            tenant_id: tenant_id.clone(),
+            person_id: person_id.clone(),
+            summary_id: root.clone(),
+        })
+        .unwrap();
+    assert_eq!(zoomed.children.len(), 2);
+
+    // Simulate data corruption by manually deleting one child
+    db.connection
+        .execute(
+            "DELETE FROM summary_nodes WHERE id = ?1",
+            rusqlite::params![s1.0],
+        )
+        .unwrap();
+
+    assert!(matches!(
+        db.zoom(ZoomInput {
+            tenant_id,
+            person_id,
+            summary_id: root,
+        }),
+        Err(Error::NotFound)
+    ));
+}
