@@ -232,14 +232,12 @@ impl MemoryDb {
         }
 
         let mut processed = 0;
+        let mut processed_ids = Vec::new();
         for (id, target_kind, target_id) in rows {
             let target = match embedding_target(&target_kind, &target_id) {
                 Ok(target) => target,
                 Err(_) => {
-                    transaction.execute(
-                        "UPDATE memory_repair_outbox SET processed_at = ?1 WHERE id = ?2",
-                        params![processed_at, id],
-                    )?;
+                    processed_ids.push(id);
                     continue;
                 }
             };
@@ -256,11 +254,21 @@ impl MemoryDb {
                 target,
                 target_embeddings,
             )?;
-            transaction.execute(
-                "UPDATE memory_repair_outbox SET processed_at = ?1 WHERE id = ?2",
-                params![processed_at, id],
-            )?;
+            processed_ids.push(id);
             processed += 1;
+        }
+        if !processed_ids.is_empty() {
+            let placeholders = vec!["?"; processed_ids.len()].join(", ");
+            let query = format!(
+                "UPDATE memory_repair_outbox SET processed_at = ?1 WHERE id IN ({})",
+                placeholders
+            );
+            let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(processed_at)];
+            for id in &processed_ids {
+                params.push(Box::new(id.clone()));
+            }
+            let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|s| s.as_ref()).collect();
+            transaction.execute(&query, param_refs.as_slice())?;
         }
         let summaries_stale =
             stale_summary_count(&transaction, &input.tenant_id, &input.person_id)?;
