@@ -456,3 +456,150 @@ fn zoom_missing_child_returns_error() {
         Err(Error::NotFound)
     ));
 }
+
+#[test]
+fn wake_budget_expands_summary_tree_and_reports_gaps() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let (tenant_id, person_id) = scope();
+
+    let remembered = (0..4)
+        .map(|index| {
+            let mut input = remember_raw("a", "sam", &format!("item {index}"));
+            input.captured_at = 10 + index;
+            input.recorded_at = 10 + index;
+            db.remember(input).unwrap()
+        })
+        .collect::<Vec<_>>();
+
+    let leaves = remembered
+        .iter()
+        .enumerate()
+        .map(|(index, memory)| {
+            db.nap(NapInput {
+                tenant_id: tenant_id.clone(),
+                person_id: person_id.clone(),
+                summary: format!("item {index}"),
+                evidence_ids: vec![memory.evidence_id.clone()],
+                recorded_at: 20 + index as i64,
+            })
+            .unwrap()
+            .summary_id
+        })
+        .collect::<Vec<_>>();
+
+    let first_half = db
+        .merge(MergeInput {
+            tenant_id: tenant_id.clone(),
+            person_id: person_id.clone(),
+            summary: "first".into(),
+            child_ids: leaves[..2].to_vec(),
+            recorded_at: 30,
+        })
+        .unwrap()
+        .summary_id;
+    let second_half = db
+        .merge(MergeInput {
+            tenant_id: tenant_id.clone(),
+            person_id: person_id.clone(),
+            summary: "second".into(),
+            child_ids: leaves[2..].to_vec(),
+            recorded_at: 31,
+        })
+        .unwrap()
+        .summary_id;
+
+    let root = db
+        .merge(MergeInput {
+            tenant_id: tenant_id.clone(),
+            person_id: person_id.clone(),
+            summary: "all".into(),
+            child_ids: vec![first_half.clone(), second_half.clone()],
+            recorded_at: 32,
+        })
+        .unwrap()
+        .summary_id;
+
+    let wake_with_budget = |max_bytes: u32| -> WakePack {
+        db.wake(WakeInput {
+            search: SearchInput {
+                tenant_id: tenant_id.clone(),
+                person_id: person_id.clone(),
+                query: "test".into(),
+                limit: 10,
+                query_embedding: None,
+                as_of: None,
+                enabled_features: Vec::new(),
+            },
+            max_bytes,
+        })
+        .unwrap()
+    };
+
+    // "all" = 3 bytes
+    // "first" + "second" = 5 + 6 = 11 bytes
+    // "first" + "item 2" + "item 3" = 5 + 6 + 6 = 17 bytes
+    // "item 0" + "item 1" + "item 2" + "item 3" = 6 + 6 + 6 + 6 = 24 bytes
+
+    // Budget 2: too small for even the root node.
+    let w = wake_with_budget(2);
+    assert!(w.summaries.is_empty());
+    assert_eq!(w.used_bytes, 0);
+    assert!(
+        w.retrieval
+            .gaps
+            .contains(&"no live summary matched the wake budget".to_owned())
+    );
+
+    // Budget 10: enough for root, but not to expand it (cost 11).
+    let w = wake_with_budget(10);
+    assert_eq!(w.summaries.len(), 1);
+    assert_eq!(w.summaries[0].id, root);
+    assert_eq!(w.used_bytes, 3);
+    assert!(
+        !w.retrieval
+            .gaps
+            .contains(&"no live summary matched the wake budget".to_owned())
+    );
+
+    // Budget 11: exactly enough to expand root into first_half and second_half.
+    let w = wake_with_budget(11);
+    assert_eq!(w.summaries.len(), 2);
+    assert_eq!(w.summaries[0].id, first_half);
+    assert_eq!(w.summaries[1].id, second_half);
+    assert_eq!(w.used_bytes, 11);
+
+    // Budget 16: enough to expand root, but not enough to expand second_half (needs 17).
+    let w = wake_with_budget(16);
+    assert_eq!(w.summaries.len(), 2);
+    assert_eq!(w.summaries[0].id, first_half);
+    assert_eq!(w.summaries[1].id, second_half);
+    assert_eq!(w.used_bytes, 11);
+
+    // Budget 17: exactly enough to expand second_half.
+    let w = wake_with_budget(17);
+    assert_eq!(w.summaries.len(), 3);
+    assert_eq!(w.summaries[0].id, first_half);
+    assert_eq!(w.summaries[1].id, leaves[2]);
+    assert_eq!(w.summaries[2].id, leaves[3]);
+    assert_eq!(w.used_bytes, 17);
+
+    // Budget 23: enough to expand second_half, but not first_half (needs 24).
+    let w = wake_with_budget(23);
+    assert_eq!(w.summaries.len(), 3);
+    assert_eq!(w.summaries[0].id, first_half);
+    assert_eq!(w.summaries[1].id, leaves[2]);
+    assert_eq!(w.summaries[2].id, leaves[3]);
+    assert_eq!(w.used_bytes, 17);
+
+    // Budget 24: exactly enough to expand all nodes to leaves.
+    let w = wake_with_budget(24);
+    assert_eq!(w.summaries.len(), 4);
+    assert_eq!(w.summaries[0].id, leaves[0]);
+    assert_eq!(w.summaries[1].id, leaves[1]);
+    assert_eq!(w.summaries[2].id, leaves[2]);
+    assert_eq!(w.summaries[3].id, leaves[3]);
+    assert_eq!(w.used_bytes, 24);
+}
