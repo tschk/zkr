@@ -106,6 +106,9 @@ export async function runZkr(
         fail(false);
       }
     });
+    child.stdin.on("error", () => {
+      // Ignore EPIPE errors if the child exits before we finish writing
+    });
     child.stdin.end(JSON.stringify(input));
   });
 }
