@@ -247,6 +247,7 @@ impl MemoryDb {
         SELECT DISTINCT i.kind, i.id as orig_id, 'source' as target_kind, s.id as target_id
         FROM inputs i
         JOIN sources s ON i.kind = 'source' AND s.id = i.id AND s.tenant_id = ?1 AND s.person_id = ?2 AND s.deleted_at IS NULL
+        JOIN evidence live_e ON live_e.source_id = s.id AND live_e.tenant_id = ?1 AND live_e.person_id = ?2 AND live_e.deleted_at IS NULL
         WHERE NOT EXISTS (
             SELECT 1
             FROM evidence e

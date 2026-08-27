@@ -561,6 +561,75 @@ fn accepted_claim_replaces_its_source_in_retrieval() {
 }
 
 #[test]
+fn dense_source_without_live_evidence_does_not_abort_search() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let raw = db
+        .remember(remember_raw("a", "sam", "Quiet desk near a window"))
+        .unwrap();
+    let claimed = db.remember(remember("a", "sam", "Acme")).unwrap();
+    let source_target = EmbeddingTarget::Source(raw.source_id.clone());
+    db.upsert_embedding(EmbeddingInput {
+        tenant_id: TenantId("a".into()),
+        person_id: PersonId("sam".into()),
+        target: source_target.clone(),
+        embedding: Embedding {
+            vector: vec![1.0, 0.0],
+            model: "test/model".into(),
+            version: "1".into(),
+            input_hash: hash_for(&db, source_target),
+            normalization: VectorNormalization::L2,
+            distance: VectorDistance::Cosine,
+        },
+    })
+    .unwrap();
+    let claim_target = EmbeddingTarget::Claim(claimed.claim_id.clone().unwrap());
+    db.upsert_embedding(EmbeddingInput {
+        tenant_id: TenantId("a".into()),
+        person_id: PersonId("sam".into()),
+        target: claim_target.clone(),
+        embedding: Embedding {
+            vector: vec![0.0, 1.0],
+            model: "test/model".into(),
+            version: "1".into(),
+            input_hash: hash_for(&db, claim_target),
+            normalization: VectorNormalization::L2,
+            distance: VectorDistance::Cosine,
+        },
+    })
+    .unwrap();
+    db.connection
+        .execute(
+            "UPDATE evidence SET deleted_at = 20 WHERE id = ?1",
+            [&raw.evidence_id.0],
+        )
+        .unwrap();
+
+    let found = db
+        .search(SearchInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            query: "unmatched lexical phrase".into(),
+            limit: 5,
+            query_embedding: Some(DenseQuery {
+                vector: vec![1.0, 0.0],
+                model: "test/model".into(),
+                version: "1".into(),
+            }),
+            as_of: None,
+            enabled_features: Vec::new(),
+        })
+        .unwrap();
+    assert_eq!(found.items.len(), 1);
+    assert_eq!(
+        found.items[0].memory,
+        MemoryRef::Claim(claimed.claim_id.unwrap())
+    );
+}
+
+#[test]
 fn dense_evidence_without_a_claim_is_retrievable() {
     let mut db = MemoryDb {
         connection: Connection::open_in_memory().unwrap(),
