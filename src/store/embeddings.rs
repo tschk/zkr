@@ -354,6 +354,7 @@ impl MemoryDb {
             },
         )?;
         let mut scores = HashMap::<RetrievalTarget, f32>::new();
+        let mut candidate_scores: HashMap<(String, String), f32> = HashMap::new();
         for row in rows {
             let (
                 target_kind,
@@ -420,18 +421,30 @@ impl MemoryDb {
                 )));
             }
             let score = vector_score(&query.vector, &vector, &configuration.2)?;
-            for target in self.retrieval_targets_for_embedding(
-                tenant_id,
-                person_id,
-                &target_kind,
-                &target_id,
-            )? {
-                scores
-                    .entry(target)
-                    .and_modify(|existing| *existing = existing.max(score))
-                    .or_insert(score);
+            candidate_scores
+                .entry((target_kind, target_id))
+                .and_modify(|existing| *existing = existing.max(score))
+                .or_insert(score);
+        }
+
+        let valid_candidates: Vec<(String, String)> = candidate_scores.keys().cloned().collect();
+        let bulk_targets = self.retrieval_targets_for_embeddings_bulk(
+            tenant_id,
+            person_id,
+            &valid_candidates
+        )?;
+
+        for ((kind, id), score) in candidate_scores {
+            if let Some(targets) = bulk_targets.get(&(kind, id)) {
+                for target in targets {
+                    scores
+                        .entry(target.clone())
+                        .and_modify(|existing| *existing = existing.max(score))
+                        .or_insert(score);
+                }
             }
         }
+
         let mut ranked = scores.into_iter().collect::<Vec<_>>();
         ranked.sort_by(|left, right| {
             right
