@@ -39,7 +39,7 @@ export async function runZkr(
   input: unknown,
   options: ZkrOptions = {},
 ): Promise<unknown> {
-if (options.command !== undefined && typeof options.command !== "string") {
+  if (options.command !== undefined && typeof options.command !== "string") {
     throw new Error("zkr command must be a string");
   }
   if (options.database !== undefined && typeof options.database !== "string") {
@@ -86,6 +86,9 @@ if (options.command !== undefined && typeof options.command !== "string") {
 
     child.stdout.on("data", (chunk: Buffer) => capture(output.stdout, chunk));
     child.stderr.on("data", (chunk: Buffer) => capture(output.stderr, chunk));
+    child.stdin.on("error", () => {
+      // Ignore EPIPE errors which occur when the child process closes its stdin before we finish writing
+    });
     child.on("error", () => {
       fail(false);
     });
