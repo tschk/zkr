@@ -108,6 +108,91 @@ struct EmbeddingRow {
     vector: String,
 }
 
+fn fetch_target_embeddings(
+    transaction: &Transaction<'_>,
+    input: &RepairInput,
+    rows: &[(String, String, String)],
+) -> Result<HashMap<(String, String), Vec<EmbeddingRow>>> {
+    let mut embeddings_by_target: HashMap<(String, String), Vec<EmbeddingRow>> = HashMap::new();
+
+    if rows.is_empty() {
+        return Ok(embeddings_by_target);
+    }
+
+    let mut query = String::from(
+        "SELECT target_kind, target_id, model, version, target_revision, input_hash, dimension, normalization, distance, vector FROM embeddings WHERE tenant_id = ? AND person_id = ? AND (target_kind, target_id) IN (",
+    );
+
+    for (i, _) in rows.iter().enumerate() {
+        if i > 0 {
+            query.push_str(", ");
+        }
+        query.push_str("(?, ?)");
+    }
+    query.push(')');
+
+    let mut sql_params: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(2 + rows.len() * 2);
+    sql_params.push(&input.tenant_id.0);
+    sql_params.push(&input.person_id.0);
+    for (_, target_kind, target_id) in rows {
+        sql_params.push(target_kind);
+        sql_params.push(target_id);
+    }
+
+    let mut statement = transaction.prepare(&query)?;
+    let embedding_rows =
+        statement.query_map(rusqlite::params_from_iter(sql_params), |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                EmbeddingRow {
+                    model: row.get::<_, String>(2)?,
+                    version: row.get::<_, String>(3)?,
+                    revision: row.get::<_, i64>(4)?,
+                    hash: row.get::<_, String>(5)?,
+                    dimension: row.get::<_, usize>(6)?,
+                    normalization: row.get::<_, String>(7)?,
+                    distance: row.get::<_, String>(8)?,
+                    vector: row.get::<_, String>(9)?,
+                },
+            ))
+        })?;
+
+    for row in embedding_rows {
+        let (target_kind, target_id, embed_row) = row?;
+        embeddings_by_target
+            .entry((target_kind, target_id))
+            .or_default()
+            .push(embed_row);
+    }
+
+    Ok(embeddings_by_target)
+}
+
+fn mark_repair_outbox_processed(
+    transaction: &Transaction<'_>,
+    processed_ids: &[String],
+    processed_at: Timestamp,
+) -> Result<()> {
+    if processed_ids.is_empty() {
+        return Ok(());
+    }
+
+    let placeholders = vec!["?"; processed_ids.len()].join(", ");
+    let query = format!(
+        "UPDATE memory_repair_outbox SET processed_at = ?1 WHERE id IN ({})",
+        placeholders
+    );
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(processed_at)];
+    for id in processed_ids {
+        params.push(Box::new(id.clone()));
+    }
+    let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|s| s.as_ref()).collect();
+    transaction.execute(&query, param_refs.as_slice())?;
+
+    Ok(())
+}
+
 fn process_repair_target(
     transaction: &Transaction<'_>,
     input: &RepairInput,
@@ -180,56 +265,7 @@ impl MemoryDb {
         let processed_at: Timestamp =
             transaction.query_row("SELECT unixepoch()", [], |row| row.get(0))?;
 
-        let mut embeddings_by_target: HashMap<(String, String), Vec<EmbeddingRow>> = HashMap::new();
-
-        if !rows.is_empty() {
-            let mut query = String::from(
-                "SELECT target_kind, target_id, model, version, target_revision, input_hash, dimension, normalization, distance, vector FROM embeddings WHERE tenant_id = ? AND person_id = ? AND (target_kind, target_id) IN (",
-            );
-
-            for (i, _) in rows.iter().enumerate() {
-                if i > 0 {
-                    query.push_str(", ");
-                }
-                query.push_str("(?, ?)");
-            }
-            query.push(')');
-
-            let mut sql_params: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(2 + rows.len() * 2);
-            sql_params.push(&input.tenant_id.0);
-            sql_params.push(&input.person_id.0);
-            for (_, target_kind, target_id) in &rows {
-                sql_params.push(target_kind);
-                sql_params.push(target_id);
-            }
-
-            let mut statement = transaction.prepare(&query)?;
-            let embedding_rows =
-                statement.query_map(rusqlite::params_from_iter(sql_params), |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        EmbeddingRow {
-                            model: row.get::<_, String>(2)?,
-                            version: row.get::<_, String>(3)?,
-                            revision: row.get::<_, i64>(4)?,
-                            hash: row.get::<_, String>(5)?,
-                            dimension: row.get::<_, usize>(6)?,
-                            normalization: row.get::<_, String>(7)?,
-                            distance: row.get::<_, String>(8)?,
-                            vector: row.get::<_, String>(9)?,
-                        },
-                    ))
-                })?;
-
-            for row in embedding_rows {
-                let (target_kind, target_id, embed_row) = row?;
-                embeddings_by_target
-                    .entry((target_kind, target_id))
-                    .or_default()
-                    .push(embed_row);
-            }
-        }
+        let embeddings_by_target = fetch_target_embeddings(&transaction, &input, &rows)?;
 
         let mut processed = 0;
         let mut processed_ids = Vec::new();
@@ -257,19 +293,8 @@ impl MemoryDb {
             processed_ids.push(id);
             processed += 1;
         }
-        if !processed_ids.is_empty() {
-            let placeholders = vec!["?"; processed_ids.len()].join(", ");
-            let query = format!(
-                "UPDATE memory_repair_outbox SET processed_at = ?1 WHERE id IN ({})",
-                placeholders
-            );
-            let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(processed_at)];
-            for id in &processed_ids {
-                params.push(Box::new(id.clone()));
-            }
-            let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|s| s.as_ref()).collect();
-            transaction.execute(&query, param_refs.as_slice())?;
-        }
+        mark_repair_outbox_processed(&transaction, &processed_ids, processed_at)?;
+
         let summaries_stale =
             stale_summary_count(&transaction, &input.tenant_id, &input.person_id)?;
         record_operation(
