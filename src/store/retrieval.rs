@@ -181,82 +181,123 @@ impl MemoryDb {
         self.retrieval_item(&input.tenant_id, &input.person_id, target, 10_000, None)
     }
 
-    pub(super) fn retrieval_targets_for_embedding(
+    pub(super) fn retrieval_targets_for_embeddings_bulk(
         &self,
         tenant_id: &TenantId,
         person_id: &PersonId,
-        target_kind: &str,
-        target_id: &str,
-    ) -> Result<Vec<RetrievalTarget>> {
-        let sql = match target_kind {
-            "claim" => {
-                "SELECT id FROM claims WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND status = 'accepted' AND valid_until IS NULL AND recorded_until IS NULL AND tier IN ('short_term', 'long_term') AND processing_state = 'processed'"
-            }
-            "evidence" => {
-                "SELECT c.id FROM evidence e JOIN sources s ON s.id = e.source_id AND s.tenant_id = e.tenant_id AND s.person_id = e.person_id LEFT JOIN claim_evidence ce ON ce.evidence_id = e.id AND ce.tenant_id = e.tenant_id AND ce.person_id = e.person_id AND ce.relation = '\"supports\"' LEFT JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL AND c.tier IN ('short_term', 'long_term') AND c.processing_state = 'processed' WHERE e.id = ?1 AND e.tenant_id = ?2 AND e.person_id = ?3 AND e.deleted_at IS NULL AND s.deleted_at IS NULL ORDER BY c.id"
-            }
-            "source" => {
-                "SELECT DISTINCT c.id FROM sources s JOIN evidence e ON e.source_id = s.id AND e.tenant_id = s.tenant_id AND e.person_id = s.person_id LEFT JOIN claim_evidence ce ON ce.evidence_id = e.id AND ce.tenant_id = e.tenant_id AND ce.person_id = e.person_id AND ce.relation = '\"supports\"' LEFT JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL AND c.tier IN ('short_term', 'long_term') AND c.processing_state = 'processed' WHERE s.id = ?1 AND s.tenant_id = ?2 AND s.person_id = ?3 AND s.deleted_at IS NULL AND e.deleted_at IS NULL ORDER BY c.id"
-            }
-            _ => {
-                return Err(Error::Invalid(
-                    "stored embedding target is invalid".to_owned(),
-                ));
-            }
-        };
-        let mut statement = self.connection.prepare(sql)?;
-        let rows = statement.query_map(params![target_id, tenant_id.0, person_id.0], |row| {
-            row.get::<_, Option<String>>(0)
-        })?;
-        let rows = rows.collect::<std::result::Result<Vec<_>, _>>()?;
-        if rows.is_empty() {
-            return Ok(Vec::new());
+        targets: &[(String, String)],
+    ) -> Result<std::collections::HashMap<(String, String), Vec<RetrievalTarget>>> {
+        if targets.is_empty() {
+            return Ok(std::collections::HashMap::new());
         }
-        let claims = rows
-            .into_iter()
-            .flatten()
-            .map(|id| RetrievalTarget::Claim(ClaimId(id)))
-            .collect::<Vec<_>>();
-        if !claims.is_empty() {
-            return Ok(claims);
-        }
-        if self.target_has_claim(tenant_id, person_id, target_kind, target_id)? {
-            return Ok(Vec::new());
-        }
-        Ok(match target_kind {
-            "source" => vec![RetrievalTarget::Source(SourceId(target_id.to_owned()))],
-            "evidence" => vec![RetrievalTarget::Evidence(EvidenceId(target_id.to_owned()))],
-            "claim" => Vec::new(),
-            _ => unreachable!(),
-        })
-    }
 
-    fn target_has_claim(
-        &self,
-        tenant_id: &TenantId,
-        person_id: &PersonId,
-        target_kind: &str,
-        target_id: &str,
-    ) -> Result<bool> {
-        let sql = match target_kind {
-            "source" => {
-                "SELECT EXISTS(SELECT 1 FROM claim_evidence ce JOIN evidence e ON e.id = ce.evidence_id AND e.tenant_id = ce.tenant_id AND e.person_id = ce.person_id JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL AND c.tier IN ('short_term', 'long_term') AND c.processing_state = 'processed' WHERE ce.relation = '\"supports\"' AND e.source_id = ?1 AND e.tenant_id = ?2 AND e.person_id = ?3)"
+        let mut inputs_json = String::with_capacity(targets.len() * 40);
+        inputs_json.push('[');
+        for (i, (kind, id)) in targets.iter().enumerate() {
+            if i > 0 {
+                inputs_json.push(',');
             }
-            "evidence" => {
-                "SELECT EXISTS(SELECT 1 FROM claim_evidence ce JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL AND c.tier IN ('short_term', 'long_term') AND c.processing_state = 'processed' WHERE ce.relation = '\"supports\"' AND ce.evidence_id = ?1 AND ce.tenant_id = ?2 AND ce.person_id = ?3)"
+            // Use serde_json to safely escape strings for JSON
+            inputs_json.push_str(&format!(
+                "[{},{}]",
+                serde_json::to_string(kind).unwrap_or_else(|_| "\"\"".to_string()),
+                serde_json::to_string(id).unwrap_or_else(|_| "\"\"".to_string())
+            ));
+        }
+        inputs_json.push(']');
+
+        let sql = "
+        WITH inputs AS (
+            SELECT
+                json_extract(value, '$[0]') as kind,
+                json_extract(value, '$[1]') as id
+            FROM json_each(?3)
+        )
+        SELECT DISTINCT i.kind, i.id as orig_id, 'claim' as target_kind, c.id as target_id
+        FROM inputs i
+        JOIN evidence e ON i.kind = 'evidence' AND e.id = i.id AND e.tenant_id = ?1 AND e.person_id = ?2 AND e.deleted_at IS NULL
+        JOIN sources s ON s.id = e.source_id AND s.tenant_id = ?1 AND s.person_id = ?2 AND s.deleted_at IS NULL
+        JOIN claim_evidence ce ON ce.evidence_id = e.id AND ce.tenant_id = ?1 AND ce.person_id = ?2 AND ce.relation = '\"supports\"'
+        JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ?1 AND c.person_id = ?2 AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL AND c.tier IN ('short_term', 'long_term') AND c.processing_state = 'processed'
+
+        UNION ALL
+
+        SELECT DISTINCT i.kind, i.id as orig_id, 'claim' as target_kind, c.id as target_id
+        FROM inputs i
+        JOIN sources s ON i.kind = 'source' AND s.id = i.id AND s.tenant_id = ?1 AND s.person_id = ?2 AND s.deleted_at IS NULL
+        JOIN evidence e ON e.source_id = s.id AND e.tenant_id = ?1 AND e.person_id = ?2 AND e.deleted_at IS NULL
+        JOIN claim_evidence ce ON ce.evidence_id = e.id AND ce.tenant_id = ?1 AND ce.person_id = ?2 AND ce.relation = '\"supports\"'
+        JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ?1 AND c.person_id = ?2 AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL AND c.tier IN ('short_term', 'long_term') AND c.processing_state = 'processed'
+
+        UNION ALL
+
+        SELECT DISTINCT i.kind, i.id as orig_id, 'evidence' as target_kind, e.id as target_id
+        FROM inputs i
+        JOIN evidence e ON i.kind = 'evidence' AND e.id = i.id AND e.tenant_id = ?1 AND e.person_id = ?2 AND e.deleted_at IS NULL
+        JOIN sources s ON s.id = e.source_id AND s.tenant_id = ?1 AND s.person_id = ?2 AND s.deleted_at IS NULL
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM claim_evidence ce
+            JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ?1 AND c.person_id = ?2 AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL AND c.tier IN ('short_term', 'long_term') AND c.processing_state = 'processed'
+            WHERE ce.evidence_id = i.id AND ce.tenant_id = ?1 AND ce.person_id = ?2 AND ce.relation = '\"supports\"'
+        )
+
+        UNION ALL
+
+        SELECT DISTINCT i.kind, i.id as orig_id, 'source' as target_kind, s.id as target_id
+        FROM inputs i
+        JOIN sources s ON i.kind = 'source' AND s.id = i.id AND s.tenant_id = ?1 AND s.person_id = ?2 AND s.deleted_at IS NULL
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM evidence e
+            JOIN claim_evidence ce ON ce.evidence_id = e.id AND ce.tenant_id = ?1 AND ce.person_id = ?2 AND ce.relation = '\"supports\"'
+            JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ?1 AND c.person_id = ?2 AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL AND c.tier IN ('short_term', 'long_term') AND c.processing_state = 'processed'
+            WHERE e.source_id = i.id AND e.tenant_id = ?1 AND e.person_id = ?2 AND e.deleted_at IS NULL
+        )
+
+        UNION ALL
+
+        SELECT DISTINCT i.kind, i.id as orig_id, 'claim' as target_kind, c.id as target_id
+        FROM inputs i
+        JOIN claims c ON i.kind = 'claim' AND c.id = i.id AND c.tenant_id = ?1 AND c.person_id = ?2 AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL AND c.tier IN ('short_term', 'long_term') AND c.processing_state = 'processed'
+        ";
+
+        let mut statement = self.connection.prepare(sql)?;
+        let rows = statement.query_map(params![tenant_id.0, person_id.0, inputs_json], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })?;
+
+        let mut results: std::collections::HashMap<(String, String), Vec<RetrievalTarget>> =
+            std::collections::HashMap::new();
+        for row in rows {
+            let (orig_kind, orig_id, target_kind, target_id) = row?;
+            let target = match target_kind.as_str() {
+                "claim" => RetrievalTarget::Claim(ClaimId(target_id)),
+                "evidence" => RetrievalTarget::Evidence(EvidenceId(target_id)),
+                "source" => RetrievalTarget::Source(SourceId(target_id)),
+                _ => continue,
+            };
+            results
+                .entry((orig_kind, orig_id))
+                .or_default()
+                .push(target);
+        }
+
+        // Return empty vectors for any target that had no results.
+        // It acts exactly like the original method when no results are found.
+        for (kind, id) in targets {
+            let key = (kind.clone(), id.clone());
+            if !results.contains_key(&key) {
+                results.insert(key, vec![]);
             }
-            "claim" => return Ok(true),
-            _ => {
-                return Err(Error::Invalid(
-                    "stored embedding target is invalid".to_owned(),
-                ));
-            }
-        };
-        Ok(self
-            .connection
-            .query_row(sql, params![target_id, tenant_id.0, person_id.0], |row| {
-                row.get(0)
-            })?)
+        }
+
+        Ok(results)
     }
 
     fn retrieval_item(
