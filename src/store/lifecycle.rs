@@ -211,152 +211,68 @@ impl MemoryDb {
         require_scope(&input.tenant_id, &input.person_id)?;
         require_text("correction text", &input.text)?;
         require_text("value", &input.value)?;
+
         let transaction = self.connection.transaction()?;
-        let removed_profiles = transaction
-            .prepare(
-                "SELECT id FROM profile_entries WHERE tenant_id = ?1 AND person_id = ?2 AND claim_id = ?3 ORDER BY id",
-            )?
-            .query_map(
-                params![input.tenant_id.0, input.person_id.0, input.claim_id.0],
-                |row| row.get::<_, String>(0),
-            )?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        let old = transaction
-            .query_row(
-                "SELECT subject, predicate, kind, valid_from, recorded_from FROM claims WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND status = 'accepted'",
-                params![input.claim_id.0, input.tenant_id.0, input.person_id.0],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, i64>(3)?, row.get::<_, i64>(4)?)),
-            )
-            .optional()?
-            .ok_or(Error::NotFound)?;
-        let stale_evidence_ids = transaction
-            .prepare(
-                "SELECT evidence_id FROM claim_evidence WHERE tenant_id = ?1 AND person_id = ?2 AND claim_id = ?3 AND relation = '\"supports\"' ORDER BY evidence_id",
-            )?
-            .query_map(
-                params![input.tenant_id.0, input.person_id.0, input.claim_id.0],
-                |row| row.get::<_, String>(0).map(EvidenceId),
-            )?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        if input.valid_at <= old.3 || input.recorded_at <= old.4 {
-            return Err(Error::Invalid(
-                "correction timestamps must advance the original valid and recorded intervals"
-                    .to_owned(),
-            ));
-        }
-        let source_id = SourceId(new_id(&transaction)?);
-        let evidence_id = EvidenceId(new_id(&transaction)?);
-        transaction.execute(
-            "INSERT INTO sources(id, tenant_id, person_id, revision, kind, content, captured_at, recorded_at) VALUES(?1, ?2, ?3, 1, '\"user_correction\"', ?4, ?5, ?6)",
-            params![source_id.0, input.tenant_id.0, input.person_id.0, input.text, input.valid_at, input.recorded_at],
-        )?;
-        transaction.execute(
-            "INSERT INTO source_fts(source_id, tenant_id, person_id, content) VALUES(?1, ?2, ?3, ?4)",
-            params![source_id.0, input.tenant_id.0, input.person_id.0, input.text],
-        )?;
-        transaction.execute(
-            "INSERT INTO evidence(id, tenant_id, person_id, source_id, source_revision, quote, recorded_at) VALUES(?1, ?2, ?3, ?4, 1, ?5, ?6)",
-            params![evidence_id.0, input.tenant_id.0, input.person_id.0, source_id.0, input.text, input.recorded_at],
-        )?;
-        transaction.execute(
-            "UPDATE claims SET status = 'superseded', valid_until = ?1, recorded_until = ?2 WHERE id = ?3 AND tenant_id = ?4 AND person_id = ?5",
-            params![input.valid_at, input.recorded_at, input.claim_id.0, input.tenant_id.0, input.person_id.0],
-        )?;
-        invalidate_summaries_for_evidence(
+
+        let (removed_profiles, old_claim, stale_evidence_ids) = find_correction_targets(
             &transaction,
             &input.tenant_id,
             &input.person_id,
+            &input.claim_id,
+        )?;
+
+        validate_correction_time(
+            input.valid_at,
+            input.recorded_at,
+            old_claim.valid_from,
+            old_claim.recorded_from,
+        )?;
+
+        let (source_id, evidence_id) = insert_correction_source_and_evidence(
+            &transaction,
+            &input.tenant_id,
+            &input.person_id,
+            &input.text,
+            input.valid_at,
+            input.recorded_at,
+        )?;
+
+        supersede_stale_claim(
+            &transaction,
+            &input.tenant_id,
+            &input.person_id,
+            &input.claim_id,
             &stale_evidence_ids,
+            input.valid_at,
             input.recorded_at,
         )?;
-        enqueue_projection_repair(
+
+        let (claim_id, correction) = apply_correction_claim(
             &transaction,
             &input.tenant_id,
             &input.person_id,
-            EmbeddingTarget::Claim(input.claim_id.clone()),
-            "superseded_sync",
+            &input.claim_id,
+            &old_claim,
+            &input.value,
+            input.valid_at,
             input.recorded_at,
-        )?;
-        transaction.execute(
-            "DELETE FROM profile_entries WHERE tenant_id = ?1 AND person_id = ?2 AND claim_id = ?3",
-            params![input.tenant_id.0, input.person_id.0, input.claim_id.0],
-        )?;
-        let claim_id = insert_claim(
-            &transaction,
-            &input.tenant_id,
-            &input.person_id,
+            &source_id,
             &evidence_id,
-            ClaimInput {
-                subject: old.0,
-                predicate: old.1,
-                value: input.value,
-                kind: claim_kind(&old.2)?,
-                valid_from: input.valid_at,
-                tier: MemoryTier::LongTerm,
-                processing_state: MemoryProcessingState::Processed,
-            },
+        )?;
+
+        let records = build_correction_records(
+            &transaction,
+            &input.tenant_id,
+            &input.person_id,
+            &input.claim_id,
+            &source_id,
+            &evidence_id,
+            &claim_id,
+            correction,
+            removed_profiles,
             input.recorded_at,
         )?;
-        transaction.execute(
-            "UPDATE sources SET origin_evidence_id = ?1, origin_claim_id = ?2 WHERE id = ?3 AND tenant_id = ?4 AND person_id = ?5",
-            params![evidence_id.0, claim_id.0, source_id.0, input.tenant_id.0, input.person_id.0],
-        )?;
-        let correction = CorrectionRecord {
-            tenant_id: input.tenant_id.clone(),
-            person_id: input.person_id.clone(),
-            superseded_claim_id: input.claim_id.clone(),
-            claim_id: claim_id.clone(),
-            source_id: source_id.clone(),
-            evidence_id: evidence_id.clone(),
-            valid_at: input.valid_at,
-            recorded_at: input.recorded_at,
-        };
-        transaction.execute(
-            "INSERT INTO corrections(tenant_id, person_id, superseded_claim_id, claim_id, source_id, evidence_id, valid_at, recorded_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![correction.tenant_id.0, correction.person_id.0, correction.superseded_claim_id.0, correction.claim_id.0, correction.source_id.0, correction.evidence_id.0, correction.valid_at, correction.recorded_at],
-        )?;
-        let mut records = vec![
-            ExportRecord::Source(source_record(
-                &transaction,
-                &input.tenant_id,
-                &input.person_id,
-                &source_id,
-            )?),
-            ExportRecord::Evidence(evidence_record(
-                &transaction,
-                &input.tenant_id,
-                &input.person_id,
-                &evidence_id,
-            )?),
-            ExportRecord::Claim(claim_record(
-                &transaction,
-                &input.tenant_id,
-                &input.person_id,
-                &input.claim_id,
-            )?),
-            ExportRecord::Claim(claim_record(
-                &transaction,
-                &input.tenant_id,
-                &input.person_id,
-                &claim_id,
-            )?),
-            ExportRecord::ClaimEvidence(claim_evidence_record(
-                &transaction,
-                &input.tenant_id,
-                &input.person_id,
-                &claim_id,
-                &evidence_id,
-            )?),
-            ExportRecord::Correction(correction),
-        ];
-        records.extend(removed_profiles.into_iter().map(|id| {
-            ExportRecord::Deletion(DeletionRecord {
-                tenant_id: input.tenant_id.clone(),
-                person_id: input.person_id.clone(),
-                target: MemoryRef::ProfileEntry(ProfileEntryId(id)),
-                deleted_at: input.recorded_at,
-            })
-        }));
+
         append_commit(
             &transaction,
             &input.tenant_id,
@@ -364,7 +280,9 @@ impl MemoryDb {
             input.recorded_at,
             records,
         )?;
+
         transaction.commit()?;
+
         Ok(Corrected {
             source_id,
             evidence_id,
@@ -372,7 +290,6 @@ impl MemoryDb {
             superseded_claim_id: input.claim_id,
         })
     }
-
     pub fn delete_source(&mut self, input: DeleteInput) -> Result<Deleted> {
         require_scope(&input.tenant_id, &input.person_id)?;
         let transaction = self.connection.transaction()?;
@@ -933,6 +850,229 @@ pub(super) fn validate_transcript_locator(locator: &TranscriptLocator) -> Result
 
 fn new_id(transaction: &Transaction<'_>) -> Result<String> {
     Ok(transaction.query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))?)
+}
+
+struct OldClaim {
+    subject: String,
+    predicate: String,
+    kind: String,
+    valid_from: i64,
+    recorded_from: i64,
+}
+
+#[allow(clippy::type_complexity)]
+fn find_correction_targets(
+    transaction: &rusqlite::Transaction<'_>,
+    tenant_id: &TenantId,
+    person_id: &PersonId,
+    claim_id: &ClaimId,
+) -> Result<(Vec<String>, OldClaim, Vec<EvidenceId>)> {
+    let removed_profiles = transaction
+        .prepare(
+            "SELECT id FROM profile_entries WHERE tenant_id = ?1 AND person_id = ?2 AND claim_id = ?3 ORDER BY id",
+        )?
+        .query_map(
+            params![tenant_id.0, person_id.0, claim_id.0],
+            |row| row.get::<_, String>(0),
+        )?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let old = transaction
+        .query_row(
+            "SELECT subject, predicate, kind, valid_from, recorded_from FROM claims WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND status = 'accepted'",
+            params![claim_id.0, tenant_id.0, person_id.0],
+            |row| Ok(OldClaim {
+                subject: row.get(0)?,
+                predicate: row.get(1)?,
+                kind: row.get(2)?,
+                valid_from: row.get(3)?,
+                recorded_from: row.get(4)?,
+            }),
+        )
+        .optional()?
+        .ok_or(Error::NotFound)?;
+    let stale_evidence_ids = transaction
+        .prepare(
+            "SELECT evidence_id FROM claim_evidence WHERE tenant_id = ?1 AND person_id = ?2 AND claim_id = ?3 AND relation = '\"supports\"' ORDER BY evidence_id",
+        )?
+        .query_map(
+            params![tenant_id.0, person_id.0, claim_id.0],
+            |row| row.get::<_, String>(0).map(EvidenceId),
+        )?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok((removed_profiles, old, stale_evidence_ids))
+}
+
+fn validate_correction_time(
+    input_valid_at: i64,
+    input_recorded_at: i64,
+    old_valid_from: i64,
+    old_recorded_from: i64,
+) -> Result<()> {
+    if input_valid_at <= old_valid_from || input_recorded_at <= old_recorded_from {
+        return Err(Error::Invalid(
+            "correction timestamps must advance the original valid and recorded intervals"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn insert_correction_source_and_evidence(
+    transaction: &rusqlite::Transaction<'_>,
+    tenant_id: &TenantId,
+    person_id: &PersonId,
+    text: &str,
+    valid_at: i64,
+    recorded_at: i64,
+) -> Result<(SourceId, EvidenceId)> {
+    let source_id = SourceId(new_id(transaction)?);
+    let evidence_id = EvidenceId(new_id(transaction)?);
+    transaction.execute(
+        "INSERT INTO sources(id, tenant_id, person_id, revision, kind, content, captured_at, recorded_at) VALUES(?1, ?2, ?3, 1, '\"user_correction\"', ?4, ?5, ?6)",
+        params![source_id.0, tenant_id.0, person_id.0, text, valid_at, recorded_at],
+    )?;
+    transaction.execute(
+        "INSERT INTO source_fts(source_id, tenant_id, person_id, content) VALUES(?1, ?2, ?3, ?4)",
+        params![source_id.0, tenant_id.0, person_id.0, text],
+    )?;
+    transaction.execute(
+        "INSERT INTO evidence(id, tenant_id, person_id, source_id, source_revision, quote, recorded_at) VALUES(?1, ?2, ?3, ?4, 1, ?5, ?6)",
+        params![evidence_id.0, tenant_id.0, person_id.0, source_id.0, text, recorded_at],
+    )?;
+    Ok((source_id, evidence_id))
+}
+
+fn supersede_stale_claim(
+    transaction: &rusqlite::Transaction<'_>,
+    tenant_id: &TenantId,
+    person_id: &PersonId,
+    claim_id: &ClaimId,
+    stale_evidence_ids: &[EvidenceId],
+    valid_at: i64,
+    recorded_at: i64,
+) -> Result<()> {
+    transaction.execute(
+        "UPDATE claims SET status = 'superseded', valid_until = ?1, recorded_until = ?2 WHERE id = ?3 AND tenant_id = ?4 AND person_id = ?5",
+        params![valid_at, recorded_at, claim_id.0, tenant_id.0, person_id.0],
+    )?;
+    invalidate_summaries_for_evidence(
+        transaction,
+        tenant_id,
+        person_id,
+        stale_evidence_ids,
+        recorded_at,
+    )?;
+    enqueue_projection_repair(
+        transaction,
+        tenant_id,
+        person_id,
+        EmbeddingTarget::Claim(claim_id.clone()),
+        "superseded_sync",
+        recorded_at,
+    )?;
+    transaction.execute(
+        "DELETE FROM profile_entries WHERE tenant_id = ?1 AND person_id = ?2 AND claim_id = ?3",
+        params![tenant_id.0, person_id.0, claim_id.0],
+    )?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_correction_claim(
+    transaction: &rusqlite::Transaction<'_>,
+    tenant_id: &TenantId,
+    person_id: &PersonId,
+    superseded_claim_id: &ClaimId,
+    old: &OldClaim,
+    value: &str,
+    valid_at: i64,
+    recorded_at: i64,
+    source_id: &SourceId,
+    evidence_id: &EvidenceId,
+) -> Result<(ClaimId, CorrectionRecord)> {
+    let claim_id = insert_claim(
+        transaction,
+        tenant_id,
+        person_id,
+        evidence_id,
+        ClaimInput {
+            subject: old.subject.clone(),
+            predicate: old.predicate.clone(),
+            value: value.to_owned(),
+            kind: claim_kind(&old.kind)?,
+            valid_from: valid_at,
+            tier: MemoryTier::LongTerm,
+            processing_state: MemoryProcessingState::Processed,
+        },
+        recorded_at,
+    )?;
+    transaction.execute(
+        "UPDATE sources SET origin_evidence_id = ?1, origin_claim_id = ?2 WHERE id = ?3 AND tenant_id = ?4 AND person_id = ?5",
+        params![evidence_id.0, claim_id.0, source_id.0, tenant_id.0, person_id.0],
+    )?;
+    let correction = CorrectionRecord {
+        tenant_id: tenant_id.clone(),
+        person_id: person_id.clone(),
+        superseded_claim_id: superseded_claim_id.clone(),
+        claim_id: claim_id.clone(),
+        source_id: source_id.clone(),
+        evidence_id: evidence_id.clone(),
+        valid_at,
+        recorded_at,
+    };
+    transaction.execute(
+        "INSERT INTO corrections(tenant_id, person_id, superseded_claim_id, claim_id, source_id, evidence_id, valid_at, recorded_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![correction.tenant_id.0, correction.person_id.0, correction.superseded_claim_id.0, correction.claim_id.0, correction.source_id.0, correction.evidence_id.0, correction.valid_at, correction.recorded_at],
+    )?;
+    Ok((claim_id, correction))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_correction_records(
+    transaction: &rusqlite::Transaction<'_>,
+    tenant_id: &TenantId,
+    person_id: &PersonId,
+    superseded_claim_id: &ClaimId,
+    source_id: &SourceId,
+    evidence_id: &EvidenceId,
+    claim_id: &ClaimId,
+    correction: CorrectionRecord,
+    removed_profiles: Vec<String>,
+    recorded_at: i64,
+) -> Result<Vec<ExportRecord>> {
+    let mut records = vec![
+        ExportRecord::Source(source_record(transaction, tenant_id, person_id, source_id)?),
+        ExportRecord::Evidence(evidence_record(
+            transaction,
+            tenant_id,
+            person_id,
+            evidence_id,
+        )?),
+        ExportRecord::Claim(claim_record(
+            transaction,
+            tenant_id,
+            person_id,
+            superseded_claim_id,
+        )?),
+        ExportRecord::Claim(claim_record(transaction, tenant_id, person_id, claim_id)?),
+        ExportRecord::ClaimEvidence(claim_evidence_record(
+            transaction,
+            tenant_id,
+            person_id,
+            claim_id,
+            evidence_id,
+        )?),
+        ExportRecord::Correction(correction),
+    ];
+    records.extend(removed_profiles.into_iter().map(|id| {
+        ExportRecord::Deletion(DeletionRecord {
+            tenant_id: tenant_id.clone(),
+            person_id: person_id.clone(),
+            target: MemoryRef::ProfileEntry(ProfileEntryId(id)),
+            deleted_at: recorded_at,
+        })
+    }));
+    Ok(records)
 }
 
 #[allow(clippy::type_complexity)]
