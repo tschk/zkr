@@ -165,6 +165,19 @@ mod tests {
     }
 
     #[test]
+    fn augment_with_no_lessons_returns_base() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("memory.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let improve = SelfImprove::new(db, tenant_id, person_id);
+
+        let augmented = improve
+            .augment("testing", "You are a helpful agent.")
+            .unwrap();
+        assert_eq!(augmented, "You are a helpful agent.");
+    }
+
+    #[test]
     fn deduplicates_lessons_across_queries() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("memory.db")).unwrap();
