@@ -1,6 +1,6 @@
 use super::export::{
-    append_records, claim_evidence_record, claim_records, evidence_record,
-    review_record, source_record,
+    append_records, claim_evidence_record, claim_records, evidence_record, review_record,
+    source_record,
 };
 use super::*;
 use rusqlite::{Transaction, TransactionBehavior};
@@ -418,8 +418,8 @@ fn ensure_column(
     }
 
     let exists = transaction.query_row(
-        &format!("SELECT EXISTS(SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1)"),
-        [column],
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2)",
+        [table, column],
         |row| row.get::<_, bool>(0),
     )?;
     if !exists {
