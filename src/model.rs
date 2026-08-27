@@ -481,4 +481,37 @@ mod tests {
             _ => panic!("Expected EmptyText error for evidence id"),
         }
     }
+
+    #[test]
+    fn test_validate_text_valid() {
+        assert_eq!(validate_text("test_field", "valid text"), Ok(()));
+        assert_eq!(validate_text("test_field", "  leading whitespace"), Ok(()));
+        assert_eq!(validate_text("test_field", "trailing whitespace  "), Ok(()));
+        assert_eq!(validate_text("test_field", "  both  "), Ok(()));
+        assert_eq!(validate_text("test_field", "a"), Ok(()));
+    }
+
+    #[test]
+    fn test_validate_text_invalid() {
+        assert_eq!(
+            validate_text("test_field", ""),
+            Err(ValidationError::EmptyText("test_field"))
+        );
+        assert_eq!(
+            validate_text("test_field", "   "),
+            Err(ValidationError::EmptyText("test_field"))
+        );
+        assert_eq!(
+            validate_text("test_field", "\t"),
+            Err(ValidationError::EmptyText("test_field"))
+        );
+        assert_eq!(
+            validate_text("test_field", "\n"),
+            Err(ValidationError::EmptyText("test_field"))
+        );
+        assert_eq!(
+            validate_text("test_field", " \t\n "),
+            Err(ValidationError::EmptyText("test_field"))
+        );
+    }
 }
