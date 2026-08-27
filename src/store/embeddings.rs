@@ -76,37 +76,25 @@ pub(super) fn projection_input_from(
     target: EmbeddingTarget,
 ) -> Result<ProjectionInput> {
     require_scope(tenant_id, person_id)?;
-    let (table, id, expression, revision, live) = match &target {
-        EmbeddingTarget::Source(id) => (
-            "sources",
-            &id.0,
-            "content",
-            "revision",
-            "deleted_at IS NULL",
-        ),
-        EmbeddingTarget::Evidence(id) => (
-            "evidence",
-            &id.0,
-            "quote",
-            "source_revision",
-            "deleted_at IS NULL",
-        ),
-        EmbeddingTarget::Claim(id) => (
-            "claims",
-            &id.0,
-            "subject || ' ' || predicate || ' ' || value",
-            "recorded_from",
-            "status = 'accepted' AND valid_until IS NULL AND recorded_until IS NULL AND tier IN ('short_term', 'long_term') AND processing_state = 'processed'",
-        ),
-    };
-    let (text, target_revision) = connection
-        .query_row(
-            &format!("SELECT {expression}, {revision} FROM {table} WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND {live}"),
-            params![id, tenant_id.0, person_id.0],
+    let (text, target_revision) = match &target {
+        EmbeddingTarget::Source(id) => connection.query_row(
+            "SELECT content, revision FROM sources WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND deleted_at IS NULL",
+            params![id.0, tenant_id.0, person_id.0],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
-        )
-        .optional()?
-        .ok_or(Error::NotFound)?;
+        ),
+        EmbeddingTarget::Evidence(id) => connection.query_row(
+            "SELECT quote, source_revision FROM evidence WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND deleted_at IS NULL",
+            params![id.0, tenant_id.0, person_id.0],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        ),
+        EmbeddingTarget::Claim(id) => connection.query_row(
+            "SELECT subject || ' ' || predicate || ' ' || value, recorded_from FROM claims WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND status = 'accepted' AND valid_until IS NULL AND recorded_until IS NULL AND tier IN ('short_term', 'long_term') AND processing_state = 'processed'",
+            params![id.0, tenant_id.0, person_id.0],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        ),
+    }
+    .optional()?
+    .ok_or(Error::NotFound)?;
     Ok(ProjectionInput {
         target,
         input_hash: input_hash(&text),
