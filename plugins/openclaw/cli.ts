@@ -39,7 +39,7 @@ export async function runZkr(
   input: unknown,
   options: ZkrOptions = {},
 ): Promise<unknown> {
-if (options.command !== undefined && typeof options.command !== "string") {
+  if (options.command !== undefined && typeof options.command !== "string") {
     throw new Error("zkr command must be a string");
   }
   if (options.database !== undefined && typeof options.database !== "string") {
@@ -105,6 +105,9 @@ if (options.command !== undefined && typeof options.command !== "string") {
       } catch {
         fail(false);
       }
+    });
+    child.stdin.on("error", () => {
+      // Ignore EPIPE errors if the child exits before we finish writing
     });
     child.stdin.end(JSON.stringify(input));
   });
