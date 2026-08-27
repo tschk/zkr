@@ -247,7 +247,6 @@ impl MemoryDb {
         SELECT DISTINCT i.kind, i.id as orig_id, 'source' as target_kind, s.id as target_id
         FROM inputs i
         JOIN sources s ON i.kind = 'source' AND s.id = i.id AND s.tenant_id = ?1 AND s.person_id = ?2 AND s.deleted_at IS NULL
-        JOIN evidence live_e ON live_e.source_id = s.id AND live_e.tenant_id = ?1 AND live_e.person_id = ?2 AND live_e.deleted_at IS NULL
         WHERE NOT EXISTS (
             SELECT 1
             FROM evidence e
@@ -273,7 +272,8 @@ impl MemoryDb {
             ))
         })?;
 
-        let mut results: std::collections::HashMap<(String, String), Vec<RetrievalTarget>> = std::collections::HashMap::new();
+        let mut results: std::collections::HashMap<(String, String), Vec<RetrievalTarget>> =
+            std::collections::HashMap::new();
         for row in rows {
             let (orig_kind, orig_id, target_kind, target_id) = row?;
             let target = match target_kind.as_str() {
@@ -282,7 +282,10 @@ impl MemoryDb {
                 "source" => RetrievalTarget::Source(SourceId(target_id)),
                 _ => continue,
             };
-            results.entry((orig_kind, orig_id)).or_default().push(target);
+            results
+                .entry((orig_kind, orig_id))
+                .or_default()
+                .push(target);
         }
 
         // Return empty vectors for any target that had no results.
@@ -296,7 +299,6 @@ impl MemoryDb {
 
         Ok(results)
     }
-
 
     fn retrieval_item(
         &self,

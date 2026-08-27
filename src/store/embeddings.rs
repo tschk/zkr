@@ -428,11 +428,8 @@ impl MemoryDb {
         }
 
         let valid_candidates: Vec<(String, String)> = candidate_scores.keys().cloned().collect();
-        let bulk_targets = self.retrieval_targets_for_embeddings_bulk(
-            tenant_id,
-            person_id,
-            &valid_candidates
-        )?;
+        let bulk_targets =
+            self.retrieval_targets_for_embeddings_bulk(tenant_id, person_id, &valid_candidates)?;
 
         for ((kind, id), score) in candidate_scores {
             if let Some(targets) = bulk_targets.get(&(kind, id)) {
