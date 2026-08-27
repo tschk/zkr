@@ -140,23 +140,22 @@ fn fetch_target_embeddings(
     }
 
     let mut statement = transaction.prepare(&query)?;
-    let embedding_rows =
-        statement.query_map(rusqlite::params_from_iter(sql_params), |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                EmbeddingRow {
-                    model: row.get::<_, String>(2)?,
-                    version: row.get::<_, String>(3)?,
-                    revision: row.get::<_, i64>(4)?,
-                    hash: row.get::<_, String>(5)?,
-                    dimension: row.get::<_, usize>(6)?,
-                    normalization: row.get::<_, String>(7)?,
-                    distance: row.get::<_, String>(8)?,
-                    vector: row.get::<_, String>(9)?,
-                },
-            ))
-        })?;
+    let embedding_rows = statement.query_map(rusqlite::params_from_iter(sql_params), |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            EmbeddingRow {
+                model: row.get::<_, String>(2)?,
+                version: row.get::<_, String>(3)?,
+                revision: row.get::<_, i64>(4)?,
+                hash: row.get::<_, String>(5)?,
+                dimension: row.get::<_, usize>(6)?,
+                normalization: row.get::<_, String>(7)?,
+                distance: row.get::<_, String>(8)?,
+                vector: row.get::<_, String>(9)?,
+            },
+        ))
+    })?;
 
     for row in embedding_rows {
         let (target_kind, target_id, embed_row) = row?;
