@@ -2095,4 +2095,17 @@ mod tests {
             .unwrap();
         assert_eq!(augmented, "Base prompt.");
     }
+
+    #[test]
+    fn search_personality_propagates_db_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        // Use an empty TenantId, which makes db.search fail validation
+        let tenant_id = TenantId("".into());
+        let person_id = PersonId("p1".into());
+        let personality = Personality::new(db, tenant_id, person_id);
+
+        let result = personality.search_personality("query", 5);
+        assert!(result.is_err());
+    }
 }
