@@ -450,6 +450,20 @@ fn apply_evidence(
     Ok(())
 }
 
+struct StoredClaim {
+    subject: String,
+    predicate: String,
+    value: String,
+    kind: String,
+    valid_from: Timestamp,
+    recorded_from: Timestamp,
+    valid_until: Option<Timestamp>,
+    recorded_until: Option<Timestamp>,
+    status: String,
+    tier: String,
+    processing_state: String,
+}
+
 fn apply_claim(transaction: &Transaction<'_>, record: &Claim, applied_at: Timestamp) -> Result<()> {
     assert_legal_state(&record.tier, &record.status, &record.processing_state)
         .map_err(|error| Error::Invalid(error.to_string()))?;
@@ -462,19 +476,19 @@ fn apply_claim(transaction: &Transaction<'_>, record: &Claim, applied_at: Timest
             "SELECT subject, predicate, value, kind, valid_from, recorded_from, valid_until, recorded_until, status, tier, processing_state FROM claims WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3",
             params![record.id.0, record.tenant_id.0, record.person_id.0],
             |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, Timestamp>(4)?,
-                    row.get::<_, Timestamp>(5)?,
-                    row.get::<_, Option<Timestamp>>(6)?,
-                    row.get::<_, Option<Timestamp>>(7)?,
-                    row.get::<_, String>(8)?,
-                    row.get::<_, String>(9)?,
-                    row.get::<_, String>(10)?,
-                ))
+                Ok(StoredClaim {
+                    subject: row.get::<_, String>(0)?,
+                    predicate: row.get::<_, String>(1)?,
+                    value: row.get::<_, String>(2)?,
+                    kind: row.get::<_, String>(3)?,
+                    valid_from: row.get::<_, Timestamp>(4)?,
+                    recorded_from: row.get::<_, Timestamp>(5)?,
+                    valid_until: row.get::<_, Option<Timestamp>>(6)?,
+                    recorded_until: row.get::<_, Option<Timestamp>>(7)?,
+                    status: row.get::<_, String>(8)?,
+                    tier: row.get::<_, String>(9)?,
+                    processing_state: row.get::<_, String>(10)?,
+                })
             },
         )
         .optional()?;
@@ -485,23 +499,23 @@ fn apply_claim(transaction: &Transaction<'_>, record: &Claim, applied_at: Timest
         ).map_err(claim_interval_error)?;
         return Ok(());
     };
-    if stored.0 != record.subject
-        || stored.1 != record.predicate
-        || stored.2 != record.value
-        || stored.3 != kind
-        || stored.4 != record.valid_time.from
-        || stored.5 != record.recorded_time.from
+    if stored.subject != record.subject
+        || stored.predicate != record.predicate
+        || stored.value != record.value
+        || stored.kind != kind
+        || stored.valid_from != record.valid_time.from
+        || stored.recorded_from != record.recorded_time.from
     {
         return Err(Error::Invalid(format!(
             "applied claim {} conflicts with the stored claim payload",
             record.id.0
         )));
     }
-    if stored.6 == record.valid_time.until
-        && stored.7 == record.recorded_time.until
-        && stored.8 == status
-        && stored.9 == tier
-        && stored.10 == processing_state
+    if stored.valid_until == record.valid_time.until
+        && stored.recorded_until == record.recorded_time.until
+        && stored.status == status
+        && stored.tier == tier
+        && stored.processing_state == processing_state
     {
         return Ok(());
     }
