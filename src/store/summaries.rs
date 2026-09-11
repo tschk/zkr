@@ -313,19 +313,28 @@ fn validate_evidence(
 
         if count != chunk.len() {
             // Find the specific missing evidence to produce the exact error message
-            for evidence_id in chunk {
-                let live: bool = transaction.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM evidence WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND deleted_at IS NULL)",
-                    params![evidence_id.0, tenant_id.0, person_id.0],
-                    |row| row.get(0),
-                )?;
-                if !live {
-                    return Err(Error::Invalid(format!(
-                        "evidence {} is unavailable",
-                        evidence_id.0
-                    )));
-                }
-            }
+            let chunk_json =
+                serde_json::to_string(&chunk.iter().map(|id| &id.0).collect::<Vec<_>>())
+                    .map_err(|e| Error::Invalid(e.to_string()))?;
+
+            let missing_id: String = transaction.query_row(
+                "SELECT value FROM json_each(?1)
+                 WHERE NOT EXISTS (
+                     SELECT 1 FROM evidence
+                     WHERE id = value
+                       AND tenant_id = ?2
+                       AND person_id = ?3
+                       AND deleted_at IS NULL
+                 )
+                 LIMIT 1",
+                params![chunk_json, tenant_id.0, person_id.0],
+                |row| row.get(0),
+            )?;
+
+            return Err(Error::Invalid(format!(
+                "evidence {} is unavailable",
+                missing_id
+            )));
         }
     }
 
