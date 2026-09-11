@@ -766,25 +766,21 @@ impl MemoryDb {
         }
         let transaction = self.connection.transaction()?;
         let evidence_ids_json = serde_json::to_string(&input.evidence_ids)?;
-
-        let missing_id = {
-            let mut missing_stmt = transaction.prepare_cached(
-                "SELECT value FROM json_each(?1) \
-                 EXCEPT \
-                 SELECT id FROM evidence WHERE tenant_id = ?2 AND person_id = ?3 AND deleted_at IS NULL",
-            )?;
-            let mut missing_ids = missing_stmt.query_map(
+        let missing_id: Option<String> = transaction
+            .query_row(
+                "SELECT value FROM json_each(?1)
+                 WHERE NOT EXISTS (
+                     SELECT 1 FROM evidence
+                     WHERE id = value
+                       AND tenant_id = ?2
+                       AND person_id = ?3
+                       AND deleted_at IS NULL
+                 )
+                 LIMIT 1",
                 params![evidence_ids_json, input.tenant_id.0, input.person_id.0],
-                |row| row.get::<_, String>(0),
-            )?;
-
-            if let Some(missing_id_result) = missing_ids.next() {
-                Some(missing_id_result?)
-            } else {
-                None
-            }
-        };
-
+                |row| row.get(0),
+            )
+            .optional()?;
         if let Some(id) = missing_id {
             return Err(Error::Invalid(format!("evidence {} is unavailable", id)));
         }
