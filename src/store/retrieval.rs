@@ -247,6 +247,7 @@ impl MemoryDb {
         SELECT DISTINCT i.kind, i.id as orig_id, 'source' as target_kind, s.id as target_id
         FROM inputs i
         JOIN sources s ON i.kind = 'source' AND s.id = i.id AND s.tenant_id = ?1 AND s.person_id = ?2 AND s.deleted_at IS NULL
+        JOIN evidence e ON e.source_id = s.id AND e.tenant_id = ?1 AND e.person_id = ?2 AND e.deleted_at IS NULL
         WHERE NOT EXISTS (
             SELECT 1
             FROM evidence e
@@ -291,10 +292,7 @@ impl MemoryDb {
         // Return empty vectors for any target that had no results.
         // It acts exactly like the original method when no results are found.
         for (kind, id) in targets {
-            let key = (kind.clone(), id.clone());
-            if !results.contains_key(&key) {
-                results.insert(key, vec![]);
-            }
+            results.entry((kind.clone(), id.clone())).or_default();
         }
 
         Ok(results)
