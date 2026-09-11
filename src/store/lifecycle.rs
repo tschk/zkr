@@ -1177,19 +1177,27 @@ fn build_deletion_records(
             claim_id,
         )?));
     }
-    for profile_id in profile_ids {
-        let remains: bool = transaction.query_row(
-            "SELECT EXISTS(SELECT 1 FROM profile_entries WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3)",
-            params![profile_id, tenant_id.0, person_id.0],
-            |row| row.get(0),
+    if !profile_ids.is_empty() {
+        let profile_ids_json = serde_json::to_string(&profile_ids).unwrap();
+        let mut stmt = transaction.prepare_cached(
+            "SELECT id FROM profile_entries WHERE tenant_id = ?1 AND person_id = ?2 AND id IN (SELECT value FROM json_each(?3))"
         )?;
-        if !remains {
-            records.push(ExportRecord::Deletion(DeletionRecord {
-                tenant_id: tenant_id.clone(),
-                person_id: person_id.clone(),
-                target: MemoryRef::ProfileEntry(ProfileEntryId(profile_id)),
-                deleted_at,
-            }));
+
+        let existing_profile_ids: std::collections::HashSet<String> = stmt
+            .query_map(params![tenant_id.0, person_id.0, profile_ids_json], |row| {
+                row.get(0)
+            })?
+            .collect::<std::result::Result<_, _>>()?;
+
+        for profile_id in profile_ids {
+            if !existing_profile_ids.contains(&profile_id) {
+                records.push(ExportRecord::Deletion(DeletionRecord {
+                    tenant_id: tenant_id.clone(),
+                    person_id: person_id.clone(),
+                    target: MemoryRef::ProfileEntry(ProfileEntryId(profile_id)),
+                    deleted_at,
+                }));
+            }
         }
     }
     records.extend(review_ids.into_iter().map(|id| {
