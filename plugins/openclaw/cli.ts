@@ -86,9 +86,9 @@ export async function runZkr(
 
     child.stdout.on("data", (chunk: Buffer) => capture(output.stdout, chunk));
     child.stderr.on("data", (chunk: Buffer) => capture(output.stderr, chunk));
-    child.stdin.on("error", () => {
-      // Ignore EPIPE errors which occur when the child process closes its stdin before we finish writing
-    });
+    const ignoreStreamError = () => {};
+    child.stdout.on("error", ignoreStreamError);
+    child.stderr.on("error", ignoreStreamError);
     child.on("error", () => {
       fail(false);
     });
