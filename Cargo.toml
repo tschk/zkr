@@ -35,3 +35,6 @@ name = "lifecycle_deletion_repairs"
 [[bench]]
 name = "claims_nplus1"
 harness = false
+[[bench]]
+name = "validate_evidence"
+harness = false
