@@ -89,6 +89,9 @@ export async function runZkr(
     child.on("error", () => {
       fail(false);
     });
+    child.stdin.on("error", () => {
+      // Ignore EPIPE errors if the process closes stdin early
+    });
     child.on("close", (code) => {
       if (settled) return;
       clearTimeout(timeout);

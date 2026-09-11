@@ -40,19 +40,13 @@ fn main() -> Result<(), rusqlite::Error> {
     }
     let nplus1_duration = start_nplus1.elapsed();
 
-    // Using json_each + NOT EXISTS
+    // Using EXCEPT approach
     let start_except = Instant::now();
     let ids_json = serde_json::to_string(&ids).unwrap();
     let mut missing_stmt = connection.prepare(
-        "SELECT value FROM json_each(?1)
-         WHERE NOT EXISTS (
-             SELECT 1 FROM evidence
-             WHERE id = value
-               AND tenant_id = ?2
-               AND person_id = ?3
-               AND deleted_at IS NULL
-         )
-         LIMIT 1",
+        "SELECT value FROM json_each(?1) \
+         EXCEPT \
+         SELECT id FROM evidence WHERE tenant_id = ?2 AND person_id = ?3 AND deleted_at IS NULL",
     )?;
     let missing_ids: Vec<String> = missing_stmt
         .query_map(params![ids_json, "t1", "p1"], |row| row.get(0))?
@@ -63,7 +57,7 @@ fn main() -> Result<(), rusqlite::Error> {
     assert_eq!(missing_ids.len(), 0);
 
     println!("N+1 Duration (Happy Path): {:?}", nplus1_duration);
-    println!("json_each Duration (Happy Path): {:?}", except_duration);
+    println!("EXCEPT Duration (Happy Path): {:?}", except_duration);
 
     // Bench with one missing
     let mut ids_with_missing = ids.clone();
@@ -81,7 +75,7 @@ fn main() -> Result<(), rusqlite::Error> {
     }
     let nplus1_duration_miss = start_nplus1_miss.elapsed();
 
-    // Using json_each + NOT EXISTS (Missing)
+    // Using EXCEPT approach (Missing)
     let start_except_miss = Instant::now();
     let ids_json_miss = serde_json::to_string(&ids_with_missing).unwrap();
     let mut missing_ids_miss = missing_stmt
@@ -98,7 +92,7 @@ fn main() -> Result<(), rusqlite::Error> {
     assert!(found_missing);
 
     println!("N+1 Duration (1 Missing): {:?}", nplus1_duration_miss);
-    println!("json_each Duration (1 Missing): {:?}", except_duration_miss);
+    println!("EXCEPT Duration (1 Missing): {:?}", except_duration_miss);
 
     Ok(())
 }
