@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ -f "${HOME}/.cargo/env" ]]; then
+  # shellcheck disable=SC1091
+  source "${HOME}/.cargo/env"
+fi
+
+command -v rustc >/dev/null
+command -v cargo >/dev/null
+command -v bun >/dev/null
+command -v python3 >/dev/null

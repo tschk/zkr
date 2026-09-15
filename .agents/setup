@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+log() {
+  printf '[setup] %s\n' "$*"
+}
+
+time_step() {
+  local label="$1"
+  shift
+  local start
+  start="$(date +%s)"
+  log "start: ${label}"
+  "$@"
+  log "done: ${label} ($(( $(date +%s) - start ))s)"
+}
+
+need_pkg() {
+  dpkg -s "$1" >/dev/null 2>&1
+}
+
+missing=()
+for pkg in build-essential pkg-config libssl-dev ca-certificates curl; do
+  if ! need_pkg "${pkg}"; then
+    missing+=("${pkg}")
+  fi
+done
+if ((${#missing[@]})); then
+  time_step "apt-get update" sudo apt-get update -y
+  time_step "apt-get install" sudo apt-get install -y "${missing[@]}"
+else
+  log "system packages already present"
+fi
+
+export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
+if ! command -v rustup >/dev/null 2>&1; then
+  time_step "install rustup" bash -c 'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal --no-modify-path'
+fi
+# shellcheck disable=SC1091
+source "${CARGO_HOME}/env"
+time_step "rustup toolchain" rustup toolchain install stable --profile minimal --component clippy,rustfmt --no-self-update
+time_step "cargo fetch" cargo fetch --locked
+
+if [[ -f plugins/openclaw/package.json ]]; then
+  time_step "bun install openclaw" bun install --frozen-lockfile --cwd plugins/openclaw
+fi
+
+profile_marker="# zkr rustup environment"
+if ! grep -Fqx "${profile_marker}" "${HOME}/.bash_profile" 2>/dev/null; then
+  cat >> "${HOME}/.bash_profile" <<'PROFILE'
+
+# zkr rustup environment
+if [[ -f "${HOME}/.cargo/env" ]]; then
+  # shellcheck disable=SC1091
+  source "${HOME}/.cargo/env"
+fi
+PROFILE
+fi
+
+log "setup complete"
