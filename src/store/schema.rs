@@ -418,8 +418,8 @@ fn ensure_column(
     }
 
     let exists = transaction.query_row(
-        "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2)",
-        [table, column],
+        &format!("SELECT EXISTS(SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1)"),
+        [column],
         |row| row.get::<_, bool>(0),
     )?;
     if !exists {

@@ -45,15 +45,7 @@ fn run() -> Result<Option<serde_json::Value>, Box<dyn std::error::Error>> {
         return Err("usage: zkr --db PATH COMMAND (use --help)".into());
     }
     let mut database = MemoryDb::open(&arguments[1])?;
-    let value = dispatch_command(&mut database, arguments[2].as_str())?;
-    Ok(Some(value))
-}
-
-fn dispatch_command(
-    database: &mut MemoryDb,
-    command: &str,
-) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-    let value = match command {
+    let value = match arguments[2].as_str() {
         "remember" => {
             let request = read_json::<RememberRequest>()?;
             serde_json::to_value(database.remember_with_locator(request.memory, request.locator)?)?
@@ -93,7 +85,7 @@ fn dispatch_command(
         "apply" => serde_json::to_value(database.apply(read_json::<ApplyInput>()?)?)?,
         command => return Err(format!("unknown command {command:?}").into()),
     };
-    Ok(value)
+    Ok(Some(value))
 }
 
 fn read_json<T: DeserializeOwned>() -> Result<T, Box<dyn std::error::Error>> {

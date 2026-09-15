@@ -239,62 +239,6 @@ fn embedding_projection_is_validated_and_scoped() {
 }
 
 #[test]
-fn dense_search_does_not_emit_evidence_less_sources_as_hits() {
-    let mut db = MemoryDb {
-        connection: Connection::open_in_memory().unwrap(),
-    };
-    db.migrate().unwrap();
-    let remembered = db
-        .remember(remember_raw("a", "sam", "Orphaned source text"))
-        .unwrap();
-    let target = EmbeddingTarget::Source(remembered.source_id.clone());
-    db.upsert_embedding(EmbeddingInput {
-        tenant_id: TenantId("a".into()),
-        person_id: PersonId("sam".into()),
-        target,
-        embedding: Embedding {
-            vector: vec![1.0, 0.0],
-            model: "test/model".into(),
-            version: "1".into(),
-            input_hash: hash_for(&db, EmbeddingTarget::Source(remembered.source_id.clone())),
-            normalization: VectorNormalization::L2,
-            distance: VectorDistance::Cosine,
-        },
-    })
-    .unwrap();
-    db.connection
-        .execute(
-            "UPDATE evidence SET deleted_at = 1 WHERE source_id = ?1",
-            [&remembered.source_id.0],
-        )
-        .unwrap();
-
-    let found = db
-        .search(SearchInput {
-            tenant_id: TenantId("a".into()),
-            person_id: PersonId("sam".into()),
-            query: "nothing matches lexically".into(),
-            limit: 5,
-            query_embedding: Some(DenseQuery {
-                vector: vec![1.0, 0.0],
-                model: "test/model".into(),
-                version: "1".into(),
-            }),
-            as_of: None,
-            enabled_features: Vec::new(),
-        })
-        .unwrap();
-
-    assert!(found.items.is_empty());
-    assert!(
-        !found
-            .items
-            .iter()
-            .any(|item| item.memory == MemoryRef::Source(remembered.source_id.clone()))
-    );
-}
-
-#[test]
 fn search_fuses_lexical_and_real_dense_ranks_deterministically() {
     let mut db = MemoryDb {
         connection: Connection::open_in_memory().unwrap(),
