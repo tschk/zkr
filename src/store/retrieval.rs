@@ -292,9 +292,7 @@ impl MemoryDb {
         // It acts exactly like the original method when no results are found.
         for (kind, id) in targets {
             let key = (kind.clone(), id.clone());
-            if !results.contains_key(&key) {
-                results.insert(key, vec![]);
-            }
+            results.entry(key).or_default();
         }
 
         Ok(results)
