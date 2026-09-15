@@ -33,6 +33,12 @@ def _connection(path: Path) -> Iterator[sqlite3.Connection]:
         connection.close()
 
 
+def _validate_db_path(path: str) -> str:
+    if "\0" in path or path.startswith("-"):
+        raise ValueError("Invalid zkr database path")
+    return path
+
+
 def _schema(name: str, description: str, properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
     return {
         "name": name,
@@ -118,7 +124,7 @@ class ZkrMemoryProvider(MemoryProvider):
         self._binary = os.environ.get("ZKR_BIN", "zkr")
         if Path(self._binary).name not in ("zkr", "zkr.exe"):
             raise ValueError(f"Invalid zkr binary: {self._binary}")
-        self._db = Path(os.environ.get("ZKR_DB", "zkr.db"))
+        self._db = Path(_validate_db_path(os.environ.get("ZKR_DB", "zkr.db")))
         self._tenant_id = os.environ.get("ZKR_TENANT_ID", "hermes")
         self._person_id = os.environ.get("ZKR_PERSON_ID", "default")
         self._queue_path = Path(f"{self._db}.queue")
