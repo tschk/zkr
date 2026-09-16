@@ -409,6 +409,21 @@ class PluginTest(unittest.TestCase):
             else:
                 plugin.os.environ["ZKR_BIN"] = original
 
+    def test_invalid_database_path_raises_error(self):
+        original = plugin.os.environ.get("ZKR_DB")
+        try:
+            plugin.os.environ["ZKR_DB"] = "-memory.db"
+            with self.assertRaisesRegex(ValueError, "Invalid zkr database path"):
+                plugin.ZkrMemoryProvider()
+        finally:
+            if original is None:
+                plugin.os.environ.pop("ZKR_DB", None)
+            else:
+                plugin.os.environ["ZKR_DB"] = original
+
+        with self.assertRaisesRegex(ValueError, "Invalid zkr database path"):
+            plugin._validate_db_path("memory.db\0extra")
+
 
 if __name__ == "__main__":
     unittest.main()
