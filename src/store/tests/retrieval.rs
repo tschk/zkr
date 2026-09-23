@@ -75,6 +75,44 @@ fn search_filters_by_enabled_features() {
 }
 
 #[test]
+fn search_matches_aliases_without_changing_excerpt() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+
+    let mut dining = remember_raw("a", "sam", "Loves pasta; stated on 2026-09-15.");
+    dining.aliases = vec!["takeout".into(), "italian noodles".into()];
+    db.remember(dining).unwrap();
+
+    let found = db
+        .search(SearchInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            query: "takeout".into(),
+            limit: 5,
+            query_embedding: None,
+            as_of: None,
+            enabled_features: Vec::new(),
+        })
+        .unwrap();
+    assert_eq!(found.items.len(), 1);
+    assert!(found.items[0].excerpt.contains("pasta"));
+    assert!(!found.items[0].excerpt.contains("takeout"));
+}
+
+#[test]
+fn remember_rejects_blank_aliases() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let mut dining = remember_raw("a", "sam", "Loves pasta");
+    dining.aliases = vec![" ".into()];
+    assert!(matches!(db.remember(dining), Err(Error::Invalid(_))));
+}
+
+#[test]
 fn search_rejects_dense_query_with_enabled_features() {
     let mut db = MemoryDb {
         connection: Connection::open_in_memory().unwrap(),

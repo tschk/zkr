@@ -414,6 +414,31 @@ fn profile_entries_and_claim_evidence_remain_scoped_and_live() {
         .unwrap(),
         vec![entry.clone()]
     );
+    let pager = db
+        .profile_pager(ProfilesInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            limit: 10,
+        })
+        .unwrap();
+    assert_eq!(pager.entries, vec![entry.clone()]);
+    assert!(pager.generated_at > 0);
+    assert!(pager.markdown.contains("Generated at unix"));
+    assert!(pager.markdown.contains(&entry.key));
+    assert!(pager.markdown.contains(&entry.value));
+    let mut empty = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    empty.migrate().unwrap();
+    let empty_pager = empty
+        .profile_pager(ProfilesInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            limit: 10,
+        })
+        .unwrap();
+    assert!(empty_pager.entries.is_empty());
+    assert!(empty_pager.markdown.contains("No live profile projections"));
     let replay = db
         .store_profile(ProfileInput {
             tenant_id: TenantId("a".into()),
