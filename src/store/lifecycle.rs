@@ -17,6 +17,7 @@ impl MemoryDb {
     ) -> Result<Remembered> {
         require_scope(&input.tenant_id, &input.person_id)?;
         require_text("text", &input.text)?;
+        require_aliases(&input.aliases)?;
         if let Some(locator) = &locator {
             validate_transcript_locator(locator)?;
         }
@@ -109,7 +110,12 @@ impl MemoryDb {
         }
         transaction.execute(
             "INSERT INTO source_fts(source_id, tenant_id, person_id, content) VALUES(?1, ?2, ?3, ?4)",
-            params![source_id.0, input.tenant_id.0, input.person_id.0, input.text],
+            params![
+                source_id.0,
+                input.tenant_id.0,
+                input.person_id.0,
+                fts_content(&input.text, &input.aliases)
+            ],
         )?;
         transaction.execute(
             "INSERT INTO evidence(id, tenant_id, person_id, source_id, source_revision, quote, recorded_at) VALUES(?1, ?2, ?3, ?4, 1, ?5, ?6)",
@@ -637,6 +643,18 @@ impl MemoryDb {
         )?;
         transaction.commit()?;
         Ok(profile)
+    }
+
+    pub fn profile_pager(&self, input: ProfilesInput) -> Result<ProfilePager> {
+        let generated_at = self
+            .connection
+            .query_row("SELECT unixepoch()", [], |row| row.get(0))?;
+        let entries = self.profiles(input)?;
+        Ok(ProfilePager {
+            markdown: render_profile_pager(generated_at, &entries),
+            generated_at,
+            entries,
+        })
     }
 
     pub fn profiles(&self, input: ProfilesInput) -> Result<Vec<ProfileEntry>> {
@@ -1360,4 +1378,24 @@ fn build_deletion_records(
         })
     }));
     Ok(records)
+}
+
+fn render_profile_pager(generated_at: Timestamp, entries: &[ProfileEntry]) -> String {
+    let mut markdown = format!("# Memory one-pager\n\nGenerated at unix {generated_at}.\n");
+    if entries.is_empty() {
+        markdown.push_str("\nNo live profile projections.\n");
+        return markdown;
+    }
+    markdown.push('\n');
+    for entry in entries {
+        let stability = match entry.stability {
+            ProfileStability::Stable => "stable",
+            ProfileStability::Current => "current",
+        };
+        markdown.push_str(&format!(
+            "- **{}** ({stability}, recorded {}): {}\n",
+            entry.key, entry.recorded_at, entry.value
+        ));
+    }
+    markdown
 }

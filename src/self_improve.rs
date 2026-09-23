@@ -55,6 +55,7 @@ impl SelfImprove {
             recorded_at: now,
             claim: Some(claim),
             feature_flag: None,
+            aliases: Vec::new(),
         })
     }
 

@@ -138,6 +138,10 @@ pub struct RememberInput {
     pub claim: Option<ClaimInput>,
     #[serde(default)]
     pub feature_flag: Option<String>,
+    /// Extra lexical tokens for FTS only. They do not change source text,
+    /// excerpts, or the authoritative commit feed.
+    #[serde(default)]
+    pub aliases: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -263,6 +267,14 @@ pub struct ProfilesInput {
     pub person_id: PersonId,
     #[serde(default = "default_limit")]
     pub limit: u32,
+}
+
+/// A timestamped markdown digest of live profile projections.
+#[derive(Debug, Serialize)]
+pub struct ProfilePager {
+    pub generated_at: Timestamp,
+    pub markdown: String,
+    pub entries: Vec<ProfileEntry>,
 }
 
 #[derive(Debug, Serialize)]
@@ -565,6 +577,39 @@ fn require_text(field: &str, value: &str) -> Result<()> {
         return Err(Error::Invalid(format!("{field} must not be empty")));
     }
     Ok(())
+}
+
+const MAX_ALIASES: usize = 32;
+const MAX_ALIAS_CHARS: usize = 64;
+
+pub(super) fn require_aliases(aliases: &[String]) -> Result<()> {
+    if aliases.len() > MAX_ALIASES {
+        return Err(Error::Invalid(format!(
+            "aliases cannot exceed {MAX_ALIASES} entries"
+        )));
+    }
+    for alias in aliases {
+        require_text("aliases", alias)?;
+        if alias.chars().count() > MAX_ALIAS_CHARS {
+            return Err(Error::Invalid(format!(
+                "alias exceeds {MAX_ALIAS_CHARS} characters"
+            )));
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn fts_content(text: &str, aliases: &[String]) -> String {
+    let extra = aliases
+        .iter()
+        .map(|alias| alias.trim())
+        .filter(|alias| !alias.is_empty())
+        .collect::<Vec<_>>();
+    if extra.is_empty() {
+        text.to_owned()
+    } else {
+        format!("{text}\n{}", extra.join("\n"))
+    }
 }
 
 const fn default_limit() -> u32 {

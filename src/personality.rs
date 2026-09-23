@@ -508,6 +508,7 @@ impl Personality {
             recorded_at: now,
             claim: Some(claim),
             feature_flag: Some(FEATURE_FLAG.into()),
+            aliases: Vec::new(),
         })?;
         Ok(())
     }
@@ -530,6 +531,7 @@ impl Personality {
             recorded_at: now,
             claim: None,
             feature_flag: Some(FEATURE_FLAG.into()),
+            aliases: Vec::new(),
         })?;
         // Derive signals from the new event.
         self.derive_signals(event)?;
@@ -733,6 +735,7 @@ impl Personality {
             recorded_at: now,
             claim: None,
             feature_flag: Some(FEATURE_FLAG.into()),
+            aliases: Vec::new(),
         })?;
         Ok(())
     }
@@ -791,6 +794,7 @@ impl Personality {
             recorded_at: now,
             claim: Some(claim),
             feature_flag: Some(FEATURE_FLAG.into()),
+            aliases: Vec::new(),
         })?;
         Ok(())
     }
@@ -903,6 +907,7 @@ impl Personality {
             recorded_at: now,
             claim: Some(claim),
             feature_flag: Some(FEATURE_FLAG.into()),
+            aliases: Vec::new(),
         })?;
         Ok(())
     }
@@ -948,6 +953,7 @@ impl Personality {
             recorded_at: now,
             claim: Some(claim),
             feature_flag: Some(FEATURE_FLAG.into()),
+            aliases: Vec::new(),
         })?;
         Ok(())
     }
@@ -1034,6 +1040,7 @@ impl Personality {
             recorded_at: now,
             claim: Some(claim),
             feature_flag: Some(FEATURE_FLAG.into()),
+            aliases: Vec::new(),
         })?;
         Ok(())
     }
@@ -1181,6 +1188,7 @@ impl Personality {
             recorded_at: now,
             claim: Some(claim),
             feature_flag: Some(FEATURE_FLAG.into()),
+            aliases: Vec::new(),
         })?;
         Ok(())
     }
