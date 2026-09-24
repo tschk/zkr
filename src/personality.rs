@@ -1296,7 +1296,11 @@ mod tests {
     fn test_validate_persona_duplicate_traits() {
         let blueprint = PersonaBlueprint {
             name: "Test".to_string(),
-            traits: vec!["helpful".to_string(), "helpful".to_string(), "friendly".to_string()],
+            traits: vec![
+                "helpful".to_string(),
+                "helpful".to_string(),
+                "friendly".to_string(),
+            ],
             system_prompt: "Test prompt".to_string(),
             constraints: vec![],
             citations: vec![],
