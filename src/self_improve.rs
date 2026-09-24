@@ -1,5 +1,3 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use crate::{
     ClaimInput, ClaimKind, MemoryDb, MemoryProcessingState, MemoryTier, PersonId, RememberInput,
     Remembered, Result, SearchInput, SourceKind, TenantId,
@@ -33,7 +31,7 @@ impl SelfImprove {
         outcome: &str,
         lesson: &str,
     ) -> Result<Remembered> {
-        let now = now_seconds();
+        let now = crate::utils::now_seconds();
         let text =
             format!("Context: {context}\nAction: {action}\nOutcome: {outcome}\nLesson: {lesson}");
         let claim = ClaimInput {
@@ -48,7 +46,7 @@ impl SelfImprove {
         self.db.remember(RememberInput {
             tenant_id: self.tenant_id.clone(),
             person_id: self.person_id.clone(),
-            ingestion_key: Some(format!("self_improve:{}", nanos())),
+            ingestion_key: Some(format!("self_improve:{}", crate::utils::nanos())),
             kind: SourceKind::Integration,
             text,
             captured_at: now,
@@ -100,20 +98,6 @@ impl SelfImprove {
         lessons.truncate(limit as usize);
         Ok(lessons)
     }
-}
-
-fn now_seconds() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64
-}
-
-fn nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos()
 }
 
 #[cfg(test)]
