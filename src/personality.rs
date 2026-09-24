@@ -2116,24 +2116,29 @@ mod tests {
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
-        personality.record_calibration(&CalibrationRecord {
-            participant: "alice".into(),
-            predicted_reaction: "satisfied".into(),
-            actual_reaction: "frustrated".into(),
-            correct: false,
-            epoch: 5,
-        }).unwrap();
+        personality
+            .record_calibration(&CalibrationRecord {
+                participant: "alice".into(),
+                predicted_reaction: "satisfied".into(),
+                actual_reaction: "frustrated".into(),
+                correct: false,
+                epoch: 5,
+            })
+            .unwrap();
 
         // Verify the database state was updated correctly
-        let search_pack = personality.db.search(crate::store::SearchInput {
-            tenant_id: personality.tenant_id.clone(),
-            person_id: personality.person_id.clone(),
-            query: "calibration alice".into(),
-            limit: 5,
-            query_embedding: None,
-            as_of: None,
-            enabled_features: vec![FEATURE_FLAG.into()],
-        }).unwrap();
+        let search_pack = personality
+            .db
+            .search(crate::store::SearchInput {
+                tenant_id: personality.tenant_id.clone(),
+                person_id: personality.person_id.clone(),
+                query: "calibration alice".into(),
+                limit: 5,
+                query_embedding: None,
+                as_of: None,
+                enabled_features: vec![FEATURE_FLAG.into()],
+            })
+            .unwrap();
 
         assert_eq!(search_pack.items.len(), 1);
         let excerpt = &search_pack.items[0].excerpt;
