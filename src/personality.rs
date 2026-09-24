@@ -1971,7 +1971,9 @@ mod tests {
 
         let context = personality.persona_context("format-test", 5).unwrap();
         assert_eq!(context.len(), 1);
-        assert!(context[0].contains("persona:format-test blueprint traits=trait1, trait2 prompt=system prompt here"));
+        assert!(context[0].contains(
+            "persona:format-test blueprint traits=trait1, trait2 prompt=system prompt here"
+        ));
     }
 
     #[test]
