@@ -1981,7 +1981,9 @@ mod tests {
         let (tenant_id, person_id) = test_ids();
         let personality = Personality::new(db, tenant_id, person_id);
 
-        let context = personality.observation_context("unknown-thread", 5).unwrap();
+        let context = personality
+            .observation_context("unknown-thread", 5)
+            .unwrap();
         assert!(context.is_empty());
     }
 
