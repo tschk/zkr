@@ -2097,6 +2097,66 @@ mod tests {
     }
 
     #[test]
+    fn augment_prompt_combines_multiple_contexts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        personality
+            .store_voice_card(&VoiceCard {
+                scope: "general test".into(),
+                version: 1,
+                register: "professional".into(),
+                humor: "subtle".into(),
+                lexicon: vec![],
+                banned_phrases: vec![],
+                roles: vec![],
+                taboos: vec![],
+                in_jokes: vec![],
+                group_norms: vec!["be concise".into()],
+                confidence_basis_points: 8000,
+                supporting_event_epochs: vec![],
+                valid_from: 0,
+                valid_until: None,
+            })
+            .unwrap();
+
+        personality
+            .record_finding(&ObservationFinding {
+                scope: "general test".into(),
+                finding: "Some finding".into(),
+                evidence: vec!["Some evidence".into()],
+                recommendation: Some("Some recommendation".into()),
+                severity: ObservationSeverity::Info,
+            })
+            .unwrap();
+
+        let augmented = personality
+            .augment_prompt("voice card general test observation finding", "Base prompt.")
+            .unwrap();
+
+        assert!(augmented.contains("<personality_context>"));
+        assert!(augmented.contains("1. "));
+        assert!(augmented.contains("2. "));
+        assert!(augmented.contains("professional"));
+        assert!(augmented.contains("Some finding"));
+    }
+
+    #[test]
+    fn augment_prompt_propagates_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        // Use an empty TenantId, which makes db.search fail validation
+        let tenant_id = TenantId("".into());
+        let person_id = PersonId("p1".into());
+        let personality = Personality::new(db, tenant_id, person_id);
+
+        let result = personality.augment_prompt("query", "Base prompt.");
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn search_personality_propagates_db_error() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
