@@ -2108,4 +2108,93 @@ mod tests {
         let result = personality.search_personality("query", 5);
         assert!(result.is_err());
     }
+
+    #[test]
+    fn validate_persona_valid() {
+        let persona = PersonaBlueprint {
+            name: "Test Persona".into(),
+            traits: vec!["Friendly".into(), "Helpful".into()],
+            system_prompt: "You are a test persona.".into(),
+            constraints: vec!["Never lie".into()],
+            citations: vec![],
+        };
+
+        let validation = Personality::validate_persona(&persona);
+        assert!(validation.valid);
+        assert!(validation.empty_fields.is_empty());
+        assert!(validation.duplicate_traits.is_empty());
+        assert!(validation.constraints_satisfied);
+        assert_eq!(validation.trait_count, 2);
+    }
+
+    #[test]
+    fn validate_persona_empty_fields() {
+        let persona = PersonaBlueprint {
+            name: "   ".into(),
+            traits: vec![],
+            system_prompt: "".into(),
+            constraints: vec![],
+            citations: vec![],
+        };
+
+        let validation = Personality::validate_persona(&persona);
+        assert!(!validation.valid);
+        assert_eq!(validation.empty_fields.len(), 3);
+        assert!(validation.empty_fields.contains(&"name".to_string()));
+        assert!(
+            validation
+                .empty_fields
+                .contains(&"system_prompt".to_string())
+        );
+        assert!(validation.empty_fields.contains(&"traits".to_string()));
+    }
+
+    #[test]
+    fn validate_persona_duplicate_traits() {
+        let persona = PersonaBlueprint {
+            name: "Test Persona".into(),
+            traits: vec![
+                "Friendly".into(),
+                "Friendly".into(),
+                "Helpful".into(),
+                "Friendly".into(),
+            ],
+            system_prompt: "You are a test persona.".into(),
+            constraints: vec![],
+            citations: vec![],
+        };
+
+        let validation = Personality::validate_persona(&persona);
+        assert!(!validation.valid);
+        assert_eq!(validation.duplicate_traits.len(), 2);
+        assert_eq!(validation.duplicate_traits[0], "Friendly");
+        assert_eq!(validation.duplicate_traits[1], "Friendly");
+    }
+
+    #[test]
+    fn validate_persona_constraint_violations() {
+        // "never X" constraint and "always X" trait (contradiction)
+        let persona1 = PersonaBlueprint {
+            name: "Test".into(),
+            traits: vec!["always lie".into()],
+            system_prompt: "sys".into(),
+            constraints: vec!["never lie".into()],
+            citations: vec![],
+        };
+        let validation1 = Personality::validate_persona(&persona1);
+        assert!(!validation1.valid);
+        assert!(!validation1.constraints_satisfied);
+
+        // "always X" constraint and "never Y" trait (contradiction)
+        let persona2 = PersonaBlueprint {
+            name: "Test".into(),
+            traits: vec!["never say hello".into()],
+            system_prompt: "sys".into(),
+            constraints: vec!["always say hello".into()],
+            citations: vec![],
+        };
+        let validation2 = Personality::validate_persona(&persona2);
+        assert!(!validation2.valid);
+        assert!(!validation2.constraints_satisfied);
+    }
 }
