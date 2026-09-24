@@ -1300,6 +1300,26 @@ mod tests {
     }
 
     #[test]
+    fn router_replies_to_bang_commands() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        let result = personality
+            .route_event(&ConversationEvent {
+                epoch: 1,
+                participant: "user".into(),
+                event_kind: "message".into(),
+                content: "!help".into(),
+            })
+            .unwrap();
+
+        assert_eq!(result.decision.action, TurnAction::Speak);
+        assert_eq!(result.decision.strategy, "command_response");
+    }
+
+    #[test]
     fn router_stays_silent_for_unaddressed_messages() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
@@ -1337,6 +1357,46 @@ mod tests {
 
         assert_eq!(result.decision.action, TurnAction::React);
         assert_eq!(result.decision.strategy, "mirror_reaction");
+    }
+
+    #[test]
+    fn router_continues_pending_for_unknown_events() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        let result = personality
+            .route_event(&ConversationEvent {
+                epoch: 1,
+                participant: "user".into(),
+                event_kind: "typing".into(),
+                content: "typing...".into(),
+            })
+            .unwrap();
+
+        assert_eq!(result.decision.action, TurnAction::ContinuePending);
+        assert_eq!(result.decision.strategy, "await_context");
+    }
+
+    #[test]
+    fn router_replies_to_addressed_messages() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        let result = personality
+            .route_event(&ConversationEvent {
+                epoch: 1,
+                participant: "user".into(),
+                event_kind: "message".into(),
+                content: "I need an assistant to help me out.".into(),
+            })
+            .unwrap();
+
+        assert_eq!(result.decision.action, TurnAction::Speak);
+        assert_eq!(result.decision.strategy, "addressed_reply");
     }
 
     #[test]
@@ -1386,6 +1446,42 @@ mod tests {
                 assert_eq!(result.decision.strategy, "consecutive_limit");
             }
         }
+    }
+
+    #[test]
+    fn router_resets_consecutive_turns_on_silence() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id).with_rules(RouterRules {
+            max_consecutive_turns: 2,
+            ..Default::default()
+        });
+
+        // Force 2 consecutive speaks.
+        for i in 1..=2 {
+            personality
+                .route_event(&ConversationEvent {
+                    epoch: i,
+                    participant: "user".into(),
+                    event_kind: "message".into(),
+                    content: "hey @agent".into(),
+                })
+                .unwrap();
+        }
+        assert_eq!(personality.consecutive_agent_turns, 2);
+
+        // 3rd turn is an unaddressed message -> StaySilent
+        personality
+            .route_event(&ConversationEvent {
+                epoch: 3,
+                participant: "user".into(),
+                event_kind: "message".into(),
+                content: "just chatting with friends".into(),
+            })
+            .unwrap();
+
+        assert_eq!(personality.consecutive_agent_turns, 0);
     }
 
     #[test]
@@ -1508,7 +1604,7 @@ mod tests {
                 epoch: 1,
                 participant: "user".into(),
                 event_kind: "typing".into(),
-                content: "".into(),
+                content: "typing...".into(),
             })
             .unwrap();
 
