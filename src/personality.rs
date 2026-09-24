@@ -1528,54 +1528,66 @@ mod tests {
 
         // Sequence of events to trigger all metrics:
         // 1. Message from 'alice' at epoch 1
-        personality.record_event(&ConversationEvent {
-            epoch: 1,
-            participant: "alice".into(),
-            event_kind: "message".into(),
-            content: "hello".into(),
-        }).unwrap();
+        personality
+            .record_event(&ConversationEvent {
+                epoch: 1,
+                participant: "alice".into(),
+                event_kind: "message".into(),
+                content: "hello".into(),
+            })
+            .unwrap();
 
         // 2. Message from 'bob' at epoch 3 (Latency for bob: 3 - 1 = 2)
-        personality.record_event(&ConversationEvent {
-            epoch: 3,
-            participant: "bob".into(),
-            event_kind: "message".into(),
-            content: "hi alice".into(),
-        }).unwrap();
+        personality
+            .record_event(&ConversationEvent {
+                epoch: 3,
+                participant: "bob".into(),
+                event_kind: "message".into(),
+                content: "hi alice".into(),
+            })
+            .unwrap();
 
         // 3. Reaction from 'bob' at epoch 4
-        personality.record_event(&ConversationEvent {
-            epoch: 4,
-            participant: "bob".into(),
-            event_kind: "reaction".into(),
-            content: "thumbsup".into(),
-        }).unwrap();
+        personality
+            .record_event(&ConversationEvent {
+                epoch: 4,
+                participant: "bob".into(),
+                event_kind: "reaction".into(),
+                content: "thumbsup".into(),
+            })
+            .unwrap();
 
         // 4. Message from 'alice' at epoch 6 (Latency for alice: 6 - 3 = 3)
-        personality.record_event(&ConversationEvent {
-            epoch: 6,
-            participant: "alice".into(),
-            event_kind: "message".into(),
-            content: "how are you?".into(),
-        }).unwrap();
+        personality
+            .record_event(&ConversationEvent {
+                epoch: 6,
+                participant: "alice".into(),
+                event_kind: "message".into(),
+                content: "how are you?".into(),
+            })
+            .unwrap();
 
         // 5. Typing from 'bob' at epoch 7.
         // No message sent by 'bob' within 5 epochs (up to epoch 12).
-        personality.record_event(&ConversationEvent {
-            epoch: 7,
-            participant: "bob".into(),
-            event_kind: "typing".into(),
-            content: "true".into(),
-        }).unwrap();
+        personality
+            .record_event(&ConversationEvent {
+                epoch: 7,
+                participant: "bob".into(),
+                event_kind: "typing".into(),
+                content: "true".into(),
+            })
+            .unwrap();
 
         // 6. Message from 'bob' at epoch 13 (Outside the 5 epoch window for typing without send)
         // (Latency for bob: 13 - 6 = 7)
-        personality.record_event(&ConversationEvent {
-            epoch: 13,
-            participant: "bob".into(),
-            event_kind: "message".into(),
-            content: "doing great!".into(),
-        }).unwrap();
+        personality
+            .record_event(&ConversationEvent {
+                epoch: 13,
+                participant: "bob".into(),
+                event_kind: "message".into(),
+                content: "doing great!".into(),
+            })
+            .unwrap();
 
         let summary = personality.signal_summary("bob");
 
