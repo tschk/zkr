@@ -1953,6 +1953,48 @@ mod tests {
     }
 
     #[test]
+    fn record_finding_propagates_db_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        // Use an empty TenantId to trigger database validation error
+        let tenant_id = TenantId("".into());
+        let person_id = PersonId("p1".into());
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        let result = personality.record_finding(&ObservationFinding {
+            scope: "thread-error".into(),
+            finding: "some error finding".into(),
+            evidence: vec!["evidence".into()],
+            recommendation: None,
+            severity: ObservationSeverity::Info,
+        });
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn record_finding_without_recommendation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        personality
+            .record_finding(&ObservationFinding {
+                scope: "thread-100".into(),
+                finding: "user prefers brief answers".into(),
+                evidence: vec!["epoch 10".into()],
+                recommendation: None,
+                severity: ObservationSeverity::Info,
+            })
+            .unwrap();
+
+        let context = personality.observation_context("thread-100", 5).unwrap();
+        assert_eq!(context.len(), 1);
+        assert!(context[0].contains("brief answers"));
+    }
+
+    #[test]
     fn observations_are_stored_and_retrieved() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
