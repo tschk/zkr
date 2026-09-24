@@ -2133,7 +2133,10 @@ mod tests {
             .unwrap();
 
         let augmented = personality
-            .augment_prompt("voice card general test observation finding", "Base prompt.")
+            .augment_prompt(
+                "voice card general test observation finding",
+                "Base prompt.",
+            )
             .unwrap();
 
         assert!(augmented.contains("<personality_context>"));
