@@ -2019,6 +2019,83 @@ mod tests {
     }
 
     #[test]
+    fn store_voice_card_saves_successfully() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        let result = personality.store_voice_card(&VoiceCard {
+            scope: "general".into(),
+            version: 1,
+            register: "professional".into(),
+            humor: "subtle".into(),
+            lexicon: vec!["peruse".into()],
+            banned_phrases: vec!["synergy".into()],
+            roles: vec!["advisor".into()],
+            taboos: vec!["politics".into()],
+            in_jokes: vec!["the incident".into()],
+            group_norms: vec!["be concise".into()],
+            confidence_basis_points: 8000,
+            supporting_event_epochs: vec![12345],
+            valid_from: 0,
+            valid_until: None,
+        });
+        assert!(result.is_ok());
+
+        let ctx = personality.voice_card_context("general", 5).unwrap();
+        assert_eq!(
+            ctx.len(),
+            1,
+            "Expected 1 context item, got {}: {:?}",
+            ctx.len(),
+            ctx
+        );
+        assert!(
+            ctx[0].contains("v1"),
+            "ctx: {}",
+            ctx[0]
+        );
+        assert!(ctx[0].contains("professional"));
+        assert!(ctx[0].contains("subtle"));
+        assert!(ctx[0].contains("be concise"));
+        assert!(ctx[0].contains("12345"));
+    }
+
+    #[test]
+    fn store_voice_card_validates() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        // Use an empty TenantId to intentionally trigger validation error
+        let tenant_id = TenantId("".into());
+        let person_id = PersonId("p1".into());
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        let result = personality.store_voice_card(&VoiceCard {
+            scope: "general".into(),
+            version: 1,
+            register: "professional".into(),
+            humor: "subtle".into(),
+            lexicon: vec![],
+            banned_phrases: vec![],
+            roles: vec![],
+            taboos: vec![],
+            in_jokes: vec![],
+            group_norms: vec!["be concise".into()],
+            confidence_basis_points: 8000,
+            supporting_event_epochs: vec![],
+            valid_from: 0,
+            valid_until: None,
+        });
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            crate::store::Error::Invalid(_)
+        ));
+    }
+
+    #[test]
     fn personality_items_are_hidden_without_feature_flag() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
