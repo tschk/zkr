@@ -1069,7 +1069,7 @@ impl Personality {
         let mut findings = Vec::new();
 
         // Finding: participation imbalance.
-        if participation_balance < 0.3 {
+        if total_turns > 0 && participation_balance < 0.3 {
             findings.push(ObservationFinding {
                 scope: scope.into(),
                 finding: "Participation is heavily imbalanced — one party dominates".into(),
@@ -1846,6 +1846,53 @@ mod tests {
 
         let health = personality.analyze_conversation("thread-4").unwrap();
         assert!(health.participation_balance > 0.8);
+        assert!(health.findings.is_empty());
+    }
+
+    #[test]
+    fn analyze_conversation_detects_low_velocity() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        for _ in 0..100 {
+            personality.advance_epoch();
+        }
+
+        for i in 1..=6 {
+            personality
+                .record_event(&ConversationEvent {
+                    epoch: i,
+                    participant: "user".into(),
+                    event_kind: "message".into(),
+                    content: format!("msg {i}"),
+                })
+                .unwrap();
+        }
+
+        let health = personality.analyze_conversation("thread-5").unwrap();
+        assert!(
+            health
+                .findings
+                .iter()
+                .any(|f| f.finding.contains("velocity"))
+        );
+    }
+
+    #[test]
+    fn analyze_conversation_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        let health = personality.analyze_conversation("thread-empty").unwrap();
+        assert_eq!(health.total_turns, 0);
+        assert_eq!(health.agent_turns, 0);
+        assert_eq!(health.user_turns, 0);
+        assert_eq!(health.participation_balance, 0.0);
+        assert_eq!(health.error_rate, 0.0);
         assert!(health.findings.is_empty());
     }
 
