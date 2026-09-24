@@ -1256,6 +1256,89 @@ mod tests {
         (TenantId("t1".into()), PersonId("p1".into()))
     }
 
+    // --- Validation tests --------------------------------------------------
+
+    #[test]
+    fn test_validate_persona_valid() {
+        let blueprint = PersonaBlueprint {
+            name: "Test Persona".to_string(),
+            traits: vec!["helpful".to_string(), "friendly".to_string()],
+            system_prompt: "You are a test persona.".to_string(),
+            constraints: vec!["always be polite".to_string()],
+            citations: vec![],
+        };
+        let result = Personality::validate_persona(&blueprint);
+        assert!(result.valid);
+        assert!(result.empty_fields.is_empty());
+        assert!(result.duplicate_traits.is_empty());
+        assert!(result.constraints_satisfied);
+        assert_eq!(result.trait_count, 2);
+    }
+
+    #[test]
+    fn test_validate_persona_empty_fields() {
+        let blueprint = PersonaBlueprint {
+            name: "   ".to_string(),
+            traits: vec![],
+            system_prompt: "".to_string(),
+            constraints: vec![],
+            citations: vec![],
+        };
+        let result = Personality::validate_persona(&blueprint);
+        assert!(!result.valid);
+        assert_eq!(result.empty_fields.len(), 3);
+        assert!(result.empty_fields.contains(&"name".to_string()));
+        assert!(result.empty_fields.contains(&"system_prompt".to_string()));
+        assert!(result.empty_fields.contains(&"traits".to_string()));
+    }
+
+    #[test]
+    fn test_validate_persona_duplicate_traits() {
+        let blueprint = PersonaBlueprint {
+            name: "Test".to_string(),
+            traits: vec![
+                "helpful".to_string(),
+                "helpful".to_string(),
+                "friendly".to_string(),
+            ],
+            system_prompt: "Test prompt".to_string(),
+            constraints: vec![],
+            citations: vec![],
+        };
+        let result = Personality::validate_persona(&blueprint);
+        assert!(!result.valid);
+        assert_eq!(result.duplicate_traits.len(), 1);
+        assert_eq!(result.duplicate_traits[0], "helpful");
+    }
+
+    #[test]
+    fn test_validate_persona_constraint_contradiction_never() {
+        let blueprint = PersonaBlueprint {
+            name: "Test".to_string(),
+            traits: vec!["helpful".to_string(), "rude".to_string()],
+            system_prompt: "Test prompt".to_string(),
+            constraints: vec!["never rude".to_string()],
+            citations: vec![],
+        };
+        let result = Personality::validate_persona(&blueprint);
+        assert!(!result.valid);
+        assert!(!result.constraints_satisfied);
+    }
+
+    #[test]
+    fn test_validate_persona_constraint_contradiction_always() {
+        let blueprint = PersonaBlueprint {
+            name: "Test".to_string(),
+            traits: vec!["never polite".to_string()],
+            system_prompt: "Test prompt".to_string(),
+            constraints: vec!["always polite".to_string()],
+            citations: vec![],
+        };
+        let result = Personality::validate_persona(&blueprint);
+        assert!(!result.valid);
+        assert!(!result.constraints_satisfied);
+    }
+
     // --- Turn router tests -------------------------------------------------
 
     #[test]
