@@ -434,11 +434,7 @@ impl MemoryDb {
         person_id: &PersonId,
         items: &[RetrievalItem],
     ) -> Result<()> {
-        let exposed_at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs()
-            .min(i64::MAX as u64) as i64;
+        let exposed_at = crate::now_seconds();
         if items.is_empty() {
             return Ok(());
         }
