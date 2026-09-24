@@ -199,6 +199,7 @@ fn process_repair_target(
     target_id: &str,
     target: EmbeddingTarget,
     embedding_rows: &[EmbeddingRow],
+    delete_specific_embeddings: &mut Vec<(String, String, String, String)>,
 ) -> Result<()> {
     match projection_input_from(transaction, &input.tenant_id, &input.person_id, target) {
         Ok(current) => {
@@ -230,10 +231,12 @@ fn process_repair_target(
                     || !stored_embedding_is_valid(dimension, normalization, distance, vector)
                     || expected.is_some_and(|expected| expected != lane);
                 if should_delete {
-                    transaction.execute(
-                        "DELETE FROM embeddings WHERE tenant_id = ?1 AND person_id = ?2 AND target_kind = ?3 AND target_id = ?4 AND model = ?5 AND version = ?6",
-                        params![input.tenant_id.0, input.person_id.0, target_kind, target_id, model, version],
-                    )?;
+                    delete_specific_embeddings.push((
+                        target_kind.to_string(),
+                        target_id.to_string(),
+                        model.to_string(),
+                        version.to_string(),
+                    ));
                 }
             }
         }
@@ -268,6 +271,8 @@ impl MemoryDb {
 
         let mut processed = 0;
         let mut processed_ids = Vec::new();
+        let mut delete_specific_embeddings = Vec::new();
+
         for (id, target_kind, target_id) in rows {
             let target = match embedding_target(&target_kind, &target_id) {
                 Ok(target) => target,
@@ -288,10 +293,20 @@ impl MemoryDb {
                 &target_id,
                 target,
                 target_embeddings,
+                &mut delete_specific_embeddings,
             )?;
             processed_ids.push(id);
             processed += 1;
         }
+
+        if !delete_specific_embeddings.is_empty() {
+            let json = serde_json::to_string(&delete_specific_embeddings)?;
+            transaction.execute(
+                "DELETE FROM embeddings WHERE tenant_id = ?1 AND person_id = ?2 AND (target_kind, target_id, model, version) IN (SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'), json_extract(value, '$[2]'), json_extract(value, '$[3]') FROM json_each(?3))",
+                params![input.tenant_id.0, input.person_id.0, json],
+            )?;
+        }
+
         mark_repair_outbox_processed(&transaction, &processed_ids, processed_at)?;
 
         let summaries_stale =
