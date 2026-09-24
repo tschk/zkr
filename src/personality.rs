@@ -1931,6 +1931,80 @@ mod tests {
     }
 
     #[test]
+    fn tom_context_retrieves_participant_context() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        personality
+            .record_hypothesis(&MindHypothesis {
+                participant: "bob".into(),
+                belief: "likes to test early".into(),
+                emotion: Some("excited".into()),
+                goal: Some("find bugs".into()),
+                predicted_reaction: Some("happy if bugs found".into()),
+                confidence_basis_points: 7000,
+                valid_until: None,
+            })
+            .unwrap();
+
+        let context = personality.tom_context("bob", 5).unwrap();
+        assert_eq!(context.len(), 1);
+        assert!(context[0].contains("bob"));
+        assert!(context[0].contains("excited"));
+    }
+
+    #[test]
+    fn tom_context_returns_empty_when_no_match() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        personality
+            .record_hypothesis(&MindHypothesis {
+                participant: "charlie".into(),
+                belief: "wants clean code".into(),
+                emotion: Some("focused".into()),
+                goal: Some("refactor".into()),
+                predicted_reaction: None,
+                confidence_basis_points: 8000,
+                valid_until: None,
+            })
+            .unwrap();
+
+        let context = personality.tom_context("david", 5).unwrap();
+        assert_eq!(context.len(), 0);
+    }
+
+    #[test]
+    fn tom_context_respects_limit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        for i in 0..5 {
+            personality
+                .record_hypothesis(&MindHypothesis {
+                    participant: "eve".into(),
+                    belief: format!("belief {}", i),
+                    emotion: Some(format!("emotion {}", i)),
+                    goal: None,
+                    predicted_reaction: None,
+                    confidence_basis_points: 5000,
+                    valid_until: None,
+                })
+                .unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(10)); // Ensure unique nanos for db
+        }
+
+        let context = personality.tom_context("eve", 3).unwrap();
+        assert_eq!(context.len(), 3);
+    }
+
+    #[test]
     fn personas_are_stored_and_retrieved() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
