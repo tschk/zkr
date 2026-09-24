@@ -1975,6 +1975,56 @@ mod tests {
     }
 
     #[test]
+    fn observation_context_returns_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let personality = Personality::new(db, tenant_id, person_id);
+
+        let context = personality.observation_context("thread-99", 5).unwrap();
+        assert!(context.is_empty());
+    }
+
+    #[test]
+    fn observation_context_filters_by_scope() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        personality
+            .record_finding(&ObservationFinding {
+                scope: "thread-99".into(),
+                finding: "agent interrupted user mid-sentence".into(),
+                evidence: vec!["epoch 5".into()],
+                recommendation: None,
+                severity: ObservationSeverity::Warning,
+            })
+            .unwrap();
+
+        personality
+            .record_finding(&ObservationFinding {
+                scope: "thread-100".into(),
+                finding: "user praised the agent".into(),
+                evidence: vec!["epoch 7".into()],
+                recommendation: None,
+                severity: ObservationSeverity::Info,
+            })
+            .unwrap();
+
+        let context = personality.observation_context("thread-100", 5).unwrap();
+        assert!(!context.is_empty());
+        // The first result should be the one for thread-100
+        assert!(context[0].contains("thread-100"));
+        assert!(context[0].contains("praised"));
+
+        let context2 = personality.observation_context("thread-99", 5).unwrap();
+        assert!(!context2.is_empty());
+        assert!(context2[0].contains("thread-99"));
+        assert!(context2[0].contains("interrupted"));
+    }
+
+    #[test]
     fn social_signals_are_stored() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
