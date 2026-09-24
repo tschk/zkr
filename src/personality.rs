@@ -2125,7 +2125,9 @@ mod tests {
 
         personality.record_signal(&signal).unwrap();
 
-        let context = personality.search_personality("attention alice 42", 5).unwrap();
+        let context = personality
+            .search_personality("attention alice 42", 5)
+            .unwrap();
         assert_eq!(context.len(), 1);
         assert!(context[0].contains("Signal attention for alice at epoch 42: high"));
     }
