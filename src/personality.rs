@@ -1004,19 +1004,21 @@ impl Personality {
     pub fn store_persona(&mut self, persona: &PersonaBlueprint) -> Result<()> {
         let now = now_seconds();
         let text = format!(
-            "Persona \"{}\": traits=[{}], constraints=[{}], prompt=\"{}\", citations=[{}]",
+            "Persona \"{}\": traits=[{}], constraints=[{}], citations=[{}], prompt=\"{}\"",
             persona.name,
             persona.traits.join(", "),
             persona.constraints.join(", "),
-            persona.system_prompt,
             persona.citations.join(", "),
+            persona.system_prompt,
         );
         let claim = ClaimInput {
             subject: format!("persona:{}", persona.name),
             predicate: "blueprint".to_string(),
             value: format!(
-                "traits={} prompt={}",
+                "traits=[{}] constraints=[{}] citations=[{}] prompt=\"{}\"",
                 persona.traits.join(", "),
+                persona.constraints.join(", "),
+                persona.citations.join(", "),
                 persona.system_prompt,
             ),
             kind: ClaimKind::ProfileFact,
@@ -1950,6 +1952,79 @@ mod tests {
         let context = personality.persona_context("helpful", 5).unwrap();
         assert_eq!(context.len(), 1);
         assert!(context[0].contains("helpful-engineer"));
+    }
+
+    #[test]
+    fn store_persona_serializes_all_fields() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        personality
+            .store_persona(&PersonaBlueprint {
+                name: "detailed-bot".into(),
+                traits: vec!["funny".into(), "smart".into()],
+                system_prompt: "You are hilarious.".into(),
+                constraints: vec!["no cursing".into(), "be concise".into()],
+                citations: vec!["doc-a".into(), "doc-b".into()],
+            })
+            .unwrap();
+
+        let context = personality.persona_context("detailed-bot", 5).unwrap();
+        assert_eq!(context.len(), 1);
+        let record = &context[0];
+        assert!(record.contains("detailed-bot"));
+        assert!(record.contains("funny"));
+        assert!(record.contains("smart"));
+        assert!(record.contains("no cursing"));
+        assert!(record.contains("be concise"));
+        assert!(record.contains("You are hilarious."));
+        assert!(record.contains("doc-a"));
+        assert!(record.contains("doc-b"));
+    }
+
+    #[test]
+    fn store_persona_idempotency() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        let blueprint = PersonaBlueprint {
+            name: "idempotent-bot".into(),
+            traits: vec!["consistent".into()],
+            system_prompt: "You never change.".into(),
+            constraints: vec![],
+            citations: vec![],
+        };
+
+        // Store it twice
+        personality.store_persona(&blueprint).unwrap();
+        personality.store_persona(&blueprint).unwrap();
+
+        let context = personality.persona_context("idempotent-bot", 5).unwrap();
+        assert_eq!(context.len(), 1);
+    }
+
+    #[test]
+    fn store_persona_propagates_db_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let tenant_id = TenantId("".into());
+        let person_id = PersonId("p1".into());
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        let blueprint = PersonaBlueprint {
+            name: "error-bot".into(),
+            traits: vec![],
+            system_prompt: "You will fail.".into(),
+            constraints: vec![],
+            citations: vec![],
+        };
+
+        let result = personality.store_persona(&blueprint);
+        assert!(result.is_err());
     }
 
     #[test]
