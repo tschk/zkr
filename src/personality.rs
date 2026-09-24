@@ -2130,7 +2130,10 @@ mod tests {
 
         let context = personality.tom_context("alice", 5).unwrap();
         assert_eq!(context.len(), 1);
-        assert!(context[0].contains("belief=agent is helpful") || context[0].contains("ToM for alice: belief=\"agent is helpful\""));
+        assert!(
+            context[0].contains("belief=agent is helpful")
+                || context[0].contains("ToM for alice: belief=\"agent is helpful\"")
+        );
     }
 
     #[test]
