@@ -2134,12 +2134,14 @@ mod tests {
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id.clone(), person_id.clone());
 
-        personality.record_signal(&SocialSignal {
-            signal_kind: "test_signal".into(),
-            participant: "alice".into(),
-            value: "100".into(),
-            epoch: 42,
-        }).unwrap();
+        personality
+            .record_signal(&SocialSignal {
+                signal_kind: "test_signal".into(),
+                participant: "alice".into(),
+                value: "100".into(),
+                epoch: 42,
+            })
+            .unwrap();
 
         let search_input = crate::store::SearchInput {
             tenant_id,
@@ -2153,6 +2155,9 @@ mod tests {
         let search_results = personality.db.search(search_input).unwrap();
         assert_eq!(search_results.items.len(), 1);
         let item = &search_results.items[0];
-        assert!(item.excerpt.contains("Signal test_signal for alice at epoch 42: 100"));
+        assert!(
+            item.excerpt
+                .contains("Signal test_signal for alice at epoch 42: 100")
+        );
     }
 }
