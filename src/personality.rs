@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
     ClaimInput, ClaimKind, MemoryDb, MemoryProcessingState, MemoryTier, PersonId, RememberInput,
@@ -477,7 +476,7 @@ impl Personality {
 
     /// Record a turn-taking decision as evidence memory.
     pub fn record_turn_decision(&mut self, decision: &TurnDecision) -> Result<()> {
-        let now = now_seconds();
+        let now = crate::utils::now_seconds();
         let text = format!(
             "Turn epoch {}: {:?} via \"{}\" (confidence {}bps) — {}",
             decision.epoch,
@@ -515,7 +514,7 @@ impl Personality {
     /// Record a raw conversation event for signal derivation.
     pub fn record_event(&mut self, event: &ConversationEvent) -> Result<()> {
         self.recent_events.push(event.clone());
-        let now = now_seconds();
+        let now = crate::utils::now_seconds();
         let text = format!(
             "[epoch {}] {} {}: {}",
             event.epoch, event.event_kind, event.participant, event.content
@@ -523,7 +522,7 @@ impl Personality {
         self.db.remember(RememberInput {
             tenant_id: self.tenant_id.clone(),
             person_id: self.person_id.clone(),
-            ingestion_key: Some(format!("event:{}:{}", event.epoch, nanos())),
+            ingestion_key: Some(format!("event:{}:{}", event.epoch, crate::utils::nanos())),
             kind: SourceKind::Conversation,
             text,
             captured_at: now,
@@ -715,7 +714,7 @@ impl Personality {
 
     /// Record a derived social signal.
     pub fn record_signal(&mut self, signal: &SocialSignal) -> Result<()> {
-        let now = now_seconds();
+        let now = crate::utils::now_seconds();
         let text = format!(
             "Signal {} for {} at epoch {}: {}",
             signal.signal_kind, signal.participant, signal.epoch, signal.value
@@ -741,7 +740,7 @@ impl Personality {
 
     /// Store or update a voice card for a conversation scope.
     pub fn store_voice_card(&mut self, card: &VoiceCard) -> Result<()> {
-        let now = now_seconds();
+        let now = crate::utils::now_seconds();
         let text = format!(
             "Voice card v{} for \"{}\": register={}, humor={}, lexicon=[{}], banned=[{}], roles=[{}], taboos=[{}], in_jokes=[{}], norms=[{}] (confidence {}bps) evidence=[epochs {}]",
             card.version,
@@ -868,7 +867,7 @@ impl Personality {
 
     /// Record a theory-of-mind hypothesis about a participant.
     pub fn record_hypothesis(&mut self, hyp: &MindHypothesis) -> Result<()> {
-        let now = now_seconds();
+        let now = crate::utils::now_seconds();
         let text = format!(
             "ToM for {}: belief=\"{}\", emotion={:?}, goal={:?}, predicted={:?}, confidence={}bps, valid_until={:?}",
             hyp.participant,
@@ -896,7 +895,7 @@ impl Personality {
         self.db.remember(RememberInput {
             tenant_id: self.tenant_id.clone(),
             person_id: self.person_id.clone(),
-            ingestion_key: Some(format!("tom:{}:{}", hyp.participant, nanos())),
+            ingestion_key: Some(format!("tom:{}:{}", hyp.participant, crate::utils::nanos())),
             kind: SourceKind::Conversation,
             text,
             captured_at: now,
@@ -914,7 +913,7 @@ impl Personality {
 
     /// Record a calibration result comparing a prediction to the real outcome.
     pub fn record_calibration(&mut self, record: &CalibrationRecord) -> Result<()> {
-        let now = now_seconds();
+        let now = crate::utils::now_seconds();
         let text = format!(
             "Calibration for {} at epoch {}: predicted=\"{}\", actual=\"{}\", correct={}",
             record.participant,
@@ -1002,7 +1001,7 @@ impl Personality {
 
     /// Store a persona blueprint.
     pub fn store_persona(&mut self, persona: &PersonaBlueprint) -> Result<()> {
-        let now = now_seconds();
+        let now = crate::utils::now_seconds();
         let text = format!(
             "Persona \"{}\": traits=[{}], constraints=[{}], prompt=\"{}\", citations=[{}]",
             persona.name,
@@ -1148,7 +1147,7 @@ impl Personality {
 
     /// Record an observability finding from post-conversation analysis.
     pub fn record_finding(&mut self, finding: &ObservationFinding) -> Result<()> {
-        let now = now_seconds();
+        let now = crate::utils::now_seconds();
         let text = format!(
             "Finding [{:?}] for \"{}\": {} — evidence=[{}] recommendation={:?}",
             finding.severity,
@@ -1174,7 +1173,11 @@ impl Personality {
         self.db.remember(RememberInput {
             tenant_id: self.tenant_id.clone(),
             person_id: self.person_id.clone(),
-            ingestion_key: Some(format!("observation:{}:{}", finding.scope, nanos())),
+            ingestion_key: Some(format!(
+                "observation:{}:{}",
+                finding.scope,
+                crate::utils::nanos()
+            )),
             kind: SourceKind::Integration,
             text,
             captured_at: now,
@@ -1232,20 +1235,6 @@ impl Personality {
         })?;
         Ok(pack.items.into_iter().map(|item| item.excerpt).collect())
     }
-}
-
-fn now_seconds() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64
-}
-
-fn nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos()
 }
 
 #[cfg(test)]
