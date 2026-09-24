@@ -358,7 +358,7 @@ fn insert_summary(
     person_id: &PersonId,
     data: SummaryData<'_>,
 ) -> Result<SummaryId> {
-    let id = SummaryId(new_id(transaction)?);
+    let id = SummaryId(super::new_id(transaction)?);
     transaction.execute(
         "INSERT INTO summary_nodes(id, tenant_id, person_id, summary, evidence_ids, child_ids, start_sequence, end_sequence, level, supersedes_id, recorded_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![id.0, tenant_id.0, person_id.0, data.summary, serde_json::to_string(data.evidence_ids)?, serde_json::to_string(data.child_ids)?, data.start_sequence, data.end_sequence, data.level, data.supersedes_id.map(|id| &id.0), data.recorded_at],
@@ -522,8 +522,4 @@ fn unique_evidence(children: &[MemorySummary]) -> Vec<EvidenceId> {
 
 fn json_error(error: serde_json::Error) -> rusqlite::Error {
     rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(error))
-}
-
-fn new_id(transaction: &Transaction<'_>) -> Result<String> {
-    Ok(transaction.query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))?)
 }
