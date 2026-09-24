@@ -1423,6 +1423,99 @@ mod tests {
     }
 
     #[test]
+    fn router_addresses_agent_in_message() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        let result = personality
+            .route_event(&ConversationEvent {
+                epoch: 1,
+                participant: "user".into(),
+                event_kind: "message".into(),
+                content: "hey agent!".into(),
+            })
+            .unwrap();
+
+        assert_eq!(result.decision.action, TurnAction::Speak);
+        assert_eq!(result.decision.strategy, "addressed_reply");
+    }
+
+    #[test]
+    fn router_awaits_context_for_other_events() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        let result = personality
+            .route_event(&ConversationEvent {
+                epoch: 1,
+                participant: "user".into(),
+                event_kind: "typing".into(),
+                content: "typing indicator".into(),
+            })
+            .unwrap();
+
+        assert_eq!(result.decision.action, TurnAction::ContinuePending);
+        assert_eq!(result.decision.strategy, "await_context");
+    }
+
+    #[test]
+    fn router_resets_consecutive_turns_on_silence() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id).with_rules(RouterRules {
+            max_consecutive_turns: 2,
+            ..Default::default()
+        });
+
+        // 1. Speak
+        personality
+            .route_event(&ConversationEvent {
+                epoch: 1,
+                participant: "user".into(),
+                event_kind: "message".into(),
+                content: "@agent".into(),
+            })
+            .unwrap();
+
+        // 2. Speak
+        personality
+            .route_event(&ConversationEvent {
+                epoch: 2,
+                participant: "user".into(),
+                event_kind: "message".into(),
+                content: "@agent".into(),
+            })
+            .unwrap();
+
+        // 3. StaySilent (resets consecutive turns)
+        personality
+            .route_event(&ConversationEvent {
+                epoch: 3,
+                participant: "user".into(),
+                event_kind: "message".into(),
+                content: "not addressed".into(),
+            })
+            .unwrap();
+
+        // 4. Speak again (should not be vetoed by max_consecutive_turns)
+        let result = personality
+            .route_event(&ConversationEvent {
+                epoch: 4,
+                participant: "user".into(),
+                event_kind: "message".into(),
+                content: "@agent".into(),
+            })
+            .unwrap();
+
+        assert_eq!(result.decision.action, TurnAction::Speak);
+    }
+
+    #[test]
     fn router_returns_behavioral_context() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
