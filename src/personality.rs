@@ -2108,4 +2108,211 @@ mod tests {
         let result = personality.search_personality("query", 5);
         assert!(result.is_err());
     }
+
+    #[test]
+    fn signal_summary_basic_metrics() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        // Advance epoch a few times to test conversation velocity
+        personality.advance_epoch();
+        personality.advance_epoch();
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        personality.advance_epoch();
+
+        personality
+            .record_event(&ConversationEvent {
+                epoch: personality.current_epoch(),
+                participant: "alice".into(),
+                event_kind: "message".into(),
+                content: "hi".into(),
+            })
+            .unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        personality.advance_epoch();
+
+        personality
+            .record_event(&ConversationEvent {
+                epoch: personality.current_epoch(),
+                participant: "bob".into(),
+                event_kind: "message".into(),
+                content: "hello".into(),
+            })
+            .unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        personality.advance_epoch();
+
+        personality
+            .record_event(&ConversationEvent {
+                epoch: personality.current_epoch(),
+                participant: "alice".into(),
+                event_kind: "message".into(),
+                content: "how are you?".into(),
+            })
+            .unwrap();
+
+        personality
+            .record_event(&ConversationEvent {
+                epoch: personality.current_epoch(),
+                participant: "alice".into(),
+                event_kind: "reaction".into(),
+                content: "smile".into(),
+            })
+            .unwrap();
+
+        let summary_alice = personality.signal_summary("alice");
+        assert_eq!(summary_alice.message_count, 2);
+        assert_eq!(summary_alice.reaction_count, 1);
+        assert_eq!(summary_alice.participation_share, 2.0 / 3.0); // 2 out of 3 total messages
+
+        // velocity = total_messages / epoch_span
+        // total_messages = 3
+        // current_epoch is 5
+        assert_eq!(summary_alice.conversation_velocity, 3.0 / 5.0);
+
+        let summary_bob = personality.signal_summary("bob");
+        assert_eq!(summary_bob.message_count, 1);
+        assert_eq!(summary_bob.reaction_count, 0);
+        assert_eq!(summary_bob.participation_share, 1.0 / 3.0);
+    }
+
+    #[test]
+    fn signal_summary_latency() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        personality
+            .record_event(&ConversationEvent {
+                epoch: 10,
+                participant: "bob".into(),
+                event_kind: "message".into(),
+                content: "ping".into(),
+            })
+            .unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(1));
+
+        personality
+            .record_event(&ConversationEvent {
+                epoch: 15,
+                participant: "alice".into(),
+                event_kind: "message".into(),
+                content: "pong".into(),
+            })
+            .unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(1));
+
+        personality
+            .record_event(&ConversationEvent {
+                epoch: 20,
+                participant: "bob".into(),
+                event_kind: "message".into(),
+                content: "ping again".into(),
+            })
+            .unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(1));
+
+        personality
+            .record_event(&ConversationEvent {
+                epoch: 30,
+                participant: "alice".into(),
+                event_kind: "message".into(),
+                content: "pong again".into(),
+            })
+            .unwrap();
+
+        let summary = personality.signal_summary("alice");
+        // Latency 1: 15 - 10 = 5
+        // Latency 2: 30 - 20 = 10
+        // Avg: (5 + 10) / 2 = 7.5
+        assert_eq!(summary.avg_response_latency_ms, Some(7.5));
+    }
+
+    #[test]
+    fn signal_summary_typing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        // Typing event 1: followed by message within 5 epochs (should not count as typing without send)
+        personality
+            .record_event(&ConversationEvent {
+                epoch: 10,
+                participant: "alice".into(),
+                event_kind: "typing".into(),
+                content: "".into(),
+            })
+            .unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(1));
+
+        personality
+            .record_event(&ConversationEvent {
+                epoch: 12,
+                participant: "alice".into(),
+                event_kind: "message".into(),
+                content: "hello".into(),
+            })
+            .unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(1));
+
+        // Typing event 2: not followed by message within 5 epochs (should count)
+        personality
+            .record_event(&ConversationEvent {
+                epoch: 20,
+                participant: "alice".into(),
+                event_kind: "typing".into(),
+                content: "".into(),
+            })
+            .unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(1));
+
+        // Message from another user doesn't affect it
+        personality
+            .record_event(&ConversationEvent {
+                epoch: 21,
+                participant: "bob".into(),
+                event_kind: "message".into(),
+                content: "hello".into(),
+            })
+            .unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(1));
+
+        // Typing event 3: followed by message outside 5 epochs (should count)
+        personality
+            .record_event(&ConversationEvent {
+                epoch: 30,
+                participant: "alice".into(),
+                event_kind: "typing".into(),
+                content: "".into(),
+            })
+            .unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(1));
+
+        personality
+            .record_event(&ConversationEvent {
+                epoch: 36, // > 30 + 5
+                participant: "alice".into(),
+                event_kind: "message".into(),
+                content: "hello".into(),
+            })
+            .unwrap();
+
+        let summary = personality.signal_summary("alice");
+        assert_eq!(summary.typing_without_send, 2);
+    }
 }
