@@ -16,6 +16,7 @@ mod repair;
 mod retrieval;
 mod schema;
 mod summaries;
+mod utils;
 
 use embeddings::*;
 #[cfg(test)]

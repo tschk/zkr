@@ -1,3 +1,4 @@
+use super::utils::new_id;
 use super::*;
 use rusqlite::{OptionalExtension, Transaction, params};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -522,8 +523,4 @@ fn unique_evidence(children: &[MemorySummary]) -> Vec<EvidenceId> {
 
 fn json_error(error: serde_json::Error) -> rusqlite::Error {
     rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(error))
-}
-
-fn new_id(transaction: &Transaction<'_>) -> Result<String> {
-    Ok(transaction.query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))?)
 }
