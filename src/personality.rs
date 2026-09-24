@@ -1657,6 +1657,101 @@ mod tests {
     }
 
     #[test]
+    fn risk_assessment_aborts_for_high_overall_risk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        // Add 4 typing events for the user with spacing > 5 epochs
+        for i in 1..=4 {
+            personality
+                .record_event(&ConversationEvent {
+                    epoch: i * 10,
+                    participant: "user".into(),
+                    event_kind: "typing".into(),
+                    content: "".into(),
+                })
+                .unwrap();
+        }
+
+        // Add 10 agent messages to make user participation share 0
+        for i in 1..=10 {
+            personality
+                .record_event(&ConversationEvent {
+                    epoch: 40 + i,
+                    participant: "agent".into(),
+                    event_kind: "message".into(),
+                    content: format!("msg {i}"),
+                })
+                .unwrap();
+        }
+
+        let risk = personality.assess_risk("user", "You are stupid, wrong, and an idiot.");
+        assert_eq!(risk.recommendation, RiskRecommendation::Abort);
+        assert_eq!(risk.misunderstanding_risk, 7000);
+        assert_eq!(risk.churn_risk, 6500);
+        assert_eq!(risk.exclusion_risk, 6000);
+        assert_eq!(risk.escalation_risk, 9000);
+    }
+
+    #[test]
+    fn risk_assessment_flags_high_churn_risk_for_low_velocity() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        for _ in 0..20 {
+            personality.advance_epoch();
+        }
+
+        personality
+            .record_event(&ConversationEvent {
+                epoch: 1,
+                participant: "user".into(),
+                event_kind: "message".into(),
+                content: "hello".into(),
+            })
+            .unwrap();
+
+        let risk = personality.assess_risk("user", "Hello there.");
+        assert_eq!(risk.churn_risk, 4000);
+    }
+
+    #[test]
+    fn risk_assessment_mid_tier_risks_for_low_participation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        personality
+            .record_event(&ConversationEvent {
+                epoch: 1,
+                participant: "user".into(),
+                event_kind: "message".into(),
+                content: "a".into(),
+            })
+            .unwrap();
+
+        for i in 2..=6 {
+            personality
+                .record_event(&ConversationEvent {
+                    epoch: i,
+                    participant: "agent".into(),
+                    event_kind: "message".into(),
+                    content: format!("msg {i}"),
+                })
+                .unwrap();
+        }
+
+        let risk = personality.assess_risk("user", "Okay.");
+        assert_eq!(risk.misunderstanding_risk, 5000);
+        assert_eq!(risk.exclusion_risk, 3000);
+    }
+
+    #[test]
     fn calibration_records_roundtrip() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
