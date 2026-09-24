@@ -51,7 +51,7 @@ pub(super) fn append_records(
         let mut statement = transaction.prepare_cached(
             "INSERT INTO memory_export_events(commit_sequence, event_index, payload)
              SELECT ?1, ?2 + key, value
-             FROM json_each(?3)"
+             FROM json_each(?3)",
         )?;
 
         let chunk_size = 900;
