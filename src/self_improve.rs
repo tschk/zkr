@@ -126,6 +126,50 @@ mod tests {
     }
 
     #[test]
+    fn records_a_lesson_successfully() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("memory.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut improve = SelfImprove::new(db, tenant_id, person_id);
+
+        let remembered = improve
+            .record(
+                "learning rust",
+                "writing tests",
+                "found bugs",
+                "always write tests",
+            )
+            .expect("should record lesson");
+
+        assert!(
+            !remembered.source_id.0.is_empty(),
+            "source_id should not be empty"
+        );
+        assert!(
+            !remembered.evidence_id.0.is_empty(),
+            "evidence_id should not be empty"
+        );
+        assert!(remembered.claim_id.is_some(), "claim_id should be present");
+
+        let pack = improve
+            .db
+            .search(SearchInput {
+                tenant_id: improve.tenant_id.clone(),
+                person_id: improve.person_id.clone(),
+                query: "always write tests".to_string(),
+                limit: 5,
+                query_embedding: None,
+                as_of: None,
+                enabled_features: Vec::new(),
+            })
+            .expect("should search");
+
+        assert_eq!(pack.items.len(), 1);
+        assert!(pack.items[0].excerpt.contains("always write tests"));
+        assert!(pack.items[0].evidence_ids.contains(&remembered.evidence_id));
+    }
+
+    #[test]
     fn records_and_retrieves_lessons() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("memory.db")).unwrap();
