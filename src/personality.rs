@@ -2117,8 +2117,8 @@ mod tests {
             .db
             .export(crate::store::ExportInput {
                 export_format: 1,
-                tenant_id: tenant_id,
-                person_id: person_id,
+                tenant_id,
+                person_id,
                 after_commit: 0,
                 after_event_index: -1,
                 high_water_mark: None,
@@ -2138,7 +2138,10 @@ mod tests {
             }
         });
 
-        assert!(claim_record.is_some(), "Expected a Claim record to be exported");
+        assert!(
+            claim_record.is_some(),
+            "Expected a Claim record to be exported"
+        );
         let claim = claim_record.unwrap();
 
         assert_eq!(claim.subject, "observation:thread-55");
