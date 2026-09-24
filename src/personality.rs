@@ -1256,6 +1256,54 @@ mod tests {
         (TenantId("t1".into()), PersonId("p1".into()))
     }
 
+    // --- Record event tests ------------------------------------------------
+
+    #[test]
+    fn record_event_stores_in_memory_and_db() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        let event = ConversationEvent {
+            epoch: 1,
+            participant: "user".into(),
+            event_kind: "message".into(),
+            content: "hello world".into(),
+        };
+
+        personality.record_event(&event).unwrap();
+
+        // Verify in-memory state
+        assert_eq!(personality.recent_events.len(), 1);
+        assert_eq!(personality.recent_events[0].content, "hello world");
+
+        // Verify DB state via search_personality (turn_context)
+        let context = personality.turn_context("hello world", 10).unwrap();
+        assert!(!context.is_empty());
+        assert!(context.iter().any(|s| s.contains("hello world")));
+    }
+
+    #[test]
+    fn record_event_fails_on_invalid_db_input() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        // Use an empty TenantId to intentionally trigger a DB validation failure
+        let invalid_tenant_id = TenantId("".into());
+        let (_, person_id) = test_ids();
+        let mut personality = Personality::new(db, invalid_tenant_id, person_id);
+
+        let event = ConversationEvent {
+            epoch: 1,
+            participant: "user".into(),
+            event_kind: "message".into(),
+            content: "hello world".into(),
+        };
+
+        let result = personality.record_event(&event);
+        assert!(result.is_err());
+    }
+
     // --- Turn router tests -------------------------------------------------
 
     #[test]
