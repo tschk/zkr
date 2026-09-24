@@ -2019,6 +2019,50 @@ mod tests {
     }
 
     #[test]
+    fn record_event_updates_internal_state() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        assert_eq!(personality.recent_events.len(), 0);
+
+        let event = ConversationEvent {
+            epoch: 1,
+            participant: "user".into(),
+            event_kind: "message".into(),
+            content: "hey can you help?".into(),
+        };
+
+        personality.record_event(&event).unwrap();
+
+        assert_eq!(personality.recent_events.len(), 1);
+        assert_eq!(personality.recent_events[0].epoch, event.epoch);
+        assert_eq!(personality.recent_events[0].participant, event.participant);
+        assert_eq!(personality.recent_events[0].event_kind, event.event_kind);
+        assert_eq!(personality.recent_events[0].content, event.content);
+    }
+
+    #[test]
+    fn record_event_propagates_db_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        // Use an empty TenantId, which makes db.remember fail validation
+        let tenant_id = TenantId("".into());
+        let person_id = PersonId("p1".into());
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        let result = personality.record_event(&ConversationEvent {
+            epoch: 1,
+            participant: "user".into(),
+            event_kind: "message".into(),
+            content: "hey can you help?".into(),
+        });
+
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn personality_items_are_hidden_without_feature_flag() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
