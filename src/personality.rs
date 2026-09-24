@@ -2019,6 +2019,27 @@ mod tests {
     }
 
     #[test]
+    fn turn_context_retrieves_recent_events() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        personality
+            .record_event(&ConversationEvent {
+                epoch: 1,
+                participant: "user".into(),
+                event_kind: "message".into(),
+                content: "turn context test".into(),
+            })
+            .unwrap();
+
+        let context = personality.turn_context("turn context", 5).unwrap();
+        assert_eq!(context.len(), 1);
+        assert!(context[0].contains("turn context test"));
+    }
+
+    #[test]
     fn personality_items_are_hidden_without_feature_flag() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
@@ -2106,6 +2127,19 @@ mod tests {
         let personality = Personality::new(db, tenant_id, person_id);
 
         let result = personality.search_personality("query", 5);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn turn_context_propagates_db_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        // Use an empty TenantId, which makes db.search fail validation
+        let tenant_id = TenantId("".into());
+        let person_id = PersonId("p1".into());
+        let personality = Personality::new(db, tenant_id, person_id);
+
+        let result = personality.turn_context("query", 5);
         assert!(result.is_err());
     }
 }
