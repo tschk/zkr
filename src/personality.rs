@@ -1975,6 +1975,40 @@ mod tests {
     }
 
     #[test]
+    fn observation_context_returns_empty_for_unknown_scope() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let personality = Personality::new(db, tenant_id, person_id);
+
+        let context = personality.observation_context("unknown-thread", 5).unwrap();
+        assert!(context.is_empty());
+    }
+
+    #[test]
+    fn observation_context_respects_limit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        for i in 0..3 {
+            personality
+                .record_finding(&ObservationFinding {
+                    scope: "thread-100".into(),
+                    finding: format!("finding {}", i),
+                    evidence: vec![],
+                    recommendation: None,
+                    severity: ObservationSeverity::Info,
+                })
+                .unwrap();
+        }
+
+        let context = personality.observation_context("thread-100", 2).unwrap();
+        assert_eq!(context.len(), 2);
+    }
+
+    #[test]
     fn social_signals_are_stored() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
