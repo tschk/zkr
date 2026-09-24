@@ -1,8 +1,7 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use crate::{
     ClaimInput, ClaimKind, MemoryDb, MemoryProcessingState, MemoryTier, PersonId, RememberInput,
     Remembered, Result, SearchInput, SourceKind, TenantId,
+    utils::{nanos, now_seconds},
 };
 
 /// A self-improvement loop backed by `zkr` evidence memory.
@@ -100,20 +99,6 @@ impl SelfImprove {
         lessons.truncate(limit as usize);
         Ok(lessons)
     }
-}
-
-fn now_seconds() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64
-}
-
-fn nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos()
 }
 
 #[cfg(test)]
