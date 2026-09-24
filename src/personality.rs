@@ -2084,6 +2084,78 @@ mod tests {
     }
 
     #[test]
+    fn augment_prompt_combines_multiple_contexts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        personality
+            .store_voice_card(&VoiceCard {
+                scope: "general".into(),
+                version: 1,
+                register: "professional".into(),
+                humor: "subtle".into(),
+                lexicon: vec![],
+                banned_phrases: vec![],
+                roles: vec![],
+                taboos: vec![],
+                in_jokes: vec![],
+                group_norms: vec![],
+                confidence_basis_points: 8000,
+                supporting_event_epochs: vec![],
+                valid_from: 0,
+                valid_until: None,
+            })
+            .unwrap();
+
+        personality
+            .store_persona(&PersonaBlueprint {
+                name: "test_persona".into(),
+                traits: vec!["friendly".into()],
+                system_prompt: "You are friendly.".into(),
+                constraints: vec![],
+                citations: vec![],
+            })
+            .unwrap();
+
+        personality
+            .record_hypothesis(&MindHypothesis {
+                participant: "user1".into(),
+                belief: "confused".into(),
+                emotion: None,
+                goal: None,
+                predicted_reaction: None,
+                confidence_basis_points: 9000,
+                valid_until: None,
+            })
+            .unwrap();
+
+        personality
+            .record_finding(&ObservationFinding {
+                scope: "general".into(),
+                finding: "critical issue".into(),
+                evidence: vec![],
+                recommendation: None,
+                severity: ObservationSeverity::Critical,
+            })
+            .unwrap();
+
+        let augmented = personality
+            .augment_prompt(
+                "query that matches professional friendly confused critical issue",
+                "Base prompt.",
+            )
+            .unwrap();
+
+        assert!(augmented.contains("<personality_context>"));
+        assert!(augmented.contains("professional"));
+        assert!(augmented.contains("friendly"));
+        assert!(augmented.contains("confused"));
+        assert!(augmented.contains("critical issue"));
+    }
+
+    #[test]
     fn augment_prompt_returns_base_when_empty() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
