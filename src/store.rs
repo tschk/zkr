@@ -613,3 +613,7 @@ fn collect_json_page<T: Serialize>(
 
 #[cfg(test)]
 mod tests;
+
+pub(crate) fn json_error(error: serde_json::Error) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(error))
+}
