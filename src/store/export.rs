@@ -127,7 +127,8 @@ pub(super) fn claim_records(
                 subject: row.get(1)?,
                 predicate: row.get(2)?,
                 value: row.get(3)?,
-                kind: serde_json::from_str(&format!("\"{kind}\"")).map_err(super::sql_json_error)?,
+                kind: serde_json::from_str(&format!("\"{kind}\""))
+                    .map_err(super::sql_json_error)?,
                 valid_time: crate::TimeRange {
                     from: row.get(5)?,
                     until: row.get(6)?,
@@ -136,8 +137,10 @@ pub(super) fn claim_records(
                     from: row.get(7)?,
                     until: row.get(8)?,
                 },
-                status: serde_json::from_str(&format!("\"{status}\"")).map_err(super::sql_json_error)?,
-                tier: serde_json::from_str(&format!("\"{tier}\"")).map_err(super::sql_json_error)?,
+                status: serde_json::from_str(&format!("\"{status}\""))
+                    .map_err(super::sql_json_error)?,
+                tier: serde_json::from_str(&format!("\"{tier}\""))
+                    .map_err(super::sql_json_error)?,
                 processing_state: serde_json::from_str(&format!("\"{processing_state}\""))
                     .map_err(super::sql_json_error)?,
             })
