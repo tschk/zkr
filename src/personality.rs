@@ -2108,4 +2108,53 @@ mod tests {
         let result = personality.search_personality("query", 5);
         assert!(result.is_err());
     }
+
+    #[test]
+    fn record_hypothesis_propagates_db_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        // Use an empty TenantId, which makes db.search fail validation
+        let tenant_id = TenantId("".into());
+        let person_id = PersonId("p1".into());
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        let hyp = MindHypothesis {
+            participant: "alice".into(),
+            belief: "thinks the system is slow".into(),
+            emotion: Some("frustrated".into()),
+            goal: Some("wants a faster response".into()),
+            predicted_reaction: Some("might complain if delayed".into()),
+            confidence_basis_points: 8500,
+            valid_until: None,
+        };
+
+        let result = personality.record_hypothesis(&hyp);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn record_hypothesis_persists_in_db() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        let hyp = MindHypothesis {
+            participant: "alice".into(),
+            belief: "thinks the system is slow".into(),
+            emotion: Some("frustrated".into()),
+            goal: Some("wants a faster response".into()),
+            predicted_reaction: Some("might complain if delayed".into()),
+            confidence_basis_points: 8500,
+            valid_until: None,
+        };
+
+        personality.record_hypothesis(&hyp).unwrap();
+
+        let context = personality.tom_context("alice", 5).unwrap();
+        assert_eq!(context.len(), 1);
+        assert!(context[0].contains("alice"));
+        assert!(context[0].contains("thinks the system is slow"));
+        assert!(context[0].contains("frustrated"));
+    }
 }
