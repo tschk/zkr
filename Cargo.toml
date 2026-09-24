@@ -45,3 +45,7 @@ harness = false
 [[bench]]
 name = "validate_evidence"
 harness = false
+
+[[bench]]
+name = "export_insert_nplus1"
+harness = false
