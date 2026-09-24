@@ -479,12 +479,26 @@ fn validate_scope(
             "SELECT EXISTS(SELECT 1 FROM profile_entries p LEFT JOIN claims c ON c.id = p.claim_id AND c.tenant_id = p.tenant_id AND c.person_id = p.person_id WHERE c.id IS NULL OR c.kind != 'profile_fact' OR c.predicate != p.key OR c.value != p.value)",
         ));
     }
-    for (name, query) in checks {
-        if transaction.query_row(query, [], |row| row.get::<_, bool>(0))? {
+    if checks.is_empty() {
+        return Ok(());
+    }
+
+    let query = checks
+        .into_iter()
+        .map(|(name, q)| format!("SELECT '{name}' WHERE ({q})"))
+        .collect::<Vec<_>>()
+        .join(" UNION ALL ")
+        + " LIMIT 1";
+
+    let mut stmt = transaction.prepare_cached(&query)?;
+    match stmt.query_row([], |row| row.get::<_, String>(0)) {
+        Ok(name) => {
             return Err(Error::Invalid(format!(
                 "legacy {name} is inconsistent with schema invariants"
             )));
         }
+        Err(rusqlite::Error::QueryReturnedNoRows) => {}
+        Err(e) => return Err(e.into()),
     }
     Ok(())
 }
