@@ -2108,4 +2108,56 @@ mod tests {
         let result = personality.search_personality("query", 5);
         assert!(result.is_err());
     }
+
+    #[test]
+    fn record_signal_propagates_db_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        // Use an empty TenantId, which makes db.remember fail validation
+        let tenant_id = TenantId("".into());
+        let person_id = PersonId("p1".into());
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        let result = personality.record_signal(&SocialSignal {
+            signal_kind: "test".into(),
+            participant: "alice".into(),
+            value: "data".into(),
+            epoch: 1,
+        });
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn record_signal_stores_and_mutates_state() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id.clone(), person_id.clone());
+
+        personality
+            .record_signal(&SocialSignal {
+                signal_kind: "test_signal".into(),
+                participant: "alice".into(),
+                value: "100".into(),
+                epoch: 42,
+            })
+            .unwrap();
+
+        let search_input = crate::store::SearchInput {
+            tenant_id,
+            person_id,
+            query: "Signal test_signal for alice at epoch 42: 100".to_string(),
+            limit: 5,
+            query_embedding: None,
+            as_of: None,
+            enabled_features: vec![FEATURE_FLAG.into()],
+        };
+        let search_results = personality.db.search(search_input).unwrap();
+        assert_eq!(search_results.items.len(), 1);
+        let item = &search_results.items[0];
+        assert!(
+            item.excerpt
+                .contains("Signal test_signal for alice at epoch 42: 100")
+        );
+    }
 }
