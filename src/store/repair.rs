@@ -35,20 +35,28 @@ pub(super) fn enqueue_projection_repairs<I>(
 where
     I: IntoIterator<Item = EmbeddingTarget>,
 {
-    let mut stmt = transaction.prepare_cached(
-        "INSERT INTO memory_repair_outbox(id, tenant_id, person_id, target_kind, target_id, reason, created_at) VALUES(lower(hex(randomblob(16))), ?1, ?2, ?3, ?4, ?5, ?6)",
+    let targets_json = serde_json::to_string(
+        &targets
+            .into_iter()
+            .map(|t| {
+                let (kind, id) = embedding_target_parts(&t);
+                (kind, id.to_owned())
+            })
+            .collect::<Vec<_>>(),
     )?;
-    for target in targets {
-        let (target_kind, target_id) = embedding_target_parts(&target);
-        stmt.execute(params![
+
+    transaction.execute(
+        "INSERT INTO memory_repair_outbox(id, tenant_id, person_id, target_kind, target_id, reason, created_at) \
+         SELECT lower(hex(randomblob(16))), ?1, ?2, json_extract(value, '$[0]'), json_extract(value, '$[1]'), ?3, ?4 \
+         FROM json_each(?5)",
+        params![
             tenant_id.0,
             person_id.0,
-            target_kind,
-            target_id,
             reason,
-            created_at
-        ])?;
-    }
+            created_at,
+            targets_json
+        ]
+    )?;
     Ok(())
 }
 
