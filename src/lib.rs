@@ -1,3 +1,5 @@
+mod time;
+pub use time::*;
 mod mode;
 mod model;
 mod personality;
