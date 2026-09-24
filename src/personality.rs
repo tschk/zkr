@@ -1517,6 +1517,87 @@ mod tests {
     }
 
     #[test]
+    fn signal_summary_computes_all_metrics() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        // Let's set epoch so conversation velocity can be calculated.
+        personality.epoch = 10;
+
+        // Sequence of events to trigger all metrics:
+        // 1. Message from 'alice' at epoch 1
+        personality.record_event(&ConversationEvent {
+            epoch: 1,
+            participant: "alice".into(),
+            event_kind: "message".into(),
+            content: "hello".into(),
+        }).unwrap();
+
+        // 2. Message from 'bob' at epoch 3 (Latency for bob: 3 - 1 = 2)
+        personality.record_event(&ConversationEvent {
+            epoch: 3,
+            participant: "bob".into(),
+            event_kind: "message".into(),
+            content: "hi alice".into(),
+        }).unwrap();
+
+        // 3. Reaction from 'bob' at epoch 4
+        personality.record_event(&ConversationEvent {
+            epoch: 4,
+            participant: "bob".into(),
+            event_kind: "reaction".into(),
+            content: "thumbsup".into(),
+        }).unwrap();
+
+        // 4. Message from 'alice' at epoch 6 (Latency for alice: 6 - 3 = 3)
+        personality.record_event(&ConversationEvent {
+            epoch: 6,
+            participant: "alice".into(),
+            event_kind: "message".into(),
+            content: "how are you?".into(),
+        }).unwrap();
+
+        // 5. Typing from 'bob' at epoch 7.
+        // No message sent by 'bob' within 5 epochs (up to epoch 12).
+        personality.record_event(&ConversationEvent {
+            epoch: 7,
+            participant: "bob".into(),
+            event_kind: "typing".into(),
+            content: "true".into(),
+        }).unwrap();
+
+        // 6. Message from 'bob' at epoch 13 (Outside the 5 epoch window for typing without send)
+        // (Latency for bob: 13 - 6 = 7)
+        personality.record_event(&ConversationEvent {
+            epoch: 13,
+            participant: "bob".into(),
+            event_kind: "message".into(),
+            content: "doing great!".into(),
+        }).unwrap();
+
+        let summary = personality.signal_summary("bob");
+
+        assert_eq!(summary.participant, "bob");
+        assert_eq!(summary.message_count, 2); // epochs 3 and 13
+        assert_eq!(summary.reaction_count, 1); // epoch 4
+        assert_eq!(summary.typing_without_send, 1); // epoch 7
+
+        // Total messages: alice (2) + bob (2) = 4.
+        assert_eq!(summary.participation_share, 0.5); // 2 / 4
+
+        // Latency for bob (using windows(2) on all events, irrespective of type):
+        // (1 "alice" msg, 3 "bob" msg) -> 3 - 1 = 2
+        // (6 "alice" msg, 7 "bob" typing) -> 7 - 6 = 1
+        // (Avg: (2 + 1) / 2 = 1.5)
+        assert_eq!(summary.avg_response_latency_ms, Some(1.5));
+
+        // Conversation velocity: 4 total messages / max(1, 10) = 0.4
+        assert_eq!(summary.conversation_velocity, 0.4);
+    }
+
+    #[test]
     fn derives_conversation_velocity() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
