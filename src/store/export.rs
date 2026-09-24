@@ -90,7 +90,7 @@ pub(super) fn source_record(
                     tenant_id: tenant_id.clone(),
                     person_id: person_id.clone(),
                     revision: row.get(0)?,
-                    kind: serde_json::from_str(&kind).map_err(sql_json_error)?,
+                    kind: serde_json::from_str(&kind).map_err(super::sql_json_error)?,
                     content: row.get(2)?,
                     captured_at: row.get(3)?,
                     recorded_at: row.get(4)?,
@@ -127,7 +127,7 @@ pub(super) fn claim_records(
                 subject: row.get(1)?,
                 predicate: row.get(2)?,
                 value: row.get(3)?,
-                kind: serde_json::from_str(&format!("\"{kind}\"")).map_err(sql_json_error)?,
+                kind: serde_json::from_str(&format!("\"{kind}\"")).map_err(super::sql_json_error)?,
                 valid_time: crate::TimeRange {
                     from: row.get(5)?,
                     until: row.get(6)?,
@@ -136,10 +136,10 @@ pub(super) fn claim_records(
                     from: row.get(7)?,
                     until: row.get(8)?,
                 },
-                status: serde_json::from_str(&format!("\"{status}\"")).map_err(sql_json_error)?,
-                tier: serde_json::from_str(&format!("\"{tier}\"")).map_err(sql_json_error)?,
+                status: serde_json::from_str(&format!("\"{status}\"")).map_err(super::sql_json_error)?,
+                tier: serde_json::from_str(&format!("\"{tier}\"")).map_err(super::sql_json_error)?,
                 processing_state: serde_json::from_str(&format!("\"{processing_state}\""))
-                    .map_err(sql_json_error)?,
+                    .map_err(super::sql_json_error)?,
             })
         })?
         .map(|result| result.map_err(Error::from))
@@ -208,15 +208,15 @@ pub(super) fn claim_record(
                 predicate: row.get(1)?,
                 value: row.get(2)?,
                 kind: serde_json::from_str(&format!("\"{kind}\""))
-                    .map_err(sql_json_error)?,
+                    .map_err(super::sql_json_error)?,
                 valid_time: crate::TimeRange { from: row.get(4)?, until: row.get(5)? },
                 recorded_time: crate::TimeRange { from: row.get(6)?, until: row.get(7)? },
                 status: serde_json::from_str(&format!("\"{status}\""))
-                    .map_err(sql_json_error)?,
+                    .map_err(super::sql_json_error)?,
                 tier: serde_json::from_str(&format!("\"{tier}\""))
-                    .map_err(sql_json_error)?,
+                    .map_err(super::sql_json_error)?,
                 processing_state: serde_json::from_str(&format!("\"{processing_state}\""))
-                    .map_err(sql_json_error)?,
+                    .map_err(super::sql_json_error)?,
             })
         },
     ).map_err(Error::from)
@@ -239,7 +239,7 @@ pub(super) fn claim_evidence_record(
                 person_id: person_id.clone(),
                 claim_id: claim_id.clone(),
                 evidence_id: evidence_id.clone(),
-                relation: serde_json::from_str(&relation).map_err(sql_json_error)?,
+                relation: serde_json::from_str(&relation).map_err(super::sql_json_error)?,
                 confidence_basis_points: row.get(1)?,
             })
         },
@@ -263,7 +263,7 @@ pub(super) fn profile_records(
                 person_id: person_id.clone(),
                 key: row.get(1)?,
                 value: row.get(2)?,
-                stability: serde_json::from_str(&stability).map_err(sql_json_error)?,
+                stability: serde_json::from_str(&stability).map_err(super::sql_json_error)?,
                 claim_id: ClaimId(row.get(4)?),
                 recorded_at: row.get(5)?,
             })
@@ -290,16 +290,12 @@ pub(super) fn review_record(
                     person_id: person_id.clone(),
                     day: row.get(0)?,
                     summary: row.get(1)?,
-                    evidence_ids: serde_json::from_str(&evidence_ids).map_err(sql_json_error)?,
+                    evidence_ids: serde_json::from_str(&evidence_ids).map_err(super::sql_json_error)?,
                     recorded_at: row.get(3)?,
                 })
             },
         )
         .map_err(Error::from)
-}
-
-fn sql_json_error(error: serde_json::Error) -> rusqlite::Error {
-    rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(error))
 }
 
 fn pack_export_page(
