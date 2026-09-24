@@ -413,8 +413,13 @@ fn ensure_column(
     column: &str,
     definition: &str,
 ) -> Result<()> {
-    if !is_valid_identifier(table) || !is_valid_identifier(column) {
-        return Err(Error::Invalid("invalid table or column identifier".into()));
+    if !is_valid_identifier(table)
+        || !is_valid_identifier(column)
+        || !is_valid_definition(definition)
+    {
+        return Err(Error::Invalid(
+            "invalid table, column, or definition identifier".into(),
+        ));
     }
 
     let exists = transaction.query_row(
@@ -433,6 +438,13 @@ fn ensure_column(
 
 fn is_valid_identifier(ident: &str) -> bool {
     !ident.is_empty() && ident.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+fn is_valid_definition(def: &str) -> bool {
+    !def.is_empty()
+        && def
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ' ' || c == '\'')
 }
 
 fn set_version(transaction: &Transaction<'_>, version: i64) -> Result<()> {
