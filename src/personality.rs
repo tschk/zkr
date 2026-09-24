@@ -1907,6 +1907,94 @@ mod tests {
     }
 
     #[test]
+    fn store_voice_card_internals() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id.clone(), person_id.clone());
+
+        personality
+            .store_voice_card(&VoiceCard {
+                scope: "engineering".into(),
+                version: 2,
+                register: "formal".into(),
+                humor: "none".into(),
+                lexicon: vec!["architecture".into()],
+                banned_phrases: vec!["hack".into()],
+                roles: vec!["reviewer".into()],
+                taboos: vec!["politics".into()],
+                in_jokes: vec![],
+                group_norms: vec!["write tests".into()],
+                confidence_basis_points: 9000,
+                supporting_event_epochs: vec![3, 4],
+                valid_from: 0,
+                valid_until: None,
+            })
+            .unwrap();
+
+        let export = personality
+            .db
+            .export(crate::store::ExportInput {
+                export_format: crate::store::EXPORT_FORMAT_VERSION,
+                tenant_id,
+                person_id,
+                after_commit: 0,
+                after_event_index: -1,
+                high_water_mark: None,
+                limit: 100,
+            })
+            .unwrap();
+
+        assert!(!export.commits.is_empty(), "Expected at least one commit");
+
+        let mut found_claim = false;
+        for commit in export.commits {
+            for record in commit.records {
+                if let crate::store::ExportRecord::Claim(claim) = record {
+                    if claim.predicate == "voice_card" {
+                        assert_eq!(claim.subject, "norms:engineering");
+                        assert!(claim.value.contains("v2"));
+                        assert!(claim.value.contains("register=formal"));
+                        assert!(claim.value.contains("write tests"));
+                        assert_eq!(claim.kind, crate::model::ClaimKind::ProfileFact);
+                        found_claim = true;
+                    }
+                }
+            }
+        }
+
+        assert!(found_claim, "Voice card claim not found in database export");
+    }
+
+    #[test]
+    fn store_voice_card_invalid_tenant() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let person_id = PersonId("p1".into());
+        // Use an empty tenant_id to trigger a database validation error.
+        let mut personality = Personality::new(db, TenantId("".into()), person_id);
+
+        let result = personality.store_voice_card(&VoiceCard {
+            scope: "engineering".into(),
+            version: 1,
+            register: "formal".into(),
+            humor: "none".into(),
+            lexicon: vec![],
+            banned_phrases: vec![],
+            roles: vec![],
+            taboos: vec![],
+            in_jokes: vec![],
+            group_norms: vec![],
+            confidence_basis_points: 9000,
+            supporting_event_epochs: vec![3, 4],
+            valid_from: 0,
+            valid_until: None,
+        });
+
+        assert!(matches!(result, Err(crate::store::Error::Invalid(_))));
+    }
+
+    #[test]
     fn theory_of_mind_hypotheses_roundtrip() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
