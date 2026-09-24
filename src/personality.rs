@@ -2108,4 +2108,47 @@ mod tests {
         let result = personality.search_personality("query", 5);
         assert!(result.is_err());
     }
+
+    #[test]
+    fn record_signal_stores_signal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        let signal = SocialSignal {
+            signal_kind: "attention".into(),
+            participant: "alice".into(),
+            value: "high".into(),
+            epoch: 42,
+        };
+
+        personality.record_signal(&signal).unwrap();
+
+        let context = personality
+            .search_personality("attention alice 42", 5)
+            .unwrap();
+        assert_eq!(context.len(), 1);
+        assert!(context[0].contains("Signal attention for alice at epoch 42: high"));
+    }
+
+    #[test]
+    fn record_signal_propagates_db_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        // Use an empty TenantId to trigger validation error in DB
+        let tenant_id = TenantId("".into());
+        let person_id = PersonId("p1".into());
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        let signal = SocialSignal {
+            signal_kind: "attention".into(),
+            participant: "alice".into(),
+            value: "high".into(),
+            epoch: 42,
+        };
+
+        let result = personality.record_signal(&signal);
+        assert!(result.is_err());
+    }
 }
