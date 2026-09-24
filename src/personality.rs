@@ -2097,6 +2097,81 @@ mod tests {
     }
 
     #[test]
+    fn record_finding_formats_claim_correctly() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id.clone(), person_id.clone());
+
+        personality
+            .record_finding(&ObservationFinding {
+                scope: "thread-55".into(),
+                finding: "agent was very polite".into(),
+                evidence: vec!["epoch 1".into(), "epoch 2".into()],
+                recommendation: Some("keep it up".into()),
+                severity: ObservationSeverity::Info,
+            })
+            .unwrap();
+
+        let export_page = personality
+            .db
+            .export(crate::store::ExportInput {
+                export_format: 1,
+                tenant_id,
+                person_id,
+                after_commit: 0,
+                after_event_index: -1,
+                high_water_mark: None,
+                limit: 100,
+            })
+            .unwrap();
+
+        assert_eq!(export_page.commits.len(), 1);
+        let commit = &export_page.commits[0];
+
+        // Find the Claim record in the commit
+        let claim_record = commit.records.iter().find_map(|r| {
+            if let crate::store::ExportRecord::Claim(c) = r {
+                Some(c)
+            } else {
+                None
+            }
+        });
+
+        assert!(
+            claim_record.is_some(),
+            "Expected a Claim record to be exported"
+        );
+        let claim = claim_record.unwrap();
+
+        assert_eq!(claim.subject, "observation:thread-55");
+        assert_eq!(claim.predicate, "finding");
+        assert_eq!(claim.value, "Info agent was very polite — epoch 1; epoch 2");
+        assert_eq!(claim.kind, ClaimKind::Fact);
+        assert_eq!(claim.tier, MemoryTier::LongTerm);
+        assert_eq!(claim.processing_state, MemoryProcessingState::Processed);
+    }
+
+    #[test]
+    fn record_finding_propagates_db_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let tenant_id = TenantId("".into()); // Invalid tenant_id causes db validation error
+        let person_id = PersonId("p1".into());
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        let result = personality.record_finding(&ObservationFinding {
+            scope: "thread-1".into(),
+            finding: "some finding".into(),
+            evidence: vec![],
+            recommendation: None,
+            severity: ObservationSeverity::Info,
+        });
+
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn search_personality_propagates_db_error() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
