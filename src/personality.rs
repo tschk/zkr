@@ -1712,7 +1712,10 @@ mod tests {
         }
 
         // Candidate reply is aggressive.
-        let risk = personality.assess_risk("user", "You are stupid, wrong, and an idiot, so shut up obviously.");
+        let risk = personality.assess_risk(
+            "user",
+            "You are stupid, wrong, and an idiot, so shut up obviously.",
+        );
 
         // Assert high escalation risk, misunderstanding risk, churn risk, exclusion risk.
         assert!(risk.escalation_risk >= 10000);
