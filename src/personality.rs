@@ -1799,6 +1799,66 @@ mod tests {
     }
 
     #[test]
+    fn analyze_conversation_detects_critical_error_rate() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        for i in 1..=10 {
+            personality
+                .record_event(&ConversationEvent {
+                    epoch: i,
+                    participant: "agent".into(),
+                    event_kind: if i <= 6 { "error" } else { "message" }.to_string(), // 6/10 = 0.6 error rate
+                    content: format!("event {i}"),
+                })
+                .unwrap();
+        }
+
+        let health = personality.analyze_conversation("thread-critical").unwrap();
+        assert!(health.error_rate > 0.5);
+        let finding = health
+            .findings
+            .iter()
+            .find(|f| f.finding.contains("error rate"))
+            .expect("should have high error rate finding");
+        assert_eq!(finding.severity, ObservationSeverity::Critical);
+    }
+
+    #[test]
+    fn analyze_conversation_detects_low_velocity() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        // velocity = total_turns / epoch.max(1)
+        // velocity < 0.1 && total_turns > 5
+        // total_turns = 6, epoch = 100
+        personality.epoch = 100;
+
+        for i in 1..=6 {
+            personality
+                .record_event(&ConversationEvent {
+                    epoch: i,
+                    participant: "user".into(),
+                    event_kind: "message".into(),
+                    content: "hello".into(),
+                })
+                .unwrap();
+        }
+
+        let health = personality.analyze_conversation("thread-velocity").unwrap();
+        assert!(
+            health
+                .findings
+                .iter()
+                .any(|f| f.finding.contains("velocity is low"))
+        );
+    }
+
+    #[test]
     fn analyze_conversation_detects_typing_without_send() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
