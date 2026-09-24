@@ -479,13 +479,29 @@ fn validate_scope(
             "SELECT EXISTS(SELECT 1 FROM profile_entries p LEFT JOIN claims c ON c.id = p.claim_id AND c.tenant_id = p.tenant_id AND c.person_id = p.person_id WHERE c.id IS NULL OR c.kind != 'profile_fact' OR c.predicate != p.key OR c.value != p.value)",
         ));
     }
-    for (name, query) in checks {
-        if transaction.query_row(query, [], |row| row.get::<_, bool>(0))? {
-            return Err(Error::Invalid(format!(
-                "legacy {name} is inconsistent with schema invariants"
-            )));
-        }
+
+    if checks.is_empty() {
+        return Ok(());
     }
+
+    let combined_query = format!(
+        "SELECT name FROM ({}) WHERE failed = 1 LIMIT 1",
+        checks
+            .into_iter()
+            .map(|(name, query)| format!("SELECT '{name}' AS name, ({query}) AS failed"))
+            .collect::<Vec<_>>()
+            .join(" UNION ALL ")
+    );
+
+    let mut stmt = transaction.prepare(&combined_query)?;
+    let mut rows = stmt.query([])?;
+    if let Some(row) = rows.next()? {
+        let name: String = row.get(0)?;
+        return Err(Error::Invalid(format!(
+            "legacy {name} is inconsistent with schema invariants"
+        )));
+    }
+
     Ok(())
 }
 
