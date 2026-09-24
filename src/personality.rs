@@ -2141,7 +2141,11 @@ mod tests {
         assert!(!validation.valid);
         assert_eq!(validation.empty_fields.len(), 3);
         assert!(validation.empty_fields.contains(&"name".to_string()));
-        assert!(validation.empty_fields.contains(&"system_prompt".to_string()));
+        assert!(
+            validation
+                .empty_fields
+                .contains(&"system_prompt".to_string())
+        );
         assert!(validation.empty_fields.contains(&"traits".to_string()));
     }
 
@@ -2149,7 +2153,12 @@ mod tests {
     fn validate_persona_duplicate_traits() {
         let persona = PersonaBlueprint {
             name: "Test Persona".into(),
-            traits: vec!["Friendly".into(), "Friendly".into(), "Helpful".into(), "Friendly".into()],
+            traits: vec![
+                "Friendly".into(),
+                "Friendly".into(),
+                "Helpful".into(),
+                "Friendly".into(),
+            ],
             system_prompt: "You are a test persona.".into(),
             constraints: vec![],
             citations: vec![],
