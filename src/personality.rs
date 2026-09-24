@@ -2084,6 +2084,68 @@ mod tests {
     }
 
     #[test]
+    fn augment_prompt_injects_multiple_contexts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        // Turn context
+        personality
+            .record_event(&ConversationEvent {
+                epoch: 1,
+                participant: "user".into(),
+                event_kind: "message".into(),
+                content: "hello query".into(),
+            })
+            .unwrap();
+
+        // TOM context
+        personality
+            .record_hypothesis(&MindHypothesis {
+                participant: "user".into(),
+                belief: "likes query".into(),
+                emotion: None,
+                goal: None,
+                predicted_reaction: None,
+                confidence_basis_points: 8000,
+                valid_until: None,
+            })
+            .unwrap();
+
+        // Persona context
+        personality
+            .store_persona(&PersonaBlueprint {
+                name: "test persona query".into(),
+                traits: vec![],
+                system_prompt: "test prompt".into(),
+                constraints: vec![],
+                citations: vec![],
+            })
+            .unwrap();
+
+        // Observation context
+        personality
+            .record_finding(&ObservationFinding {
+                scope: "query".into(),
+                finding: "user is nice".into(),
+                evidence: vec![],
+                recommendation: None,
+                severity: ObservationSeverity::Info,
+            })
+            .unwrap();
+
+        let augmented = personality
+            .augment_prompt("query", "Base prompt.")
+            .unwrap();
+        assert!(augmented.contains("<personality_context>"));
+        assert!(augmented.contains("hello query"));
+        assert!(augmented.contains("likes query"));
+        assert!(augmented.contains("test persona query"));
+        assert!(augmented.contains("user is nice"));
+    }
+
+    #[test]
     fn augment_prompt_returns_base_when_empty() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
