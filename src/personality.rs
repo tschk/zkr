@@ -2135,9 +2135,7 @@ mod tests {
             })
             .unwrap();
 
-        let augmented = personality
-            .augment_prompt("query", "Base prompt.")
-            .unwrap();
+        let augmented = personality.augment_prompt("query", "Base prompt.").unwrap();
         assert!(augmented.contains("<personality_context>"));
         assert!(augmented.contains("hello query"));
         assert!(augmented.contains("likes query"));
