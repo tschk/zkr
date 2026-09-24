@@ -1731,7 +1731,11 @@ mod tests {
             .unwrap();
         assert_eq!(context.len(), 2);
         assert!(context.iter().any(|c| c.contains("angry")));
-        assert!(context.iter().any(|c| c.contains("calm") && c.contains("correct=true")));
+        assert!(
+            context
+                .iter()
+                .any(|c| c.contains("calm") && c.contains("correct=true"))
+        );
     }
 
     #[test]
