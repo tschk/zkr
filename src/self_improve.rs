@@ -141,8 +141,14 @@ mod tests {
             )
             .expect("should record lesson");
 
-        assert!(!remembered.source_id.0.is_empty(), "source_id should not be empty");
-        assert!(!remembered.evidence_id.0.is_empty(), "evidence_id should not be empty");
+        assert!(
+            !remembered.source_id.0.is_empty(),
+            "source_id should not be empty"
+        );
+        assert!(
+            !remembered.evidence_id.0.is_empty(),
+            "evidence_id should not be empty"
+        );
         assert!(remembered.claim_id.is_some(), "claim_id should be present");
 
         let pack = improve
