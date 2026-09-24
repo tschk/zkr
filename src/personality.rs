@@ -1259,6 +1259,56 @@ mod tests {
     // --- Turn router tests -------------------------------------------------
 
     #[test]
+    fn record_turn_decision_stores_evidence_and_claim() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        let decision = TurnDecision {
+            epoch: 42,
+            action: TurnAction::Speak,
+            strategy: "test_strategy".to_string(),
+            addressee: Some("test_addressee".to_string()),
+            confidence_basis_points: 8500,
+            rationale: "test_rationale".to_string(),
+        };
+
+        personality.record_turn_decision(&decision).unwrap();
+
+        // Search for the evidence memory we just recorded.
+        // We use personality.search_personality as it correctly searches with the feature flag.
+        let results = personality.search_personality("test_rationale", 5).unwrap();
+
+        assert_eq!(results.len(), 1);
+        let item = &results[0];
+        // The excerpt for a claim matches: subject || ' ' || predicate || ' ' || value
+        assert!(item.contains("turn:42 action Speak via test_strategy — test_rationale"));
+    }
+
+    #[test]
+    fn record_turn_decision_propagates_db_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        // Provide empty TenantId, causing db.remember to fail
+        let tenant_id = TenantId("".into());
+        let person_id = PersonId("p1".into());
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        let decision = TurnDecision {
+            epoch: 1,
+            action: TurnAction::StaySilent,
+            strategy: "test".to_string(),
+            addressee: None,
+            confidence_basis_points: 1000,
+            rationale: "test".to_string(),
+        };
+
+        let result = personality.record_turn_decision(&decision);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn router_replies_to_direct_mention() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
