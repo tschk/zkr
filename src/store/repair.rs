@@ -5,6 +5,7 @@ use super::embeddings::{
 use std::collections::HashMap;
 
 use super::summaries::stale_summary_count;
+use super::utils::new_id;
 use super::*;
 use rusqlite::{Transaction, params};
 
@@ -311,8 +312,4 @@ impl MemoryDb {
             summaries_stale,
         })
     }
-}
-
-fn new_id(transaction: &Transaction<'_>) -> Result<String> {
-    Ok(transaction.query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))?)
 }

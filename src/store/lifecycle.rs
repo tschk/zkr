@@ -3,6 +3,7 @@ use super::export::{
 };
 use super::repair::{enqueue_projection_repair, enqueue_projection_repairs, record_operation};
 use super::summaries::invalidate_summaries_for_evidence;
+use super::utils::new_id;
 use super::*;
 
 impl MemoryDb {
@@ -857,10 +858,6 @@ pub(super) fn validate_transcript_locator(locator: &TranscriptLocator) -> Result
         ));
     }
     Ok(())
-}
-
-fn new_id(transaction: &Transaction<'_>) -> Result<String> {
-    Ok(transaction.query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))?)
 }
 
 struct OldClaim {
