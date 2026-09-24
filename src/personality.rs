@@ -1540,6 +1540,42 @@ mod tests {
     }
 
     #[test]
+    fn signal_summary_handles_empty_events() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let personality = Personality::new(db, tenant_id, person_id);
+
+        let summary = personality.signal_summary("user");
+        assert_eq!(summary.message_count, 0);
+        assert_eq!(summary.avg_response_latency_ms, None);
+        assert_eq!(summary.participation_share, 0.0);
+        assert_eq!(summary.conversation_velocity, 0.0);
+        assert_eq!(summary.typing_without_send, 0);
+        assert_eq!(summary.reaction_count, 0);
+    }
+
+    #[test]
+    fn signal_summary_computes_reaction_count() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        personality
+            .record_event(&ConversationEvent {
+                epoch: 1,
+                participant: "user".into(),
+                event_kind: "reaction".into(),
+                content: "👍".into(),
+            })
+            .unwrap();
+
+        let summary = personality.signal_summary("user");
+        assert_eq!(summary.reaction_count, 1);
+    }
+
+    #[test]
     fn signal_summary_computes_participation_share() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
