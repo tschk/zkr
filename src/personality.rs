@@ -1852,11 +1852,32 @@ mod tests {
     // --- Existing storage/retrieval tests ----------------------------------
 
     #[test]
+    fn record_turn_decision_propagates_db_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        // Provide an empty TenantId to intentionally cause a database validation error.
+        let tenant_id = TenantId("".into());
+        let person_id = PersonId("p1".into());
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        let result = personality.record_turn_decision(&TurnDecision {
+            epoch: 1,
+            action: TurnAction::Speak,
+            strategy: "direct_reply".into(),
+            addressee: Some("user".into()),
+            confidence_basis_points: 8500,
+            rationale: "direct mention detected".into(),
+        });
+
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn records_and_retrieves_turn_decisions() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
         let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let mut personality = Personality::new(db, tenant_id.clone(), person_id.clone());
 
         personality
             .record_turn_decision(&TurnDecision {
@@ -1869,8 +1890,34 @@ mod tests {
             })
             .unwrap();
 
-        let context = personality.turn_context("turn", 5).unwrap();
-        assert_eq!(context.len(), 1);
+        // Search should return the generated claim (the raw evidence is hidden because a valid claim supersedes it).
+        let claim_pack = personality
+            .db()
+            .search(crate::store::SearchInput {
+                tenant_id,
+                person_id,
+                query: "turn:1".into(),
+                limit: 5,
+                query_embedding: None,
+                as_of: None,
+                enabled_features: vec![FEATURE_FLAG.into()],
+            })
+            .unwrap();
+
+        let claim_item = claim_pack
+            .items
+            .iter()
+            .find(|item| matches!(item.memory, crate::model::MemoryRef::Claim(_)))
+            .expect("should find claim memory");
+
+        assert_eq!(
+            claim_item.excerpt,
+            "turn:1 action Speak via direct_reply — direct mention detected"
+        );
+
+        // Verify turn context retrieval works as expected.
+        let context = personality.turn_context("direct", 5).unwrap();
+        assert!(!context.is_empty());
         assert!(context[0].contains("direct_reply"));
     }
 
