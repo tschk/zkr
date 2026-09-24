@@ -1680,6 +1680,85 @@ mod tests {
         assert!(context[0].contains("frustrated"));
     }
 
+    #[test]
+    fn record_calibration_propagates_db_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let tenant_id = TenantId("".into());
+        let person_id = PersonId("p1".into());
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        let result = personality.record_calibration(&CalibrationRecord {
+            participant: "alice".into(),
+            predicted_reaction: "happy".into(),
+            actual_reaction: "happy".into(),
+            correct: true,
+            epoch: 1,
+        });
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn record_calibration_multiple_epochs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        personality
+            .record_calibration(&CalibrationRecord {
+                participant: "bob".into(),
+                predicted_reaction: "sad".into(),
+                actual_reaction: "angry".into(),
+                correct: false,
+                epoch: 1,
+            })
+            .unwrap();
+
+        personality
+            .record_calibration(&CalibrationRecord {
+                participant: "bob".into(),
+                predicted_reaction: "calm".into(),
+                actual_reaction: "calm".into(),
+                correct: true,
+                epoch: 2,
+            })
+            .unwrap();
+
+        let context = personality
+            .search_personality("calibration bob", 5)
+            .unwrap();
+        assert_eq!(context.len(), 2);
+        assert!(context.iter().any(|c| c.contains("angry")));
+        assert!(context.iter().any(|c| c.contains("calm") && c.contains("correct=true")));
+    }
+
+    #[test]
+    fn record_calibration_true_correct() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        personality
+            .record_calibration(&CalibrationRecord {
+                participant: "charlie".into(),
+                predicted_reaction: "neutral".into(),
+                actual_reaction: "neutral".into(),
+                correct: true,
+                epoch: 10,
+            })
+            .unwrap();
+
+        let context = personality
+            .search_personality("calibration charlie", 5)
+            .unwrap();
+        assert_eq!(context.len(), 1);
+        assert!(context[0].contains("correct=true"));
+        assert!(context[0].contains("neutral"));
+    }
+
     // --- Persona validation tests ------------------------------------------
 
     #[test]
