@@ -2051,11 +2051,7 @@ mod tests {
             ctx.len(),
             ctx
         );
-        assert!(
-            ctx[0].contains("v1"),
-            "ctx: {}",
-            ctx[0]
-        );
+        assert!(ctx[0].contains("v1"), "ctx: {}", ctx[0]);
         assert!(ctx[0].contains("professional"));
         assert!(ctx[0].contains("subtle"));
         assert!(ctx[0].contains("be concise"));
