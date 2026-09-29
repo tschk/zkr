@@ -3,6 +3,7 @@ mod model;
 mod personality;
 mod self_improve;
 mod store;
+pub(crate) mod utils;
 
 pub use mode::*;
 pub use model::*;
