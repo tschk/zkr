@@ -1931,6 +1931,64 @@ mod tests {
     }
 
     #[test]
+    fn tom_context_retrieves_participant_context() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        // Before recording anything, tom_context should be empty
+        let context_before = personality.tom_context("bob", 5).unwrap();
+        assert!(context_before.is_empty());
+
+        // Record for bob
+        personality
+            .record_hypothesis(&MindHypothesis {
+                participant: "bob".into(),
+                belief: "wants to refactor the module".into(),
+                emotion: Some("excited".into()),
+                goal: Some("improve maintainability".into()),
+                predicted_reaction: None,
+                confidence_basis_points: 8000,
+                valid_until: None,
+            })
+            .unwrap();
+
+        // Record for alice to ensure isolation
+        personality
+            .record_hypothesis(&MindHypothesis {
+                participant: "alice".into(),
+                belief: "happy".into(),
+                emotion: Some("happy".into()),
+                goal: None,
+                predicted_reaction: None,
+                confidence_basis_points: 9000,
+                valid_until: None,
+            })
+            .unwrap();
+
+        // After recording, tom_context should contain bob's data
+        let context_after = personality.tom_context("bob", 5).unwrap();
+        assert_eq!(context_after.len(), 1);
+        assert!(context_after[0].contains("bob"));
+        assert!(context_after[0].contains("excited"));
+        assert!(!context_after[0].contains("alice"));
+    }
+
+    #[test]
+    fn tom_context_propagates_db_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        // Use an empty TenantId to trigger validation error in db.search
+        let tenant_id = TenantId("".into());
+        let person_id = PersonId("p1".into());
+        let personality = Personality::new(db, tenant_id, person_id);
+
+        let result = personality.tom_context("alice", 5);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn personas_are_stored_and_retrieved() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
