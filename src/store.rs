@@ -587,6 +587,10 @@ const fn bounded_limit(limit: u32) -> u32 {
     }
 }
 
+pub(crate) fn new_id(transaction: &Transaction<'_>) -> Result<String> {
+    Ok(transaction.query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))?)
+}
+
 fn collect_json_page<T: Serialize>(
     rows: impl Iterator<Item = rusqlite::Result<T>>,
 ) -> Result<Vec<T>> {

@@ -67,7 +67,7 @@ pub(super) fn record_operation(
     });
     transaction.execute(
         "INSERT INTO memory_operations(id, tenant_id, person_id, operation_type, status, target_kind, target_id, recorded_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        params![new_id(transaction)?, tenant_id.0, person_id.0, operation_type, status, target_kind, target_id, recorded_at],
+        params![super::new_id(transaction)?, tenant_id.0, person_id.0, operation_type, status, target_kind, target_id, recorded_at],
     )?;
     Ok(())
 }
@@ -311,8 +311,4 @@ impl MemoryDb {
             summaries_stale,
         })
     }
-}
-
-fn new_id(transaction: &Transaction<'_>) -> Result<String> {
-    Ok(transaction.query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))?)
 }

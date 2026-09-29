@@ -24,8 +24,8 @@ impl MemoryDb {
             require_text("ingestion_key", key)?;
         }
         let transaction = self.connection.transaction()?;
-        let source_id = SourceId(new_id(&transaction)?);
-        let evidence_id = EvidenceId(new_id(&transaction)?);
+        let source_id = SourceId(super::new_id(&transaction)?);
+        let evidence_id = EvidenceId(super::new_id(&transaction)?);
         let kind = serde_json::to_string(&input.kind)?;
         let inserted = transaction.execute(
             "INSERT OR IGNORE INTO sources(id, tenant_id, person_id, ingestion_key, revision, kind, content, captured_at, recorded_at, feature_flag) VALUES(?1, ?2, ?3, ?4, 1, ?5, ?6, ?7, ?8, ?9)",
@@ -615,7 +615,7 @@ impl MemoryDb {
             id: existing
                 .as_ref()
                 .map(|existing| ProfileEntryId(existing.0.clone()))
-                .unwrap_or(ProfileEntryId(new_id(&transaction)?)),
+                .unwrap_or(ProfileEntryId(super::new_id(&transaction)?)),
             tenant_id: input.tenant_id,
             person_id: input.person_id,
             key,
@@ -706,7 +706,7 @@ impl MemoryDb {
             return Err(Error::Invalid(format!("evidence {} is unavailable", id)));
         }
 
-        let id = DailyReviewId(new_id(&transaction)?);
+        let id = DailyReviewId(super::new_id(&transaction)?);
         transaction.execute(
             "INSERT INTO daily_reviews(id, tenant_id, person_id, day, summary, evidence_ids, recorded_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![id.0, input.tenant_id.0, input.person_id.0, input.day, input.summary, serde_json::to_string(&input.evidence_ids)?, input.recorded_at],
@@ -777,7 +777,7 @@ fn insert_claim(
     require_text("claim value", &claim.value)?;
     assert_legal_state(&claim.tier, &ClaimStatus::Accepted, &claim.processing_state)
         .map_err(|error| Error::Invalid(error.to_string()))?;
-    let id = ClaimId(new_id(transaction)?);
+    let id = ClaimId(super::new_id(transaction)?);
     transaction.execute(
         "INSERT INTO claims(id, tenant_id, person_id, subject, predicate, value, kind, valid_from, recorded_from, status, tier, processing_state) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'accepted', ?10, ?11)",
         params![id.0, tenant_id.0, person_id.0, claim.subject, claim.predicate, claim.value, claim_kind_name(&claim.kind), claim.valid_from, recorded_at, tier_name(&claim.tier), processing_state_name(&claim.processing_state)],
@@ -859,10 +859,6 @@ pub(super) fn validate_transcript_locator(locator: &TranscriptLocator) -> Result
     Ok(())
 }
 
-fn new_id(transaction: &Transaction<'_>) -> Result<String> {
-    Ok(transaction.query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))?)
-}
-
 struct OldClaim {
     subject: String,
     predicate: String,
@@ -936,8 +932,8 @@ fn insert_correction_source_and_evidence(
     valid_at: i64,
     recorded_at: i64,
 ) -> Result<(SourceId, EvidenceId)> {
-    let source_id = SourceId(new_id(transaction)?);
-    let evidence_id = EvidenceId(new_id(transaction)?);
+    let source_id = SourceId(super::new_id(transaction)?);
+    let evidence_id = EvidenceId(super::new_id(transaction)?);
     transaction.execute(
         "INSERT INTO sources(id, tenant_id, person_id, revision, kind, content, captured_at, recorded_at) VALUES(?1, ?2, ?3, 1, '\"user_correction\"', ?4, ?5, ?6)",
         params![source_id.0, tenant_id.0, person_id.0, text, valid_at, recorded_at],
