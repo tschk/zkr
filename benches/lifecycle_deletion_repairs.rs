@@ -32,6 +32,25 @@ fn optimized(connection: &Connection, num_items: usize) -> Result<(), rusqlite::
     Ok(())
 }
 
+fn optimized_json_each(connection: &Connection, num_items: usize) -> Result<(), rusqlite::Error> {
+    let mut payload = Vec::with_capacity(num_items);
+    for i in 0..num_items {
+        payload.push(("evidence", (i + num_items * 2).to_string()));
+    }
+    let json_payload = serde_json::to_string(&payload).unwrap();
+    connection.execute(
+        "INSERT INTO memory_repair_outbox(id, tenant_id, person_id, target_kind, target_id, reason, created_at) SELECT lower(hex(randomblob(16))), ?1, ?2, json_extract(value, '$[0]'), json_extract(value, '$[1]'), ?3, ?4 FROM json_each(?5)",
+        params![
+            "t1",
+            "p1",
+            "delete_sync",
+            123456,
+            json_payload
+        ]
+    )?;
+    Ok(())
+}
+
 fn main() -> Result<(), rusqlite::Error> {
     let connection = Connection::open_in_memory()?;
 
@@ -59,7 +78,12 @@ fn main() -> Result<(), rusqlite::Error> {
     optimized(&connection, num_items)?;
     let optimized_time = start.elapsed();
 
+    let start = Instant::now();
+    optimized_json_each(&connection, num_items)?;
+    let optimized_json_each_time = start.elapsed();
+
     println!("Unoptimized: {unoptimized_time:?}");
-    println!("Optimized: {optimized_time:?}");
+    println!("Optimized (loop): {optimized_time:?}");
+    println!("Optimized (json_each): {optimized_json_each_time:?}");
     Ok(())
 }
