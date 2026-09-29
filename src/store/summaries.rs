@@ -1,3 +1,4 @@
+use super::utils::new_id;
 use super::*;
 use rusqlite::{OptionalExtension, Transaction, params};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -502,8 +503,8 @@ fn summary_from_row_at(
     Ok(MemorySummary {
         id,
         summary: row.get(offset)?,
-        evidence_ids: serde_json::from_str(&evidence_ids).map_err(json_error)?,
-        child_ids: serde_json::from_str(&child_ids).map_err(json_error)?,
+        evidence_ids: serde_json::from_str(&evidence_ids).map_err(super::sql_json_error)?,
+        child_ids: serde_json::from_str(&child_ids).map_err(super::sql_json_error)?,
         start_sequence: row.get(offset + 3)?,
         end_sequence: row.get(offset + 4)?,
         level: row.get(offset + 5)?,
@@ -520,10 +521,3 @@ fn unique_evidence(children: &[MemorySummary]) -> Vec<EvidenceId> {
         .collect()
 }
 
-fn json_error(error: serde_json::Error) -> rusqlite::Error {
-    rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(error))
-}
-
-fn new_id(transaction: &Transaction<'_>) -> Result<String> {
-    Ok(transaction.query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))?)
-}
