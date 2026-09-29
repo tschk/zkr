@@ -1657,6 +1657,94 @@ mod tests {
     }
 
     #[test]
+    fn risk_assessment_flags_misunderstanding_and_churn_on_high_typing_without_send() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        for i in 1..=4 {
+            personality
+                .record_event(&ConversationEvent {
+                    epoch: i,
+                    participant: "user".into(),
+                    event_kind: "typing".into(),
+                    content: "".into(),
+                })
+                .unwrap();
+        }
+
+        let risk = personality.assess_risk("user", "Hello there.");
+        assert_eq!(risk.misunderstanding_risk, 7000);
+        assert_eq!(risk.churn_risk, 6500);
+    }
+
+    #[test]
+    fn risk_assessment_flags_churn_on_low_velocity() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        // Record a message to bump total messages to 1, but we advance the epoch
+        // so that the conversation velocity drops below 0.1.
+        for _ in 0..20 {
+            personality.advance_epoch();
+        }
+
+        personality
+            .record_event(&ConversationEvent {
+                epoch: 1,
+                participant: "user".into(),
+                event_kind: "message".into(),
+                content: "Hello".into(),
+            })
+            .unwrap();
+
+        let risk = personality.assess_risk("user", "Hello there.");
+        assert_eq!(risk.churn_risk, 4000);
+    }
+
+    #[test]
+    fn risk_assessment_aborts_on_high_overall_risk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        // User types 4 times without sending (high typing-without-send -> misunderstanding 7000, churn 6500)
+        for i in 1..=4 {
+            personality
+                .record_event(&ConversationEvent {
+                    epoch: i,
+                    participant: "user".into(),
+                    event_kind: "typing".into(),
+                    content: "".into(),
+                })
+                .unwrap();
+        }
+
+        // Agent sends messages so user has 0 participation share (exclusion 6000)
+        for i in 5..=10 {
+            personality
+                .record_event(&ConversationEvent {
+                    epoch: i,
+                    participant: "agent".into(),
+                    event_kind: "message".into(),
+                    content: "agent msg".into(),
+                })
+                .unwrap();
+        }
+
+        // Highly aggressive candidate -> high escalation risk (min 10000 limit cap from count*3000 -> 5 words * 3000 = 15000 -> 10000)
+        let risk = personality.assess_risk("user", "stupid wrong idiot shut up obviously");
+
+        // Overall: (7000 + 10000 + 6000 + 6500) / 4 = 29500 / 4 = 7375
+        // 7375 > 6000 -> Abort
+        assert_eq!(risk.recommendation, RiskRecommendation::Abort);
+    }
+
+    #[test]
     fn calibration_records_roundtrip() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
