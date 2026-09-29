@@ -16,6 +16,7 @@ mod repair;
 mod retrieval;
 mod schema;
 mod summaries;
+mod utils;
 
 use embeddings::*;
 #[cfg(test)]
@@ -585,6 +586,10 @@ const fn bounded_limit(limit: u32) -> u32 {
     } else {
         limit
     }
+}
+
+pub(crate) fn sql_json_error(error: serde_json::Error) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(error))
 }
 
 fn collect_json_page<T: Serialize>(

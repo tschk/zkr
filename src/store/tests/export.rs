@@ -29,16 +29,34 @@ fn export_is_scoped_frozen_and_event_bounded() {
     let first = db.export(input(0, -1, None, 2)).unwrap();
     assert_eq!(first.export_format, EXPORT_FORMAT_VERSION);
     assert_eq!(first.database_schema_version, DATABASE_SCHEMA_VERSION);
+    // Pages carry whole commits even when one commit exceeds the event limit.
+    assert_eq!(first.commits.len(), 1);
+    assert_eq!(first.commits[0].sequence, 1);
+    assert_eq!(first.commits[0].first_event_index, 0);
     assert_eq!(
         first
             .commits
             .iter()
             .map(|commit| commit.records.len())
             .sum::<usize>(),
-        2
+        4
     );
-    assert!(!first.complete);
     assert_eq!(first.commits[0].event_count, 4);
+    // The scoped feed ends at the commit boundary, so the page is complete.
+    assert!(first.complete);
+    assert!(
+        first
+            .commits
+            .iter()
+            .flat_map(|commit| &commit.records)
+            .all(|record| match record {
+                ExportRecord::Source(record) => record.source.tenant_id.0 == "a",
+                ExportRecord::Evidence(record) => record.evidence.tenant_id.0 == "a",
+                ExportRecord::Claim(record) => record.tenant_id.0 == "a",
+                ExportRecord::ClaimEvidence(record) => record.tenant_id.0 == "a",
+                _ => true,
+            })
+    );
 
     db.remember(remember_raw("a", "sam", "future")).unwrap();
     let second = db
@@ -51,27 +69,8 @@ fn export_is_scoped_frozen_and_event_bounded() {
         .unwrap();
     assert!(second.complete);
     assert_eq!(second.high_water_mark, first.high_water_mark);
-    assert_eq!(
-        second
-            .commits
-            .iter()
-            .map(|commit| commit.records.len())
-            .sum::<usize>(),
-        2
-    );
-    assert!(
-        second
-            .commits
-            .iter()
-            .flat_map(|commit| &commit.records)
-            .all(|record| match record {
-                ExportRecord::Source(record) => record.source.tenant_id.0 == "a",
-                ExportRecord::Evidence(record) => record.evidence.tenant_id.0 == "a",
-                ExportRecord::Claim(record) => record.tenant_id.0 == "a",
-                ExportRecord::ClaimEvidence(record) => record.tenant_id.0 == "a",
-                _ => true,
-            })
-    );
+    // The high water mark freezes the feed: the "future" commit stays behind it.
+    assert!(second.commits.is_empty());
 }
 
 #[test]
@@ -112,13 +111,15 @@ fn export_paginates_correctly_by_limit() {
     db.remember(remember("a", "sam", "Beta")).unwrap();
     db.remember(remember("a", "sam", "Gamma")).unwrap();
 
-    // 1st query: get 3 items
+    // 1st query: pages carry whole commits, so a 4-event commit exceeds the
+    // limit of 3 but is never split.
     let page1 = db.export(input(0, -1, None, 3)).unwrap();
     let count1: usize = page1.commits.iter().map(|c| c.records.len()).sum();
-    assert_eq!(count1, 3);
+    assert_eq!(count1, 4);
+    assert_eq!(page1.commits.len(), 1);
     assert!(!page1.complete);
 
-    // 2nd query: use cursor from page1 to get next 3 items
+    // 2nd query: use cursor from page1 to get the next whole commit.
     let page2 = db
         .export(input(
             page1.next_after_commit,
@@ -128,7 +129,8 @@ fn export_paginates_correctly_by_limit() {
         ))
         .unwrap();
     let count2: usize = page2.commits.iter().map(|c| c.records.len()).sum();
-    assert_eq!(count2, 3);
+    assert_eq!(count2, 4);
+    assert_eq!(page2.commits.len(), 1);
     assert!(!page2.complete);
 
     // Continue fetching the rest (the total items depend on memory internals but will eventually complete)
@@ -252,13 +254,12 @@ fn correction_and_deletion_are_explicit_and_split_safely() {
     loop {
         let page = db.export(input(cursor.0, cursor.1, high_water, 2)).unwrap();
         high_water = Some(page.high_water_mark);
-        assert!(
-            page.commits
-                .iter()
-                .map(|commit| commit.records.len())
-                .sum::<usize>()
-                <= 2
-        );
+        // Pages split safely between commits, never inside one: apply requires
+        // whole commits.
+        for commit in &page.commits {
+            assert_eq!(commit.first_event_index, 0);
+            assert_eq!(commit.records.len() as i64, commit.event_count);
+        }
         records.extend(page.commits.into_iter().flat_map(|commit| commit.records));
         cursor = (page.next_after_commit, page.next_after_event_index);
         if page.complete {
@@ -317,21 +318,12 @@ fn migration_bootstrap_is_event_bounded() {
     db.migrate().unwrap();
 
     let first = db.export(input(0, -1, None, 2)).unwrap();
+    // The bootstrap commit is exported whole: apply rejects partial commits.
     assert_eq!(first.commits.len(), 1);
     assert_eq!(first.commits[0].event_count, 4);
-    assert_eq!(first.commits[0].records.len(), 2);
-    assert!(!first.complete);
-    let second = db
-        .export(input(
-            first.next_after_commit,
-            first.next_after_event_index,
-            Some(first.high_water_mark),
-            2,
-        ))
-        .unwrap();
-    assert_eq!(second.commits[0].event_count, 4);
-    assert_eq!(second.commits[0].first_event_index, 2);
-    assert!(second.complete);
+    assert_eq!(first.commits[0].records.len(), 4);
+    assert_eq!(first.commits[0].first_event_index, 0);
+    assert!(first.complete);
 }
 
 #[test]
@@ -450,16 +442,24 @@ fn oversized_record_rolls_back_authoritative_data_and_commit() {
 }
 
 #[test]
-fn page_byte_budget_splits_a_commit_without_stranding_events() {
+fn page_byte_budget_stops_between_commits_and_carries_oversized_commits_whole() {
     let mut db = MemoryDb {
         connection: Connection::open_in_memory().unwrap(),
     };
     db.migrate().unwrap();
+    // Each remember builds a ~1.2 MiB commit that alone exceeds the 1 MiB page
+    // byte budget: it is still carried whole, and the page break falls between
+    // commits.
     db.remember(remember_raw("a", "sam", &"x".repeat(600 * 1024)))
         .unwrap();
+    db.remember(remember_raw("a", "sam", &"y".repeat(600 * 1024)))
+        .unwrap();
     let first = db.export(input(0, -1, None, 100)).unwrap();
-    assert_eq!(first.commits[0].records.len(), 1);
+    assert_eq!(first.commits.len(), 1);
+    assert_eq!(first.commits[0].sequence, 1);
+    assert_eq!(first.commits[0].records.len(), 2);
     assert_eq!(first.commits[0].event_count, 2);
+    assert_eq!(first.commits[0].first_event_index, 0);
     assert!(!first.complete);
     let second = db
         .export(input(
@@ -469,9 +469,41 @@ fn page_byte_budget_splits_a_commit_without_stranding_events() {
             100,
         ))
         .unwrap();
-    assert_eq!(second.commits[0].records.len(), 1);
-    assert_eq!(second.commits[0].first_event_index, 1);
+    assert_eq!(second.commits.len(), 1);
+    assert_eq!(second.commits[0].sequence, 2);
+    assert_eq!(second.commits[0].records.len(), 2);
+    assert_eq!(second.commits[0].first_event_index, 0);
     assert!(second.complete);
+}
+
+#[test]
+fn export_pages_carry_whole_commits() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    db.remember(remember("a", "sam", "Acme")).unwrap();
+    db.remember(remember("a", "sam", "Beta")).unwrap();
+    db.remember(remember("a", "sam", "Gamma")).unwrap();
+
+    // A limit of 1 is the worst case: pages must still never split a commit,
+    // because apply rejects commits that do not carry their full event count.
+    let mut cursor = (0, -1);
+    let high_water = None;
+    let mut seen_sequences = Vec::new();
+    loop {
+        let page = db.export(input(cursor.0, cursor.1, high_water, 1)).unwrap();
+        for commit in &page.commits {
+            assert_eq!(commit.first_event_index, 0);
+            assert_eq!(commit.records.len() as i64, commit.event_count);
+            seen_sequences.push(commit.sequence);
+        }
+        cursor = (page.next_after_commit, page.next_after_event_index);
+        if page.complete {
+            break;
+        }
+    }
+    assert_eq!(seen_sequences, vec![1, 2, 3]);
 }
 
 #[test]
