@@ -2108,4 +2108,60 @@ mod tests {
         let result = personality.search_personality("query", 5);
         assert!(result.is_err());
     }
+
+    #[test]
+    fn record_calibration_writes_to_database() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        personality
+            .record_calibration(&CalibrationRecord {
+                participant: "alice".into(),
+                predicted_reaction: "satisfied".into(),
+                actual_reaction: "frustrated".into(),
+                correct: false,
+                epoch: 5,
+            })
+            .unwrap();
+
+        // Verify the database state was updated correctly
+        let search_pack = personality
+            .db
+            .search(crate::store::SearchInput {
+                tenant_id: personality.tenant_id.clone(),
+                person_id: personality.person_id.clone(),
+                query: "calibration alice".into(),
+                limit: 5,
+                query_embedding: None,
+                as_of: None,
+                enabled_features: vec![FEATURE_FLAG.into()],
+            })
+            .unwrap();
+
+        assert_eq!(search_pack.items.len(), 1);
+        let excerpt = &search_pack.items[0].excerpt;
+        assert!(excerpt.contains("predicted=satisfied"));
+        assert!(excerpt.contains("actual=frustrated"));
+    }
+
+    #[test]
+    fn record_calibration_propagates_db_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        // Use an empty TenantId, which makes db.remember fail validation
+        let tenant_id = TenantId("".into());
+        let person_id = PersonId("p1".into());
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        let result = personality.record_calibration(&CalibrationRecord {
+            participant: "alice".into(),
+            predicted_reaction: "satisfied".into(),
+            actual_reaction: "frustrated".into(),
+            correct: false,
+            epoch: 5,
+        });
+        assert!(result.is_err());
+    }
 }
