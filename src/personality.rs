@@ -1953,6 +1953,50 @@ mod tests {
     }
 
     #[test]
+    fn store_persona_formats_content_correctly() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        personality
+            .store_persona(&PersonaBlueprint {
+                name: "format-test".into(),
+                traits: vec!["trait1".into(), "trait2".into()],
+                system_prompt: "system prompt here".into(),
+                constraints: vec!["constraint1".into()],
+                citations: vec!["cite1".into()],
+            })
+            .unwrap();
+
+        let context = personality.persona_context("format-test", 5).unwrap();
+        assert_eq!(context.len(), 1);
+        assert!(context[0].contains(
+            "persona:format-test blueprint traits=trait1, trait2 prompt=system prompt here"
+        ));
+    }
+
+    #[test]
+    fn store_persona_propagates_db_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        // Use an empty TenantId, which makes db.remember fail validation
+        let tenant_id = TenantId("".into());
+        let person_id = PersonId("p1".into());
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        let result = personality.store_persona(&PersonaBlueprint {
+            name: "error-test".into(),
+            traits: vec![],
+            system_prompt: "prompt".into(),
+            constraints: vec![],
+            citations: vec![],
+        });
+
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn observations_are_stored_and_retrieved() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
