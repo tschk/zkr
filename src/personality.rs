@@ -2108,4 +2108,53 @@ mod tests {
         let result = personality.search_personality("query", 5);
         assert!(result.is_err());
     }
+
+    #[test]
+    fn store_persona_success() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        let blueprint = PersonaBlueprint {
+            name: "TestPersona".into(),
+            traits: vec!["helpful".into(), "friendly".into()],
+            system_prompt: "You are a test persona.".into(),
+            constraints: vec!["no swearing".into()],
+            citations: vec!["doc1".into()],
+        };
+
+        personality.store_persona(&blueprint).unwrap();
+
+        let context = personality.persona_context("TestPersona", 5).unwrap();
+        assert_eq!(context.len(), 1);
+        assert!(context[0].contains("TestPersona"));
+        assert!(context[0].contains("helpful"));
+        assert!(context[0].contains("friendly"));
+        assert!(context[0].contains("You are a test persona."));
+        // The text generated from context for persona only returns the Claim value (which is traits + prompt)
+        // Constraints and citations are not in the claim value (though they are in the full text)
+        // Since search_personality returns excerpt which maps to claims in persona_context
+    }
+
+    #[test]
+    fn store_persona_propagates_db_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        // Use an empty TenantId, which makes db.remember fail validation
+        let tenant_id = TenantId("".into());
+        let person_id = PersonId("p1".into());
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        let blueprint = PersonaBlueprint {
+            name: "TestPersona".into(),
+            traits: vec![],
+            system_prompt: "Prompt".into(),
+            constraints: vec![],
+            citations: vec![],
+        };
+
+        let result = personality.store_persona(&blueprint);
+        assert!(result.is_err());
+    }
 }
