@@ -3398,7 +3398,6 @@ mod tests {
         assert!(context[0].contains("turn context test"));
     }
 
-
     #[test]
     fn turn_context_propagates_db_error() {
         let tmp = tempfile::tempdir().unwrap();
