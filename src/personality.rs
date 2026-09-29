@@ -1931,6 +1931,53 @@ mod tests {
     }
 
     #[test]
+    fn record_hypothesis_propagates_db_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let tenant_id = TenantId("".into());
+        let person_id = PersonId("p1".into());
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        let result = personality.record_hypothesis(&MindHypothesis {
+            participant: "alice".into(),
+            belief: "something".into(),
+            emotion: None,
+            goal: None,
+            predicted_reaction: None,
+            confidence_basis_points: 5000,
+            valid_until: None,
+        });
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn record_hypothesis_handles_missing_optional_fields() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        personality
+            .record_hypothesis(&MindHypothesis {
+                participant: "bob".into(),
+                belief: "believes nothing".into(),
+                emotion: None,
+                goal: None,
+                predicted_reaction: None,
+                confidence_basis_points: 5000,
+                valid_until: None,
+            })
+            .unwrap();
+
+        let context = personality.tom_context("bob", 5).unwrap();
+        assert_eq!(context.len(), 1);
+        assert!(context[0].contains("unknown"));
+        assert!(context[0].contains("emotion=unknown"));
+        assert!(context[0].contains("goal=unknown"));
+    }
+
+    #[test]
     fn personas_are_stored_and_retrieved() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
