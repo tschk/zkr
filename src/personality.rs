@@ -2108,4 +2108,60 @@ mod tests {
         let result = personality.search_personality("query", 5);
         assert!(result.is_err());
     }
+
+    #[test]
+    fn voice_card_context_retrieves_inserted_mock_data() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        personality
+            .store_voice_card(&VoiceCard {
+                scope: "dev-team".into(),
+                version: 1,
+                register: "technical".into(),
+                humor: "dry".into(),
+                lexicon: vec!["refactor".into()],
+                banned_phrases: vec![],
+                roles: vec![],
+                taboos: vec![],
+                in_jokes: vec![],
+                group_norms: vec!["code review".into()],
+                confidence_basis_points: 8000,
+                supporting_event_epochs: vec![],
+                valid_from: 0,
+                valid_until: None,
+            })
+            .unwrap();
+
+        let context = personality.voice_card_context("dev-team", 5).unwrap();
+        assert_eq!(context.len(), 1);
+        assert!(context[0].contains("technical"));
+        assert!(context[0].contains("dev-team") || context[0].contains("norms"));
+    }
+
+    #[test]
+    fn voice_card_context_returns_empty_when_no_match() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let personality = Personality::new(db, tenant_id, person_id);
+
+        let context = personality.voice_card_context("missing-scope", 5).unwrap();
+        assert!(context.is_empty());
+    }
+
+    #[test]
+    fn voice_card_context_propagates_db_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        // Use an empty TenantId, which makes db.search fail validation
+        let tenant_id = TenantId("".into());
+        let person_id = PersonId("p1".into());
+        let personality = Personality::new(db, tenant_id, person_id);
+
+        let result = personality.voice_card_context("any-scope", 5);
+        assert!(result.is_err());
+    }
 }
