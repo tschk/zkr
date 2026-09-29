@@ -1657,6 +1657,76 @@ mod tests {
     }
 
     #[test]
+    fn risk_assessment_flags_misunderstanding_and_churn_risk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        // User types but never sends, triggering misunderstanding and churn risk.
+        for i in 1..=4 {
+            personality
+                .record_event(&ConversationEvent {
+                    epoch: i,
+                    participant: "user".into(),
+                    event_kind: "typing".into(),
+                    content: "".into(),
+                })
+                .unwrap();
+        }
+
+        let risk = personality.assess_risk("user", "Hello.");
+        assert!(risk.misunderstanding_risk >= 7000);
+        assert!(risk.churn_risk >= 6500);
+    }
+
+    #[test]
+    fn risk_assessment_aborts_for_extreme_risk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        // User has 0 participation but high typing without send.
+        for i in 1..=4 {
+            personality
+                .record_event(&ConversationEvent {
+                    epoch: i,
+                    participant: "user".into(),
+                    event_kind: "typing".into(),
+                    content: "".into(),
+                })
+                .unwrap();
+        }
+
+        // Agent talks a lot to exclude user.
+        for i in 5..=10 {
+            personality
+                .record_event(&ConversationEvent {
+                    epoch: i,
+                    participant: "agent".into(),
+                    event_kind: "message".into(),
+                    content: format!("agent msg {i}"),
+                })
+                .unwrap();
+        }
+
+        // Candidate reply is aggressive.
+        let risk = personality.assess_risk(
+            "user",
+            "You are stupid, wrong, and an idiot, so shut up obviously.",
+        );
+
+        // Assert high escalation risk, misunderstanding risk, churn risk, exclusion risk.
+        assert!(risk.escalation_risk >= 10000);
+        assert!(risk.misunderstanding_risk >= 7000);
+        assert!(risk.churn_risk >= 6500);
+        assert!(risk.exclusion_risk >= 6000);
+
+        assert_eq!(risk.recommendation, RiskRecommendation::Abort);
+    }
+
+    #[test]
     fn calibration_records_roundtrip() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
