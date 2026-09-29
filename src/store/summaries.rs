@@ -1,3 +1,4 @@
+use super::utils::new_id;
 use super::*;
 use rusqlite::{OptionalExtension, Transaction, params};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -520,6 +521,3 @@ fn unique_evidence(children: &[MemorySummary]) -> Vec<EvidenceId> {
         .collect()
 }
 
-fn new_id(transaction: &Transaction<'_>) -> Result<String> {
-    Ok(transaction.query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))?)
-}
