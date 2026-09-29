@@ -653,13 +653,7 @@ impl MemoryDb {
             ],
             |row| {
                 let stability: String = row.get(3)?;
-                let stability = serde_json::from_str(&stability).map_err(|error| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        3,
-                        rusqlite::types::Type::Text,
-                        Box::new(error),
-                    )
-                })?;
+                let stability = serde_json::from_str(&stability).map_err(super::sql_json_error)?;
                 Ok(ProfileEntry {
                     id: ProfileEntryId(row.get(0)?),
                     tenant_id: input.tenant_id.clone(),
@@ -745,13 +739,7 @@ impl MemoryDb {
             ],
             |row| {
                 let json: String = row.get(3)?;
-                let evidence_ids = serde_json::from_str(&json).map_err(|error| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        3,
-                        rusqlite::types::Type::Text,
-                        Box::new(error),
-                    )
-                })?;
+                let evidence_ids = serde_json::from_str(&json).map_err(super::sql_json_error)?;
                 Ok(ReviewRecord {
                     id: DailyReviewId(row.get(0)?),
                     day: row.get(1)?,
@@ -1326,7 +1314,7 @@ fn build_deletion_records(
         )?));
     }
     if !profile_ids.is_empty() {
-        let profile_ids_json = serde_json::to_string(&profile_ids).unwrap();
+        let profile_ids_json = serde_json::to_string(&profile_ids)?;
         let mut stmt = transaction.prepare_cached(
             "SELECT id FROM profile_entries WHERE tenant_id = ?1 AND person_id = ?2 AND id IN (SELECT value FROM json_each(?3))"
         )?;
