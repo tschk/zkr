@@ -1657,6 +1657,50 @@ mod tests {
     }
 
     #[test]
+    fn risk_assessment_aborts_for_high_overall_risk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        // 4 typing events for user (no messages sent) -> typing_without_send = 4
+        // misunderstanding_risk -> 7000, churn_risk -> 6500
+        for i in 1..=4 {
+            personality
+                .record_event(&ConversationEvent {
+                    epoch: i,
+                    participant: "user".into(),
+                    event_kind: "typing".into(),
+                    content: "".into(),
+                })
+                .unwrap();
+        }
+
+        // 10 agent messages -> participation_share for user = 0.0 (< 0.1)
+        // exclusion_risk -> 6000
+        for i in 5..=14 {
+            personality
+                .record_event(&ConversationEvent {
+                    epoch: i,
+                    participant: "agent".into(),
+                    event_kind: "message".into(),
+                    content: format!("agent msg {i}"),
+                })
+                .unwrap();
+        }
+
+        // Candidate with 2 aggressive words ("stupid", "idiot") -> escalation_risk -> 6000
+        let risk = personality.assess_risk("user", "You are a stupid idiot.");
+
+        assert_eq!(risk.misunderstanding_risk, 7000);
+        assert_eq!(risk.churn_risk, 6500);
+        assert_eq!(risk.exclusion_risk, 6000);
+        assert_eq!(risk.escalation_risk, 6000);
+        assert_eq!(risk.overall_risk_basis_points, 6375); // (7000 + 6500 + 6000 + 6000) / 4 = 25500 / 4 = 6375
+        assert_eq!(risk.recommendation, RiskRecommendation::Abort);
+    }
+
+    #[test]
     fn calibration_records_roundtrip() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
