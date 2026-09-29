@@ -34,9 +34,7 @@ pub(super) fn append_records(
         [commit_sequence],
         |row| Ok((TenantId(row.get(0)?), PersonId(row.get(1)?))),
     )?;
-    let mut statement = transaction.prepare_cached(
-        "INSERT INTO memory_export_events(commit_sequence, event_index, payload) VALUES(?1, ?2, ?3)",
-    )?;
+    let mut batch = Vec::new();
     for (index, record) in records.into_iter().enumerate() {
         validate_record_scope(&record, &tenant_id, &person_id)?;
         let payload = serde_json::to_string(&record)?;
@@ -45,7 +43,16 @@ pub(super) fn append_records(
                 "export record exceeds {MAX_EXPORT_RECORD_BYTES} bytes"
             )));
         }
-        statement.execute(params![commit_sequence, index as i64, payload])?;
+        batch.push((index as i64, payload));
+    }
+    if !batch.is_empty() {
+        let mut statement = transaction.prepare_cached(
+            "INSERT INTO memory_export_events(commit_sequence, event_index, payload) \
+             SELECT ?1, CAST(json_extract(j.value, '$[0]') AS INTEGER), json_extract(j.value, '$[1]') \
+             FROM json_each(?2) j",
+        )?;
+        let batch_json = serde_json::to_string(&batch)?;
+        statement.execute(params![commit_sequence, batch_json])?;
     }
     Ok(())
 }
