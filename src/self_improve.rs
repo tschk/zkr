@@ -1,4 +1,4 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+use crate::{nanos, now_seconds};
 
 use crate::{
     ClaimInput, ClaimKind, MemoryDb, MemoryProcessingState, MemoryTier, PersonId, RememberInput,
@@ -100,20 +100,6 @@ impl SelfImprove {
         lessons.truncate(limit as usize);
         Ok(lessons)
     }
-}
-
-fn now_seconds() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64
-}
-
-fn nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos()
 }
 
 #[cfg(test)]
