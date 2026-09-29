@@ -1329,7 +1329,7 @@ fn build_deletion_records(
         )?));
     }
     if !profile_ids.is_empty() {
-        let profile_ids_json = serde_json::to_string(&profile_ids).unwrap();
+        let profile_ids_json = serde_json::to_string(&profile_ids)?;
         let mut stmt = transaction.prepare_cached(
             "SELECT id FROM profile_entries WHERE tenant_id = ?1 AND person_id = ?2 AND id IN (SELECT value FROM json_each(?3))"
         )?;
