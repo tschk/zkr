@@ -539,34 +539,78 @@ impl MemoryDb {
             None,
         )?;
         let mut statement = self.connection.prepare(
-            "SELECT target_kind, target_id FROM (
-                SELECT 'source' AS target_kind, id AS target_id FROM sources WHERE tenant_id = ?1 AND person_id = ?2 AND deleted_at IS NULL
-                UNION ALL SELECT 'evidence', e.id FROM evidence e JOIN sources s ON s.id = e.source_id AND s.tenant_id = e.tenant_id AND s.person_id = e.person_id WHERE e.tenant_id = ?1 AND e.person_id = ?2 AND e.deleted_at IS NULL AND s.deleted_at IS NULL
-                UNION ALL SELECT 'claim', c.id FROM claims c WHERE c.tenant_id = ?1 AND c.person_id = ?2 AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL AND c.tier IN ('short_term', 'long_term') AND c.processing_state = 'processed'
-             ) ORDER BY target_kind, target_id",
+            "SELECT t.target_kind, t.target_id, t.text, t.target_revision,
+                    e.target_revision, e.input_hash, e.created_at, e.dimension, e.normalization, e.distance, e.vector
+             FROM (
+                SELECT 'source' AS target_kind, id AS target_id, content AS text, revision AS target_revision FROM sources WHERE tenant_id = ?1 AND person_id = ?2 AND deleted_at IS NULL
+                UNION ALL SELECT 'evidence', e.id, e.quote, e.source_revision FROM evidence e JOIN sources s ON s.id = e.source_id AND s.tenant_id = e.tenant_id AND s.person_id = e.person_id WHERE e.tenant_id = ?1 AND e.person_id = ?2 AND e.deleted_at IS NULL AND s.deleted_at IS NULL
+                UNION ALL SELECT 'claim', c.id, c.subject || ' ' || c.predicate || ' ' || c.value, c.recorded_from FROM claims c WHERE c.tenant_id = ?1 AND c.person_id = ?2 AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL AND c.tier IN ('short_term', 'long_term') AND c.processing_state = 'processed'
+             ) t
+             LEFT JOIN embeddings e ON e.tenant_id = ?1 AND e.person_id = ?2 AND e.target_kind = t.target_kind AND e.target_id = t.target_id AND e.model = ?3 AND e.version = ?4
+             ORDER BY t.target_kind, t.target_id",
         )?;
-        let targets = statement
-            .query_map(params![input.tenant_id.0, input.person_id.0], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let rows = statement.query_map(
+            params![
+                input.tenant_id.0,
+                input.person_id.0,
+                input.model,
+                input.version
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, Option<i64>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<i64>>(6)?,
+                    row.get::<_, Option<usize>>(7)?,
+                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, Option<String>>(9)?,
+                    row.get::<_, Option<String>>(10)?,
+                ))
+            },
+        )?;
+
         let mut issues = Vec::new();
         let mut page_bytes = 2;
         let limit = bounded_limit(input.limit) as usize;
-        for (kind, id) in targets {
-            let projection = self.projection_input(
-                &input.tenant_id,
-                &input.person_id,
-                embedding_target(&kind, &id)?,
-            )?;
-            let stored = self
-                .connection
-                .query_row(
-                    "SELECT target_revision, input_hash, created_at, dimension, normalization, distance, vector FROM embeddings WHERE tenant_id = ?1 AND person_id = ?2 AND target_kind = ?3 AND target_id = ?4 AND model = ?5 AND version = ?6",
-                    params![input.tenant_id.0, input.person_id.0, kind, embedding_target_parts(&projection.target).1, input.model, input.version],
-                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?, row.get::<_, usize>(3)?, row.get::<_, String>(4)?, row.get::<_, String>(5)?, row.get::<_, String>(6)?)),
+
+        for row in rows {
+            let (
+                kind,
+                id,
+                text,
+                target_revision,
+                e_target_revision,
+                e_input_hash,
+                e_created_at,
+                e_dimension,
+                e_normalization,
+                e_distance,
+                e_vector,
+            ) = row?;
+
+            let projection = ProjectionInput {
+                target: embedding_target(&kind, &id)?,
+                input_hash: input_hash(&text),
+                text,
+                target_revision,
+            };
+
+            let stored = e_target_revision.map(|rev| {
+                (
+                    rev,
+                    e_input_hash.unwrap(),
+                    e_created_at.unwrap(),
+                    e_dimension.unwrap(),
+                    e_normalization.unwrap(),
+                    e_distance.unwrap(),
+                    e_vector.unwrap(),
                 )
-                .optional()?;
+            });
+
             let state = match &stored {
                 None => ProjectionState::Missing,
                 Some((revision, hash, _, _, _, _, _))
