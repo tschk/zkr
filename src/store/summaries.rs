@@ -520,4 +520,3 @@ fn unique_evidence(children: &[MemorySummary]) -> Vec<EvidenceId> {
         .into_iter()
         .collect()
 }
-
