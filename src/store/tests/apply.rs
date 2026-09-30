@@ -499,6 +499,7 @@ fn applied_records_stay_searchable_and_repairable() {
     );
     assert!(!issues.is_empty());
 }
+
 #[test]
 fn test_record_identity_source() {
     use crate::store::apply::record_identity;
