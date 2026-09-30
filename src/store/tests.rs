@@ -20,6 +20,7 @@ fn remember(tenant: &str, person: &str, value: &str) -> RememberInput {
             processing_state: MemoryProcessingState::Processed,
         }),
         feature_flag: None,
+        aliases: Vec::new(),
     }
 }
 
@@ -34,6 +35,7 @@ fn remember_raw(tenant: &str, person: &str, text: &str) -> RememberInput {
         recorded_at: 10,
         claim: None,
         feature_flag: None,
+        aliases: Vec::new(),
     }
 }
 
