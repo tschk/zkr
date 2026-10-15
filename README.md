@@ -91,3 +91,41 @@ cargo test --all-features
 ## Acknowledgements
 
 The systems and research that informed zkr are listed in [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md).
+
+## Project categories and structured connections
+
+`remember-project` groups an ordinary cited fact/task by exact project and category
+labels. Labels are caller-defined strings: an AI can create categories as needed
+without changing a built-in taxonomy. `project-memories` retrieves current,
+processed, non-archived facts with optional project/category filters.
+
+```sh
+printf '%s' '{"tenant_id":"local","person_id":"me","project":"Tofu","category":"launch","kind":"conversation","text":"Launch is planned","captured_at":10,"recorded_at":10,"claim":{"subject":"ignored","predicate":"task:launch:status","value":"planned","kind":"task","valid_from":10}}' \
+  | zkr --db ./memory.db remember-project
+printf '%s' '{"tenant_id":"local","person_id":"me","project":"Tofu","category":"launch","limit":20}' \
+  | zkr --db ./memory.db project-memories
+```
+
+`remember-project-record` adds a named JSON record with arbitrary fields and
+explicit connections. For example, add this `record` to the same input:
+
+```json
+{
+  "record_type": "work_item",
+  "fields": { "state": "blocked", "priority": 2, "tags": ["connector"] },
+  "connections": [{ "relation": "blocked_by", "target": "cupboard:pairing" }]
+}
+```
+
+The record replaces `claim.value` with its complete serialized JSON value; the
+claim's predicate remains its stable logical record ID. Read it by deserializing
+`ProjectFact.value` as `ProjectRecord`. Use `correct` and new evidence to update
+that claim (pass the entire serialized record for structured records). Model-made
+categories and connections remain caller-supplied claims, not owner-confirmed
+facts, a schema migration, generated executable code, or execution authority.
+Connection targets are exact named subjects and may be unresolved; they are not
+foreign keys and never fetch another owner's memory. The source claim's normal
+scope, citation, feature gates, correction, deletion and replication apply.
+Records are limited to 16 KiB, 64 fields and 64 connections; reads retain ZKR's
+usual count and byte bounds. No schema migration or new dependency is required.
+The APIs organize memory; they do not schedule or execute tasks.

@@ -12,6 +12,7 @@ mod apply;
 mod embeddings;
 mod export;
 mod lifecycle;
+mod projects;
 mod repair;
 mod retrieval;
 mod schema;
@@ -19,6 +20,7 @@ mod summaries;
 mod utils;
 
 use embeddings::*;
+pub use projects::*;
 #[cfg(test)]
 use retrieval::MAX_EXCERPT_BYTES;
 
