@@ -378,7 +378,7 @@ fn deleting_a_source_does_not_purge_unrelated_retracted_claim_projections() {
 }
 
 #[test]
-fn profile_entries_lifecycle() {
+fn profile_entries_require_valid_recorded_at_and_can_be_replayed() {
     let mut db = MemoryDb {
         connection: Connection::open_in_memory().unwrap(),
     };
@@ -414,6 +414,36 @@ fn profile_entries_lifecycle() {
         .unwrap(),
         vec![entry.clone()]
     );
+    let replay = db
+        .store_profile(ProfileInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            stability: ProfileStability::Current,
+            claim_id: claimed.claim_id.clone().unwrap(),
+            recorded_at: 11,
+        })
+        .unwrap();
+    assert_eq!(replay, entry);
+}
+
+#[test]
+fn profile_pager_renders_markdown_one_pager() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let mut profile_fact = remember("a", "sam", "Acme");
+    profile_fact.claim.as_mut().unwrap().kind = ClaimKind::ProfileFact;
+    let claimed = db.remember(profile_fact).unwrap();
+    let entry = db
+        .store_profile(ProfileInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            stability: ProfileStability::Current,
+            claim_id: claimed.claim_id.clone().unwrap(),
+            recorded_at: 11,
+        })
+        .unwrap();
     let pager = db
         .profile_pager(ProfilesInput {
             tenant_id: TenantId("a".into()),
@@ -439,7 +469,18 @@ fn profile_entries_lifecycle() {
         .unwrap();
     assert!(empty_pager.entries.is_empty());
     assert!(empty_pager.markdown.contains("No live profile projections"));
-    let replay = db
+}
+
+#[test]
+fn profile_entries_can_be_replaced_by_newer_claims() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let mut profile_fact = remember("a", "sam", "Acme");
+    profile_fact.claim.as_mut().unwrap().kind = ClaimKind::ProfileFact;
+    let claimed = db.remember(profile_fact).unwrap();
+    let entry = db
         .store_profile(ProfileInput {
             tenant_id: TenantId("a".into()),
             person_id: PersonId("sam".into()),
@@ -448,11 +489,10 @@ fn profile_entries_lifecycle() {
             recorded_at: 11,
         })
         .unwrap();
-    assert_eq!(replay, entry);
+
     let mut replacement_fact = remember("a", "sam", "Beta");
     replacement_fact.claim.as_mut().unwrap().kind = ClaimKind::ProfileFact;
     let replacement = db.remember(replacement_fact).unwrap();
-    let replacement_source_id = replacement.source_id.clone();
     assert!(matches!(
         db.store_profile(ProfileInput {
             tenant_id: TenantId("a".into()),
@@ -487,42 +527,10 @@ fn profile_entries_lifecycle() {
         .len(),
         1
     );
-    db.delete_source(DeleteInput {
-        tenant_id: TenantId("a".into()),
-        person_id: PersonId("sam".into()),
-        source_id: replacement_source_id,
-        deleted_at: 20,
-    })
-    .unwrap();
-    assert!(
-        db.profiles(ProfilesInput {
-            tenant_id: TenantId("a".into()),
-            person_id: PersonId("sam".into()),
-            limit: 10,
-        })
-        .unwrap()
-        .is_empty()
-    );
 }
 
 #[test]
-fn profile_input_deserialization_validation() {
-    assert!(
-        serde_json::from_value::<ProfileInput>(serde_json::json!({
-            "tenant_id": "a",
-            "person_id": "sam",
-            "key": "employer",
-            "value": "Acme",
-            "stability": "current",
-            "claim_id": "claim",
-            "recorded_at": 11
-        }))
-        .is_err()
-    );
-}
-
-#[test]
-fn claim_evidence_remains_scoped_and_live() {
+fn claim_evidence_links_are_tenant_scoped() {
     let mut db = MemoryDb {
         connection: Connection::open_in_memory().unwrap(),
     };
@@ -530,7 +538,6 @@ fn claim_evidence_remains_scoped_and_live() {
     let mut profile_fact = remember("a", "sam", "Acme");
     profile_fact.claim.as_mut().unwrap().kind = ClaimKind::ProfileFact;
     let claimed = db.remember(profile_fact).unwrap();
-
     let raw = db
         .remember(remember_raw("a", "sam", "Sam left Acme"))
         .unwrap();
@@ -554,6 +561,60 @@ fn claim_evidence_remains_scoped_and_live() {
         }),
         Err(Error::NotFound)
     ));
+}
+
+#[test]
+fn deleted_sources_remove_associated_profile_entries() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let mut profile_fact = remember("a", "sam", "Acme");
+    profile_fact.claim.as_mut().unwrap().kind = ClaimKind::ProfileFact;
+    let claimed = db.remember(profile_fact).unwrap();
+    let source_id = claimed.source_id.clone();
+
+    db.store_profile(ProfileInput {
+        tenant_id: TenantId("a".into()),
+        person_id: PersonId("sam".into()),
+        stability: ProfileStability::Current,
+        claim_id: claimed.claim_id.clone().unwrap(),
+        recorded_at: 11,
+    })
+    .unwrap();
+
+    db.delete_source(DeleteInput {
+        tenant_id: TenantId("a".into()),
+        person_id: PersonId("sam".into()),
+        source_id,
+        deleted_at: 20,
+    })
+    .unwrap();
+    assert!(
+        db.profiles(ProfilesInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            limit: 10,
+        })
+        .unwrap()
+        .is_empty()
+    );
+}
+
+#[test]
+fn profile_input_deserialization_rejects_legacy_fields() {
+    assert!(
+        serde_json::from_value::<ProfileInput>(serde_json::json!({
+            "tenant_id": "a",
+            "person_id": "sam",
+            "key": "employer",
+            "value": "Acme",
+            "stability": "current",
+            "claim_id": "claim",
+            "recorded_at": 11
+        }))
+        .is_err()
+    );
 }
 
 #[test]
