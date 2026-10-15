@@ -427,6 +427,51 @@ fn profile_entries_require_valid_recorded_at_and_can_be_replayed() {
 }
 
 #[test]
+fn profile_pager_renders_markdown_one_pager() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let mut profile_fact = remember("a", "sam", "Acme");
+    profile_fact.claim.as_mut().unwrap().kind = ClaimKind::ProfileFact;
+    let claimed = db.remember(profile_fact).unwrap();
+    let entry = db
+        .store_profile(ProfileInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            stability: ProfileStability::Current,
+            claim_id: claimed.claim_id.clone().unwrap(),
+            recorded_at: 11,
+        })
+        .unwrap();
+    let pager = db
+        .profile_pager(ProfilesInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            limit: 10,
+        })
+        .unwrap();
+    assert_eq!(pager.entries, vec![entry.clone()]);
+    assert!(pager.generated_at > 0);
+    assert!(pager.markdown.contains("Generated at unix"));
+    assert!(pager.markdown.contains(&entry.key));
+    assert!(pager.markdown.contains(&entry.value));
+    let mut empty = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    empty.migrate().unwrap();
+    let empty_pager = empty
+        .profile_pager(ProfilesInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            limit: 10,
+        })
+        .unwrap();
+    assert!(empty_pager.entries.is_empty());
+    assert!(empty_pager.markdown.contains("No live profile projections"));
+}
+
+#[test]
 fn profile_entries_can_be_replaced_by_newer_claims() {
     let mut db = MemoryDb {
         connection: Connection::open_in_memory().unwrap(),

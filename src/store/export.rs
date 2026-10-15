@@ -34,10 +34,9 @@ pub(super) fn append_records(
         [commit_sequence],
         |row| Ok((TenantId(row.get(0)?), PersonId(row.get(1)?))),
     )?;
-    let mut statement = transaction.prepare_cached(
-        "INSERT INTO memory_export_events(commit_sequence, event_index, payload) VALUES(?1, ?2, ?3)",
-    )?;
-    for (index, record) in records.into_iter().enumerate() {
+
+    let mut payloads = Vec::new();
+    for record in records.into_iter() {
         validate_record_scope(&record, &tenant_id, &person_id)?;
         let payload = serde_json::to_string(&record)?;
         if payload.len() > MAX_EXPORT_RECORD_BYTES {
@@ -45,7 +44,22 @@ pub(super) fn append_records(
                 "export record exceeds {MAX_EXPORT_RECORD_BYTES} bytes"
             )));
         }
-        statement.execute(params![commit_sequence, index as i64, payload])?;
+        payloads.push(payload);
+    }
+
+    if !payloads.is_empty() {
+        let mut statement = transaction.prepare_cached(
+            "INSERT INTO memory_export_events(commit_sequence, event_index, payload)
+             SELECT ?1, ?2 + key, value
+             FROM json_each(?3)",
+        )?;
+
+        let chunk_size = 900;
+        for (chunk_idx, chunk) in payloads.chunks(chunk_size).enumerate() {
+            let json_arr = serde_json::to_string(chunk)?;
+            let base_index = (chunk_idx * chunk_size) as i64;
+            statement.execute(params![commit_sequence, base_index, json_arr])?;
+        }
     }
     Ok(())
 }
@@ -90,7 +104,7 @@ pub(super) fn source_record(
                     tenant_id: tenant_id.clone(),
                     person_id: person_id.clone(),
                     revision: row.get(0)?,
-                    kind: serde_json::from_str(&kind).map_err(sql_json_error)?,
+                    kind: serde_json::from_str(&kind).map_err(super::sql_json_error)?,
                     content: row.get(2)?,
                     captured_at: row.get(3)?,
                     recorded_at: row.get(4)?,
@@ -127,7 +141,8 @@ pub(super) fn claim_records(
                 subject: row.get(1)?,
                 predicate: row.get(2)?,
                 value: row.get(3)?,
-                kind: serde_json::from_str(&format!("\"{kind}\"")).map_err(sql_json_error)?,
+                kind: serde_json::from_str(&format!("\"{kind}\""))
+                    .map_err(super::sql_json_error)?,
                 valid_time: crate::TimeRange {
                     from: row.get(5)?,
                     until: row.get(6)?,
@@ -136,10 +151,12 @@ pub(super) fn claim_records(
                     from: row.get(7)?,
                     until: row.get(8)?,
                 },
-                status: serde_json::from_str(&format!("\"{status}\"")).map_err(sql_json_error)?,
-                tier: serde_json::from_str(&format!("\"{tier}\"")).map_err(sql_json_error)?,
+                status: serde_json::from_str(&format!("\"{status}\""))
+                    .map_err(super::sql_json_error)?,
+                tier: serde_json::from_str(&format!("\"{tier}\""))
+                    .map_err(super::sql_json_error)?,
                 processing_state: serde_json::from_str(&format!("\"{processing_state}\""))
-                    .map_err(sql_json_error)?,
+                    .map_err(super::sql_json_error)?,
             })
         })?
         .map(|result| result.map_err(Error::from))
@@ -208,15 +225,15 @@ pub(super) fn claim_record(
                 predicate: row.get(1)?,
                 value: row.get(2)?,
                 kind: serde_json::from_str(&format!("\"{kind}\""))
-                    .map_err(sql_json_error)?,
+                    .map_err(super::sql_json_error)?,
                 valid_time: crate::TimeRange { from: row.get(4)?, until: row.get(5)? },
                 recorded_time: crate::TimeRange { from: row.get(6)?, until: row.get(7)? },
                 status: serde_json::from_str(&format!("\"{status}\""))
-                    .map_err(sql_json_error)?,
+                    .map_err(super::sql_json_error)?,
                 tier: serde_json::from_str(&format!("\"{tier}\""))
-                    .map_err(sql_json_error)?,
+                    .map_err(super::sql_json_error)?,
                 processing_state: serde_json::from_str(&format!("\"{processing_state}\""))
-                    .map_err(sql_json_error)?,
+                    .map_err(super::sql_json_error)?,
             })
         },
     ).map_err(Error::from)
@@ -239,7 +256,7 @@ pub(super) fn claim_evidence_record(
                 person_id: person_id.clone(),
                 claim_id: claim_id.clone(),
                 evidence_id: evidence_id.clone(),
-                relation: serde_json::from_str(&relation).map_err(sql_json_error)?,
+                relation: serde_json::from_str(&relation).map_err(super::sql_json_error)?,
                 confidence_basis_points: row.get(1)?,
             })
         },
@@ -263,7 +280,7 @@ pub(super) fn profile_records(
                 person_id: person_id.clone(),
                 key: row.get(1)?,
                 value: row.get(2)?,
-                stability: serde_json::from_str(&stability).map_err(sql_json_error)?,
+                stability: serde_json::from_str(&stability).map_err(super::sql_json_error)?,
                 claim_id: ClaimId(row.get(4)?),
                 recorded_at: row.get(5)?,
             })
@@ -290,7 +307,7 @@ pub(super) fn review_record(
                     person_id: person_id.clone(),
                     day: row.get(0)?,
                     summary: row.get(1)?,
-                    evidence_ids: serde_json::from_str(&evidence_ids).map_err(sql_json_error)?,
+                    evidence_ids: serde_json::from_str(&evidence_ids).map_err(super::sql_json_error)?,
                     recorded_at: row.get(3)?,
                 })
             },
@@ -298,42 +315,106 @@ pub(super) fn review_record(
         .map_err(Error::from)
 }
 
-fn sql_json_error(error: serde_json::Error) -> rusqlite::Error {
-    rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(error))
+type ExportEventRow = (i64, Timestamp, i64, i64, String);
+
+fn trailing_fetch_commit_is_whole(events: &[ExportEventRow]) -> bool {
+    let Some(&(sequence, ..)) = events.last() else {
+        return true;
+    };
+    let mut carried = 0i64;
+    let mut first_event_index = 0i64;
+    let mut event_count = 0i64;
+    for &(seq, _, event_index, count, _) in events.iter().rev() {
+        if seq != sequence {
+            break;
+        }
+        first_event_index = event_index;
+        event_count = count;
+        carried += 1;
+    }
+    first_event_index + carried == event_count
+}
+
+fn fetch_export_events(
+    statement: &mut rusqlite::Statement<'_>,
+    input: &ExportInput,
+    high_water_mark: i64,
+    cap: i64,
+) -> Result<Vec<ExportEventRow>> {
+    let rows = statement.query_map(
+        params![
+            input.tenant_id.0,
+            input.person_id.0,
+            input.after_commit,
+            input.after_event_index,
+            high_water_mark,
+            cap
+        ],
+        |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Timestamp>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        },
+    )?;
+    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
 fn pack_export_page(
-    events: Vec<(i64, Timestamp, i64, i64, String)>,
+    events: Vec<ExportEventRow>,
     input: &ExportInput,
     high_water_mark: i64,
     limit: usize,
+    exhausted: bool,
 ) -> Result<ExportPage> {
-    let more_by_count = events.len() > limit;
-    let mut exported: Vec<ExportCommit> = Vec::new();
-    let mut payload_bytes = 0;
-    let mut truncated_by_bytes = false;
-    for (sequence, recorded_at, event_index, event_count, payload) in events.into_iter().take(limit)
-    {
-        if payload_bytes > 0 && payload_bytes + payload.len() > MAX_EXPORT_PAGE_BYTES {
-            truncated_by_bytes = true;
-            break;
-        }
+    // Group the fetched events by commit, then pack whole commits: apply
+    // requires complete commits (event index 0 and the full event count), so a
+    // page boundary must fall between commits. The first commit is always
+    // carried even when it alone exceeds the event or byte budget, so a page
+    // always makes progress.
+    let mut grouped: Vec<(ExportCommit, usize)> = Vec::new();
+    for (sequence, recorded_at, event_index, event_count, payload) in events {
         let record = serde_json::from_str::<ExportRecord>(&payload)?;
         validate_record_scope(&record, &input.tenant_id, &input.person_id)?;
-        payload_bytes += payload.len();
-        if let Some(commit) = exported.last_mut().filter(|item| item.sequence == sequence) {
-            commit.records.push(record);
-        } else {
-            exported.push(ExportCommit {
-                sequence,
-                recorded_at,
-                event_count,
-                first_event_index: event_index,
-                records: vec![record],
-            });
+        match grouped
+            .last_mut()
+            .filter(|(commit, _)| commit.sequence == sequence)
+        {
+            Some((commit, bytes)) => {
+                commit.records.push(record);
+                *bytes += payload.len();
+            }
+            None => grouped.push((
+                ExportCommit {
+                    sequence,
+                    recorded_at,
+                    event_count,
+                    first_event_index: event_index,
+                    records: vec![record],
+                },
+                payload.len(),
+            )),
         }
     }
-    let complete = !more_by_count && !truncated_by_bytes;
+    let total_commits = grouped.len();
+    let mut exported: Vec<ExportCommit> = Vec::new();
+    let mut payload_bytes = 0usize;
+    let mut packed_events = 0usize;
+    for (commit, bytes) in grouped {
+        let fits = exported.is_empty()
+            || (packed_events + commit.records.len() <= limit
+                && payload_bytes + bytes <= MAX_EXPORT_PAGE_BYTES);
+        if !fits {
+            break;
+        }
+        packed_events += commit.records.len();
+        payload_bytes += bytes;
+        exported.push(commit);
+    }
+    let complete = exhausted && exported.len() == total_commits;
     let (next_after_commit, next_after_event_index) =
         exported
             .last()
@@ -440,28 +521,17 @@ impl MemoryDb {
              ORDER BY c.sequence, e.event_index LIMIT ?6",
         )?;
         validate_export_cursor(&transaction, &input)?;
-        let rows = statement.query_map(
-            params![
-                input.tenant_id.0,
-                input.person_id.0,
-                input.after_commit,
-                input.after_event_index,
-                high_water_mark,
-                (limit + 1) as i64
-            ],
-            |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, Timestamp>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, String>(4)?,
-                ))
-            },
-        )?;
-        let events = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        // Apply rejects partial commits, so grow the fetch cap until the
+        // trailing commit is whole: only commit boundaries may end a page.
+        let mut cap = (limit + 1) as i64;
+        let mut events = fetch_export_events(&mut statement, &input, high_water_mark, cap)?;
+        while !trailing_fetch_commit_is_whole(&events) {
+            cap = cap.saturating_mul(2);
+            events = fetch_export_events(&mut statement, &input, high_water_mark, cap)?;
+        }
+        let exhausted = (events.len() as i64) < cap;
         drop(statement);
-        let export_page = pack_export_page(events, &input, high_water_mark, limit)?;
+        let export_page = pack_export_page(events, &input, high_water_mark, limit, exhausted)?;
         transaction.commit()?;
         Ok(export_page)
     }

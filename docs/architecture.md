@@ -8,7 +8,7 @@ zkr separates durable truth from rebuildable retrieval machinery.
 2. Evidence points to an exact source revision and span.
 3. A claim records a fact, profile fact, preference, task, skill, or recommendation with valid time, recorded time, a tier (`short_term`, `long_term`, `archive`), and a processing state (`pending`, `processed`, `blocked`).
 4. Claim-evidence links say whether evidence supports or contradicts a claim.
-5. Profile entries expose one deterministic stable/current projection per scoped claim predicate; their key and value are derived from a live profile-fact claim.
+5. Profile entries expose one deterministic stable/current projection per scoped claim predicate; their key and value are derived from a live profile-fact claim. `profile-pager` renders those live projections into a timestamped markdown one-pager without becoming a second source of truth.
 6. Daily Reviews are cited text artifacts, not a second source of truth.
 7. A legal-state matrix guards every claim: only (`short_term`/`long_term`/`archive`) × (`accepted`/`superseded`/`retracted`) × (`pending`/`processed`/`blocked`) combinations that the schema defines as legal can be inserted or updated.
 
@@ -20,7 +20,7 @@ Schema upgrades run as ordered immediate transactions. The v5-to-v6 upgrade rebu
 
 ## Retrieval
 
-Keyword and vector results are projections over durable records. A retrieval pack is bounded and contains citations plus explicit gaps. Before extraction, a pack can cite a live source or evidence record directly; after an accepted claim has supporting evidence, retrieval returns the claim without also emitting that supporting source. Contradicting evidence remains available as raw evidence until an explicit correction or supersession. A caller can answer from the pack, request more evidence, or say the memory is insufficient.
+Keyword and vector results are projections over durable records. Optional `remember` aliases are extra FTS tokens only; they never rewrite source text or excerpts. A retrieval pack is bounded and contains citations plus explicit gaps. Before extraction, a pack can cite a live source or evidence record directly; after an accepted claim has supporting evidence, retrieval returns the claim without also emitting that supporting source. Contradicting evidence remains available as raw evidence until an explicit correction or supersession. A caller can answer from the pack, request more evidence, or say the memory is insufficient.
 
 Summary nodes are local rebuildable projections over cited evidence. A leaf stores explicit evidence citations; a parent has exactly two adjacent children and derives its citations from them. `wake` selects a byte-bounded cover, preferring newer detail when it fits; `zoom` returns the immediate children. Deletion and correction mark affected nodes and ancestors stale. `rebuild` inserts a replacement for one stale range, never rewrites historical summary text. Summary nodes are excluded from export and apply, so each replica rebuilds them from its local authoritative evidence.
 
