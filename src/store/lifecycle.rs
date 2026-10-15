@@ -3,6 +3,7 @@ use super::export::{
 };
 use super::repair::{enqueue_projection_repair, enqueue_projection_repairs, record_operation};
 use super::summaries::invalidate_summaries_for_evidence;
+use super::utils::new_id;
 use super::*;
 
 impl MemoryDb {
@@ -17,6 +18,7 @@ impl MemoryDb {
     ) -> Result<Remembered> {
         require_scope(&input.tenant_id, &input.person_id)?;
         require_text("text", &input.text)?;
+        require_aliases(&input.aliases)?;
         if let Some(locator) = &locator {
             validate_transcript_locator(locator)?;
         }
@@ -109,7 +111,12 @@ impl MemoryDb {
         }
         transaction.execute(
             "INSERT INTO source_fts(source_id, tenant_id, person_id, content) VALUES(?1, ?2, ?3, ?4)",
-            params![source_id.0, input.tenant_id.0, input.person_id.0, input.text],
+            params![
+                source_id.0,
+                input.tenant_id.0,
+                input.person_id.0,
+                fts_content(&input.text, &input.aliases)
+            ],
         )?;
         transaction.execute(
             "INSERT INTO evidence(id, tenant_id, person_id, source_id, source_revision, quote, recorded_at) VALUES(?1, ?2, ?3, ?4, 1, ?5, ?6)",
@@ -639,6 +646,18 @@ impl MemoryDb {
         Ok(profile)
     }
 
+    pub fn profile_pager(&self, input: ProfilesInput) -> Result<ProfilePager> {
+        let generated_at = self
+            .connection
+            .query_row("SELECT unixepoch()", [], |row| row.get(0))?;
+        let entries = self.profiles(input)?;
+        Ok(ProfilePager {
+            markdown: render_profile_pager(generated_at, &entries),
+            generated_at,
+            entries,
+        })
+    }
+
     pub fn profiles(&self, input: ProfilesInput) -> Result<Vec<ProfileEntry>> {
         require_scope(&input.tenant_id, &input.person_id)?;
         let mut statement = self.connection.prepare(
@@ -652,13 +671,7 @@ impl MemoryDb {
             ],
             |row| {
                 let stability: String = row.get(3)?;
-                let stability = serde_json::from_str(&stability).map_err(|error| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        3,
-                        rusqlite::types::Type::Text,
-                        Box::new(error),
-                    )
-                })?;
+                let stability = serde_json::from_str(&stability).map_err(super::sql_json_error)?;
                 Ok(ProfileEntry {
                     id: ProfileEntryId(row.get(0)?),
                     tenant_id: input.tenant_id.clone(),
@@ -744,13 +757,7 @@ impl MemoryDb {
             ],
             |row| {
                 let json: String = row.get(3)?;
-                let evidence_ids = serde_json::from_str(&json).map_err(|error| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        3,
-                        rusqlite::types::Type::Text,
-                        Box::new(error),
-                    )
-                })?;
+                let evidence_ids = serde_json::from_str(&json).map_err(super::sql_json_error)?;
                 Ok(ReviewRecord {
                     id: DailyReviewId(row.get(0)?),
                     day: row.get(1)?,
@@ -857,10 +864,6 @@ pub(super) fn validate_transcript_locator(locator: &TranscriptLocator) -> Result
         ));
     }
     Ok(())
-}
-
-fn new_id(transaction: &Transaction<'_>) -> Result<String> {
-    Ok(transaction.query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))?)
 }
 
 struct OldClaim {
@@ -1329,7 +1332,7 @@ fn build_deletion_records(
         )?));
     }
     if !profile_ids.is_empty() {
-        let profile_ids_json = serde_json::to_string(&profile_ids).unwrap();
+        let profile_ids_json = serde_json::to_string(&profile_ids)?;
         let mut stmt = transaction.prepare_cached(
             "SELECT id FROM profile_entries WHERE tenant_id = ?1 AND person_id = ?2 AND id IN (SELECT value FROM json_each(?3))"
         )?;
@@ -1360,4 +1363,24 @@ fn build_deletion_records(
         })
     }));
     Ok(records)
+}
+
+fn render_profile_pager(generated_at: Timestamp, entries: &[ProfileEntry]) -> String {
+    let mut markdown = format!("# Memory one-pager\n\nGenerated at unix {generated_at}.\n");
+    if entries.is_empty() {
+        markdown.push_str("\nNo live profile projections.\n");
+        return markdown;
+    }
+    markdown.push('\n');
+    for entry in entries {
+        let stability = match entry.stability {
+            ProfileStability::Stable => "stable",
+            ProfileStability::Current => "current",
+        };
+        markdown.push_str(&format!(
+            "- **{}** ({stability}, recorded {}): {}\n",
+            entry.key, entry.recorded_at, entry.value
+        ));
+    }
+    markdown
 }

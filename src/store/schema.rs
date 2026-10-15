@@ -417,16 +417,44 @@ fn ensure_column(
         return Err(Error::Invalid("invalid table or column identifier".into()));
     }
 
+    let alter_stmt = match (table, column, definition) {
+        ("sources", "ingestion_key", "TEXT") => "ALTER TABLE sources ADD COLUMN ingestion_key TEXT",
+        ("sources", "feature_flag", "TEXT") => "ALTER TABLE sources ADD COLUMN feature_flag TEXT",
+        ("sources", "origin_evidence_id", "TEXT") => {
+            "ALTER TABLE sources ADD COLUMN origin_evidence_id TEXT"
+        }
+        ("sources", "origin_claim_id", "TEXT") => {
+            "ALTER TABLE sources ADD COLUMN origin_claim_id TEXT"
+        }
+        ("claims", "tier", "TEXT NOT NULL DEFAULT 'long_term'") => {
+            "ALTER TABLE claims ADD COLUMN tier TEXT NOT NULL DEFAULT 'long_term'"
+        }
+        ("claims", "processing_state", "TEXT NOT NULL DEFAULT 'processed'") => {
+            "ALTER TABLE claims ADD COLUMN processing_state TEXT NOT NULL DEFAULT 'processed'"
+        }
+        ("claims", "kind", "TEXT NOT NULL DEFAULT 'fact'") => {
+            "ALTER TABLE claims ADD COLUMN kind TEXT NOT NULL DEFAULT 'fact'"
+        }
+        ("embeddings", "target_revision", "INTEGER NOT NULL DEFAULT 0") => {
+            "ALTER TABLE embeddings ADD COLUMN target_revision INTEGER NOT NULL DEFAULT 0"
+        }
+        ("embeddings", "created_at", "INTEGER NOT NULL DEFAULT 0") => {
+            "ALTER TABLE embeddings ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0"
+        }
+        _ => {
+            return Err(Error::Invalid(format!(
+                "unsupported column definition: {table} {column} {definition}"
+            )));
+        }
+    };
+
     let exists = transaction.query_row(
         "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2)",
         [table, column],
         |row| row.get::<_, bool>(0),
     )?;
     if !exists {
-        transaction.execute(
-            &format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"),
-            [],
-        )?;
+        transaction.execute(alter_stmt, [])?;
     }
     Ok(())
 }
@@ -479,12 +507,26 @@ fn validate_scope(
             "SELECT EXISTS(SELECT 1 FROM profile_entries p LEFT JOIN claims c ON c.id = p.claim_id AND c.tenant_id = p.tenant_id AND c.person_id = p.person_id WHERE c.id IS NULL OR c.kind != 'profile_fact' OR c.predicate != p.key OR c.value != p.value)",
         ));
     }
-    for (name, query) in checks {
-        if transaction.query_row(query, [], |row| row.get::<_, bool>(0))? {
+    if checks.is_empty() {
+        return Ok(());
+    }
+
+    let query = checks
+        .into_iter()
+        .map(|(name, q)| format!("SELECT '{name}' WHERE ({q})"))
+        .collect::<Vec<_>>()
+        .join(" UNION ALL ")
+        + " LIMIT 1";
+
+    let mut stmt = transaction.prepare_cached(&query)?;
+    match stmt.query_row([], |row| row.get::<_, String>(0)) {
+        Ok(name) => {
             return Err(Error::Invalid(format!(
                 "legacy {name} is inconsistent with schema invariants"
             )));
         }
+        Err(rusqlite::Error::QueryReturnedNoRows) => {}
+        Err(e) => return Err(e.into()),
     }
     Ok(())
 }
