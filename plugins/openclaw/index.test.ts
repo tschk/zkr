@@ -158,6 +158,234 @@ describe("zkr OpenClaw tools", () => {
     ).toHaveProperty("as_of");
   });
 
+  test("maps project memory, structured record, and dream tools to the zkr CLI contract", async () => {
+    const calls: unknown[][] = [];
+    const run = async (...args: unknown[]) => {
+      calls.push(args);
+      return { ok: true };
+    };
+    const options = { database: "test.db", tenant: "tenant", person: "person" };
+    const registered = tools(options, run as never);
+    const rememberProject = registered.find(
+      (tool) => tool.name === "zkr_remember_project",
+    );
+    const rememberProjectRecord = registered.find(
+      (tool) => tool.name === "zkr_remember_project_record",
+    );
+    const projectMemories = registered.find(
+      (tool) => tool.name === "zkr_project_memories",
+    );
+    const dream = registered.find((tool) => tool.name === "zkr_dream");
+
+    expect(rememberProject).toBeDefined();
+    expect(rememberProjectRecord).toBeDefined();
+    expect(projectMemories).toBeDefined();
+    expect(dream).toBeDefined();
+
+    await rememberProject!.execute("call-1", {
+      project: "Tofu",
+      category: "work",
+      categories: ["work", "launch"],
+      kind: "conversation",
+      text: "Launch status: planned",
+      captured_at: 10,
+      recorded_at: 10,
+      claim: {
+        predicate: "task:launch:status",
+        value: "planned",
+        kind: "task",
+        valid_from: 10,
+      },
+      embedding: {
+        vector: [0.1, 0.2],
+        model: "nomic-embed",
+        version: "v1",
+        normalization: "l2",
+        distance: "cosine",
+      },
+    });
+    await rememberProjectRecord!.execute("call-2", {
+      project: "Tofu",
+      categories: ["work", "roadmap"],
+      kind: "conversation",
+      text: "Launch work item",
+      captured_at: 10,
+      recorded_at: 10,
+      claim: {
+        predicate: "record:work_item:launch",
+        kind: "task",
+        valid_from: 10,
+      },
+      record: {
+        record_type: "work_item",
+        categories: ["milestone"],
+        fields: { title: "Launch", priority: 1 },
+        connections: [
+          {
+            relation: "blocked_by",
+            target: "cupboard:pairing",
+            weight_basis_points: 9000,
+            note: "Requires cupboard pairing first",
+          },
+        ],
+      },
+      embedding: {
+        vector: [0.3, 0.4],
+      },
+    });
+    await projectMemories!.execute("call-3", {
+      project: "Tofu",
+      projects: ["Tofu", "Cupboard"],
+      category: "work",
+      categories: ["work", "roadmap"],
+      all_categories: ["work"],
+      predicate: "record:work_item:launch",
+      record_type: "work_item",
+      relation: "blocked_by",
+      target: "cupboard:pairing",
+      where_fields: { priority: 1 },
+      connected_to: "cupboard:pairing",
+      max_hops: 2,
+      vector_query: "launch work item",
+      query_embedding: {
+        vector: [0.3, 0.4],
+        model: "nomic-embed",
+        version: "v1",
+      },
+      limit: 20,
+    });
+    await dream!.execute("call-4", {
+      model: "nomic-embed",
+      version: "v1",
+      min_similarity_basis_points: 7500,
+      limit: 15,
+    });
+
+    expect(
+      (rememberProject!.parameters as { properties: object }).properties,
+    ).toHaveProperty("categories");
+    expect(
+      (rememberProject!.parameters as { properties: object }).properties,
+    ).toHaveProperty("embedding");
+    expect(
+      (projectMemories!.parameters as { properties: object }).properties,
+    ).toMatchObject({
+      projects: expect.any(Object),
+      categories: expect.any(Object),
+      all_categories: expect.any(Object),
+      where_fields: expect.any(Object),
+      connected_to: expect.any(Object),
+      max_hops: expect.any(Object),
+      vector_query: expect.any(Object),
+      query_embedding: expect.any(Object),
+    });
+
+    expect(calls).toEqual([
+      [
+        "remember-project",
+        {
+          tenant_id: "tenant",
+          person_id: "person",
+          project: "Tofu",
+          category: "work",
+          categories: ["work", "launch"],
+          kind: "conversation",
+          text: "Launch status: planned",
+          captured_at: 10,
+          recorded_at: 10,
+          claim: {
+            predicate: "task:launch:status",
+            value: "planned",
+            kind: "task",
+            valid_from: 10,
+          },
+          embedding: {
+            vector: [0.1, 0.2],
+            model: "nomic-embed",
+            version: "v1",
+            normalization: "l2",
+            distance: "cosine",
+          },
+        },
+        options,
+      ],
+      [
+        "remember-project-record",
+        {
+          tenant_id: "tenant",
+          person_id: "person",
+          project: "Tofu",
+          categories: ["work", "roadmap"],
+          kind: "conversation",
+          text: "Launch work item",
+          captured_at: 10,
+          recorded_at: 10,
+          claim: {
+            predicate: "record:work_item:launch",
+            kind: "task",
+            valid_from: 10,
+          },
+          record: {
+            record_type: "work_item",
+            categories: ["milestone"],
+            fields: { title: "Launch", priority: 1 },
+            connections: [
+              {
+                relation: "blocked_by",
+                target: "cupboard:pairing",
+                weight_basis_points: 9000,
+                note: "Requires cupboard pairing first",
+              },
+            ],
+          },
+          embedding: {
+            vector: [0.3, 0.4],
+          },
+        },
+        options,
+      ],
+      [
+        "project-memories",
+        {
+          tenant_id: "tenant",
+          person_id: "person",
+          project: "Tofu",
+          projects: ["Tofu", "Cupboard"],
+          category: "work",
+          categories: ["work", "roadmap"],
+          all_categories: ["work"],
+          predicate: "record:work_item:launch",
+          record_type: "work_item",
+          relation: "blocked_by",
+          target: "cupboard:pairing",
+          where_fields: { priority: 1 },
+          connected_to: "cupboard:pairing",
+          max_hops: 2,
+          vector_query: "launch work item",
+          query_embedding: {
+            vector: [0.3, 0.4],
+            model: "nomic-embed",
+            version: "v1",
+          },
+          limit: 20,
+        },
+        options,
+      ],
+      [
+        "dream",
+        {
+          tenant_id: "tenant",
+          person_id: "person",
+          model: "nomic-embed",
+          version: "v1",
+          min_similarity_basis_points: 7500,
+          limit: 15,
+        },
+        options,
+      ],
+    ]);
+  });
+
   test("rejects invalid runtime read windows", async () => {
     const manager = new ZkrMemoryHost({}, async () => ({}) as never).manager(
       "agent-1",

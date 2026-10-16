@@ -30,7 +30,7 @@ fn project_commands_store_dynamic_categories_and_connection_records() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("projects.db");
     let database = path.to_str().unwrap();
-    let claim = json!({"subject":"ignored", "predicate":"task:launch:status", "value":"planned", "kind":"task", "valid_from":10});
+    let claim = json!({"predicate":"task:launch:status", "value":"planned", "kind":"task", "valid_from":10});
     let remembered = run(
         database,
         "remember-project",
@@ -52,16 +52,44 @@ fn project_commands_store_dynamic_categories_and_connection_records() {
         json!({
             "tenant_id":"local", "person_id":"me", "project":"Tofu", "category":"AI-defined/connectors",
             "kind":"conversation", "text":"Launch is blocked by Cupboard pairing", "captured_at":11, "recorded_at":11,
-            "claim":{"subject":"ignored", "predicate":"task:pairing", "value":"replaced by record", "kind":"task", "valid_from":11}, "record":record,
+            "claim":{"predicate":"task:pairing", "kind":"task", "valid_from":11, "tier":"short_term"}, "record":record,
         }),
     );
     let mut other = query;
     other["category"] = json!("AI-defined/connectors");
     let records = run(database, "project-memories", other.clone());
+    assert_eq!(records[0]["record"], record);
     assert_eq!(
         serde_json::from_str::<Value>(records[0]["value"].as_str().unwrap()).unwrap(),
         record
     );
+    let by_target = run(
+        database,
+        "project-memories",
+        json!({
+            "tenant_id":"local", "person_id":"me",
+            "record_type":"work_item", "relation":"blocked_by", "target":"cupboard:pairing"
+        }),
+    );
+    assert_eq!(by_target.as_array().unwrap().len(), 1);
+    assert_eq!(by_target[0]["predicate"], "task:pairing");
+
+    let dream = run(
+        database,
+        "dream",
+        json!({"tenant_id":"local", "person_id":"me"}),
+    );
+    assert_eq!(dream["unresolved_targets"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        dream["unresolved_targets"][0]["target"],
+        json!("cupboard:pairing")
+    );
+    assert_eq!(dream["short_term_claims"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        dream["unsummarized_evidence_ids"].as_array().unwrap().len(),
+        2
+    );
+
     other["person_id"] = json!("someone_else");
     assert!(
         run(database, "project-memories", other)

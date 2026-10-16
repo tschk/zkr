@@ -26,6 +26,72 @@ const Claim = Type.Object(
   },
   { additionalProperties: false },
 );
+const ProjectClaim = Type.Object(
+  {
+    subject: Type.Optional(Type.String({ minLength: 1 })),
+    predicate: Type.String({ minLength: 1 }),
+    value: Type.String({ minLength: 1 }),
+    kind: ClaimKind,
+    valid_from: Timestamp,
+  },
+  { additionalProperties: false },
+);
+const ProjectRecordClaim = Type.Object(
+  {
+    subject: Type.Optional(Type.String({ minLength: 1 })),
+    predicate: Type.String({ minLength: 1 }),
+    value: Type.Optional(Type.String({ minLength: 1 })),
+    kind: ClaimKind,
+    valid_from: Timestamp,
+  },
+  { additionalProperties: false },
+);
+const ProjectConnection = Type.Object(
+  {
+    relation: Type.String({ minLength: 1 }),
+    target: Type.String({ minLength: 1 }),
+    weight_basis_points: Type.Optional(
+      Type.Integer({ minimum: 1, maximum: 10000 }),
+    ),
+    note: Type.Optional(Type.String({ minLength: 1 })),
+  },
+  { additionalProperties: false },
+);
+const ProjectRecord = Type.Object(
+  {
+    record_type: Type.String({ minLength: 1 }),
+    categories: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+    fields: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+    connections: Type.Optional(Type.Array(ProjectConnection)),
+  },
+  { additionalProperties: false },
+);
+const InlineEmbedding = Type.Object(
+  {
+    vector: Type.Array(Type.Number()),
+    model: Type.Optional(Type.String({ minLength: 1 })),
+    version: Type.Optional(Type.String({ minLength: 1 })),
+    normalization: Type.Optional(
+      Type.Union([Type.Literal("none"), Type.Literal("l2")]),
+    ),
+    distance: Type.Optional(
+      Type.Union([
+        Type.Literal("cosine"),
+        Type.Literal("dot"),
+        Type.Literal("euclidean"),
+      ]),
+    ),
+  },
+  { additionalProperties: false },
+);
+const QueryEmbedding = Type.Object(
+  {
+    vector: Type.Array(Type.Number()),
+    model: Type.String({ minLength: 1 }),
+    version: Type.String({ minLength: 1 }),
+  },
+  { additionalProperties: false },
+);
 
 function result(value: unknown) {
   return {
@@ -349,6 +415,128 @@ export function tools(
       ),
       async execute(_id: string, params: unknown) {
         return result(await run("review", scoped(params), options));
+      },
+    },
+    {
+      name: "zkr_remember_project",
+      label: "Remember project memory",
+      description:
+        "Store a cited fact or task under a project and one or more categories in zkr memory",
+      parameters: Type.Object(
+        {
+          project: Type.Optional(Type.String({ minLength: 1 })),
+          category: Type.Optional(Type.String({ minLength: 1 })),
+          categories: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+          kind: Type.Union([
+            Type.Literal("conversation"),
+            Type.Literal("screen"),
+            Type.Literal("audio"),
+            Type.Literal("document"),
+            Type.Literal("integration"),
+            Type.Literal("user_correction"),
+          ]),
+          text: Type.String({ minLength: 1 }),
+          captured_at: Timestamp,
+          recorded_at: Timestamp,
+          claim: ProjectClaim,
+          embedding: Type.Optional(InlineEmbedding),
+        },
+        { additionalProperties: false },
+      ),
+      async execute(_id: string, params: unknown) {
+        return result(
+          await run("remember-project" as never, scoped(params), options),
+        );
+      },
+    },
+    {
+      name: "zkr_remember_project_record",
+      label: "Remember project record",
+      description:
+        "Store a structured JSON record and optional connections under a project and one or more categories in zkr memory",
+      parameters: Type.Object(
+        {
+          project: Type.Optional(Type.String({ minLength: 1 })),
+          category: Type.Optional(Type.String({ minLength: 1 })),
+          categories: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+          kind: Type.Union([
+            Type.Literal("conversation"),
+            Type.Literal("screen"),
+            Type.Literal("audio"),
+            Type.Literal("document"),
+            Type.Literal("integration"),
+            Type.Literal("user_correction"),
+          ]),
+          text: Type.String({ minLength: 1 }),
+          captured_at: Timestamp,
+          recorded_at: Timestamp,
+          claim: ProjectRecordClaim,
+          record: ProjectRecord,
+          embedding: Type.Optional(InlineEmbedding),
+        },
+        { additionalProperties: false },
+      ),
+      async execute(_id: string, params: unknown) {
+        return result(
+          await run(
+            "remember-project-record" as never,
+            scoped(params),
+            options,
+          ),
+        );
+      },
+    },
+    {
+      name: "zkr_project_memories",
+      label: "Query project memories",
+      description:
+        "Query current cited project and category memories with optional field, graph, and vector filters",
+      parameters: Type.Object(
+        {
+          project: Type.Optional(Type.String({ minLength: 1 })),
+          projects: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+          category: Type.Optional(Type.String({ minLength: 1 })),
+          categories: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+          all_categories: Type.Optional(
+            Type.Array(Type.String({ minLength: 1 })),
+          ),
+          predicate: Type.Optional(Type.String({ minLength: 1 })),
+          record_type: Type.Optional(Type.String({ minLength: 1 })),
+          relation: Type.Optional(Type.String({ minLength: 1 })),
+          target: Type.Optional(Type.String({ minLength: 1 })),
+          where_fields: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+          connected_to: Type.Optional(Type.String({ minLength: 1 })),
+          max_hops: Type.Optional(Type.Integer({ minimum: 1, maximum: 4 })),
+          vector_query: Type.Optional(Type.String({ minLength: 1 })),
+          query_embedding: Type.Optional(QueryEmbedding),
+          limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+        },
+        { additionalProperties: false },
+      ),
+      async execute(_id: string, params: unknown) {
+        return result(
+          await run("project-memories" as never, scoped(params), options),
+        );
+      },
+    },
+    {
+      name: "zkr_dream",
+      label: "Dream across zkr memories",
+      description:
+        "Surface emergent categories, schemas, hubs, associative connections, unresolved targets, contradictions, short-term claims, and unsummarized or stale evidence",
+      parameters: Type.Object(
+        {
+          model: Type.Optional(Type.String({ minLength: 1 })),
+          version: Type.Optional(Type.String({ minLength: 1 })),
+          min_similarity_basis_points: Type.Optional(
+            Type.Integer({ minimum: 0, maximum: 10_000 }),
+          ),
+          limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+        },
+        { additionalProperties: false },
+      ),
+      async execute(_id: string, params: unknown) {
+        return result(await run("dream" as never, scoped(params), options));
       },
     },
   ];

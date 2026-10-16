@@ -13,8 +13,14 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-from agent.memory_provider import MemoryProvider
-from tools.registry import tool_error
+try:
+    from agent.memory_provider import MemoryProvider
+    from tools.registry import tool_error
+except ImportError:
+    MemoryProvider = object  # type: ignore[assignment,misc]
+
+    def tool_error(message: str) -> str:
+        return json.dumps({"error": message})
 
 logger = logging.getLogger(__name__)
 _MAX_QUEUE_ATTEMPTS = 3
@@ -115,6 +121,151 @@ SCHEMAS = [
             "recorded_at": {"type": "integer", "description": "Unix timestamp; defaults to now."},
         },
         ["day", "summary", "evidence_ids"],
+    ),
+    _schema(
+        "zkr_remember_project",
+        "Store a cited fact or task under a project and one or more categories.",
+        {
+            "project": {"type": "string", "description": "Exact project name; defaults to general."},
+            "category": {"type": "string", "description": "Exact category name."},
+            "categories": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Category labels to attach to this memory.",
+            },
+            "content": {"type": "string", "description": "The source evidence to remember."},
+            "predicate": {"type": "string", "description": "Stable relationship or property key."},
+            "value": {"type": "string", "description": "The normalized remembered value."},
+            "claim_kind": {
+                "type": "string",
+                "enum": ["fact", "profile_fact", "preference", "task", "skill", "recommendation"],
+            },
+            "source_kind": {
+                "type": "string",
+                "enum": ["conversation", "screen", "audio", "document", "integration", "user_correction"],
+            },
+            "embedding": {
+                "type": "object",
+                "properties": {
+                    "vector": {"type": "array", "items": {"type": "number"}},
+                    "model": {"type": "string"},
+                    "version": {"type": "string"},
+                    "normalization": {"type": "string", "enum": ["none", "l2"]},
+                    "distance": {"type": "string", "enum": ["cosine", "dot", "euclidean"]},
+                },
+                "required": ["vector"],
+                "additionalProperties": False,
+            },
+            "captured_at": {"type": "integer", "description": "Unix timestamp; defaults to now."},
+            "valid_from": {"type": "integer", "description": "Unix timestamp; defaults to captured_at."},
+            "recorded_at": {"type": "integer", "description": "Unix timestamp; defaults to now."},
+        },
+        ["content", "predicate"],
+    ),
+    _schema(
+        "zkr_remember_project_record",
+        "Store a structured JSON record with optional connections under a project and one or more categories.",
+        {
+            "project": {"type": "string", "description": "Exact project name; defaults to general."},
+            "category": {"type": "string", "description": "Exact category name."},
+            "categories": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Category labels to attach to this record.",
+            },
+            "content": {"type": "string", "description": "The source evidence to remember."},
+            "predicate": {"type": "string", "description": "Stable record predicate key."},
+            "record_type": {"type": "string", "description": "Record type name."},
+            "fields": {
+                "type": "object",
+                "description": "Arbitrary JSON object of record fields.",
+                "additionalProperties": True,
+            },
+            "connections": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "relation": {"type": "string"},
+                        "target": {"type": "string"},
+                        "weight_basis_points": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 10000,
+                        },
+                        "note": {"type": "string"},
+                    },
+                    "required": ["relation", "target"],
+                    "additionalProperties": False,
+                },
+            },
+            "embedding": {
+                "type": "object",
+                "properties": {
+                    "vector": {"type": "array", "items": {"type": "number"}},
+                    "model": {"type": "string"},
+                    "version": {"type": "string"},
+                    "normalization": {"type": "string", "enum": ["none", "l2"]},
+                    "distance": {"type": "string", "enum": ["cosine", "dot", "euclidean"]},
+                },
+                "required": ["vector"],
+                "additionalProperties": False,
+            },
+            "claim_kind": {
+                "type": "string",
+                "enum": ["fact", "profile_fact", "preference", "task", "skill", "recommendation"],
+            },
+            "source_kind": {
+                "type": "string",
+                "enum": ["conversation", "screen", "audio", "document", "integration", "user_correction"],
+            },
+            "captured_at": {"type": "integer", "description": "Unix timestamp; defaults to now."},
+            "valid_from": {"type": "integer", "description": "Unix timestamp; defaults to captured_at."},
+            "recorded_at": {"type": "integer", "description": "Unix timestamp; defaults to now."},
+        },
+        ["content", "predicate", "record_type"],
+    ),
+    _schema(
+        "zkr_project_memories",
+        "Query current cited project and category memories with optional field, graph, and vector filters.",
+        {
+            "project": {"type": "string"},
+            "projects": {"type": "array", "items": {"type": "string"}},
+            "category": {"type": "string"},
+            "categories": {"type": "array", "items": {"type": "string"}},
+            "all_categories": {"type": "array", "items": {"type": "string"}},
+            "predicate": {"type": "string"},
+            "record_type": {"type": "string"},
+            "relation": {"type": "string"},
+            "target": {"type": "string"},
+            "where_fields": {"type": "object", "additionalProperties": True},
+            "connected_to": {"type": "string"},
+            "max_hops": {"type": "integer", "minimum": 1, "maximum": 4},
+            "vector_query": {"type": "string"},
+            "query_embedding": {
+                "type": "object",
+                "properties": {
+                    "vector": {"type": "array", "items": {"type": "number"}},
+                    "model": {"type": "string"},
+                    "version": {"type": "string"},
+                },
+                "required": ["vector", "model", "version"],
+                "additionalProperties": False,
+            },
+            "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+        },
+        [],
+    ),
+    _schema(
+        "zkr_dream",
+        "Surface emergent categories, schemas, hubs, associative connections, unresolved targets, contradictions, short-term claims, and unsummarized or stale evidence.",
+        {
+            "model": {"type": "string"},
+            "version": {"type": "string"},
+            "min_similarity_basis_points": {"type": "integer", "minimum": 0, "maximum": 10000},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+        },
+        [],
     ),
 ]
 
@@ -257,6 +408,117 @@ class ZkrMemoryProvider(MemoryProvider):
                         "recorded_at": int(args.get("recorded_at", now)),
                     },
                 )
+            elif tool_name == "zkr_remember_project":
+                if not args.get("category") and not args.get("categories"):
+                    raise ValueError("category or categories is required")
+                captured_at = int(args.get("captured_at", now))
+                valid_from = int(args.get("valid_from", captured_at))
+                recorded_at = int(args.get("recorded_at", now))
+                content = str(args["content"])
+                payload: dict[str, Any] = {
+                    "project": args.get("project", "general"),
+                    "kind": args.get("source_kind", "conversation"),
+                    "text": content,
+                    "captured_at": captured_at,
+                    "recorded_at": recorded_at,
+                    "claim": {
+                        "subject": args.get("subject", "user"),
+                        "predicate": args["predicate"],
+                        "value": args.get("value", content),
+                        "kind": args.get("claim_kind", "fact"),
+                        "valid_from": valid_from,
+                    },
+                }
+                if "category" in args:
+                    payload["category"] = args["category"]
+                if "categories" in args:
+                    payload["categories"] = args["categories"]
+                if "embedding" in args:
+                    payload["embedding"] = args["embedding"]
+                result = self._run("remember-project", payload)
+            elif tool_name == "zkr_remember_project_record":
+                raw_record = args.get("record") if isinstance(args.get("record"), dict) else {}
+                if (
+                    not args.get("category")
+                    and not args.get("categories")
+                    and not raw_record.get("categories")
+                ):
+                    raise ValueError("category or categories is required")
+                captured_at = int(args.get("captured_at", now))
+                valid_from = int(args.get("valid_from", captured_at))
+                recorded_at = int(args.get("recorded_at", now))
+                content = str(args["content"])
+                record: dict[str, Any] = {
+                    "record_type": args.get("record_type") or raw_record["record_type"],
+                    "fields": args.get("fields", raw_record.get("fields", {})),
+                }
+                if "categories" in raw_record:
+                    record["categories"] = raw_record["categories"]
+                if "connections" in args:
+                    record["connections"] = args["connections"]
+                elif "connections" in raw_record:
+                    record["connections"] = raw_record["connections"]
+                payload = {
+                    "project": args.get("project", "general"),
+                    "kind": args.get("source_kind", "conversation"),
+                    "text": content,
+                    "captured_at": captured_at,
+                    "recorded_at": recorded_at,
+                    "claim": {
+                        "subject": args.get("subject", "user"),
+                        "predicate": args["predicate"],
+                        "value": args.get("value", content),
+                        "kind": args.get("claim_kind", "fact"),
+                        "valid_from": valid_from,
+                    },
+                    "record": record,
+                }
+                if "category" in args:
+                    payload["category"] = args["category"]
+                if "categories" in args:
+                    payload["categories"] = args["categories"]
+                if "embedding" in args:
+                    payload["embedding"] = args["embedding"]
+                result = self._run("remember-project-record", payload)
+            elif tool_name == "zkr_project_memories":
+                result = self._run(
+                    "project-memories",
+                    {
+                        key: args[key]
+                        for key in (
+                            "project",
+                            "projects",
+                            "category",
+                            "categories",
+                            "all_categories",
+                            "predicate",
+                            "record_type",
+                            "relation",
+                            "target",
+                            "where_fields",
+                            "connected_to",
+                            "max_hops",
+                            "vector_query",
+                            "query_embedding",
+                            "limit",
+                        )
+                        if key in args
+                    },
+                )
+            elif tool_name == "zkr_dream":
+                result = self._run(
+                    "dream",
+                    {
+                        key: args[key]
+                        for key in (
+                            "model",
+                            "version",
+                            "min_similarity_basis_points",
+                            "limit",
+                        )
+                        if key in args
+                    },
+                )
             else:
                 return tool_error(f"Unknown tool: {tool_name}")
             return json.dumps(result)
@@ -282,10 +544,10 @@ class ZkrMemoryProvider(MemoryProvider):
             "person_id": self._person_id,
         }
 
-    def _run(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def _run(self, command: str, payload: dict[str, Any]) -> Any:
         return self._run_payload(command, self._scope(payload))
 
-    def _run_payload(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def _run_payload(self, command: str, payload: dict[str, Any]) -> Any:
         try:
             completed = subprocess.run(
                 [self._binary, "--db", str(self._db), command],
@@ -301,7 +563,7 @@ class ZkrMemoryProvider(MemoryProvider):
             detail = completed.stderr.strip() or completed.stdout.strip() or "zkr command failed"
             raise RuntimeError(detail)
         result = json.loads(completed.stdout)
-        if not isinstance(result, dict):
+        if not isinstance(result, (dict, list)):
             raise RuntimeError("zkr returned a non-object result")
         return result
 

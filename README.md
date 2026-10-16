@@ -92,40 +92,75 @@ cargo test --all-features
 
 The systems and research that informed zkr are listed in [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md).
 
-## Project categories and structured connections
+## Project categories, structured connections, and associative dreaming
 
-`remember-project` groups an ordinary cited fact/task by exact project and category
-labels. Labels are caller-defined strings: an AI can create categories as needed
-without changing a built-in taxonomy. `project-memories` retrieves current,
-processed, non-archived facts with optional project/category filters.
+`remember-project` groups an ordinary cited fact/task under an optional `project`
+(defaulting to `"general"`) and one or more caller-defined category labels (`category`
+and/or `categories`). Labels are caller-defined strings: an AI can create categories as
+needed without changing a built-in taxonomy. Every stored project memory or structured
+record is automatically vectorized with built-in projection embeddings (`zkr-auto`), or
+callers can attach an inline `embedding` (`{ vector, model?, version?, normalization?, distance? }`)
+on `remember-project` and `remember-project-record` in a single call.
+
+`project-memories` retrieves current, processed, non-archived facts with optional
+`project`, `projects`, `category`, `categories` (match any), `all_categories` (match all),
+`predicate`, `record_type`, `relation`, `target`, `where_fields` (exact or array-membership
+matching on custom JSON record fields), bidirectional multi-hop graph traversal
+(`connected_to`, `max_hops`), and semantic vector ranking via `vector_query` or
+`query_embedding` (`{ vector, model, version }`).
 
 ```sh
-printf '%s' '{"tenant_id":"local","person_id":"me","project":"Tofu","category":"launch","kind":"conversation","text":"Launch is planned","captured_at":10,"recorded_at":10,"claim":{"subject":"ignored","predicate":"task:launch:status","value":"planned","kind":"task","valid_from":10}}' \
+printf '%s' '{"tenant_id":"local","person_id":"me","project":"Tofu","categories":["launch","work"],"kind":"conversation","text":"Launch is planned","captured_at":10,"recorded_at":10,"claim":{"predicate":"task:launch:status","value":"planned","kind":"task","valid_from":10}}' \
   | zkr --db ./memory.db remember-project
-printf '%s' '{"tenant_id":"local","person_id":"me","project":"Tofu","category":"launch","limit":20}' \
+printf '%s' '{"tenant_id":"local","person_id":"me","projects":["Tofu"],"all_categories":["launch"],"vector_query":"planned rollout","limit":20}' \
   | zkr --db ./memory.db project-memories
 ```
 
-`remember-project-record` adds a named JSON record with arbitrary fields and
-explicit connections. For example, add this `record` to the same input:
+`remember-project-record` adds a named JSON record with optional `categories`, arbitrary
+`fields`, and weighted/annotated `connections` (`weight_basis_points`, `note`).
+`claim.subject` and `claim.value` are filled automatically:
 
 ```json
 {
   "record_type": "work_item",
+  "categories": ["launch", "milestone"],
   "fields": { "state": "blocked", "priority": 2, "tags": ["connector"] },
-  "connections": [{ "relation": "blocked_by", "target": "cupboard:pairing" }]
+  "connections": [
+    {
+      "relation": "blocked_by",
+      "target": "cupboard:pairing",
+      "weight_basis_points": 9000,
+      "note": "Waiting on pairing flow"
+    }
+  ]
 }
 ```
 
 The record replaces `claim.value` with its complete serialized JSON value; the
-claim's predicate remains its stable logical record ID. Read it by deserializing
-`ProjectFact.value` as `ProjectRecord`. Use `correct` and new evidence to update
-that claim (pass the entire serialized record for structured records). Model-made
-categories and connections remain caller-supplied claims, not owner-confirmed
-facts, a schema migration, generated executable code, or execution authority.
-Connection targets are exact named subjects and may be unresolved; they are not
-foreign keys and never fetch another owner's memory. The source claim's normal
-scope, citation, feature gates, correction, deletion and replication apply.
+claim's predicate remains its stable logical record ID. `ProjectFact` includes
+`project`, `category`, `categories`, the raw `value` string, the parsed `record`
+(`ProjectRecord`), and optional `similarity_basis_points` when ranked by
+`vector_query` or `query_embedding`. Use `correct` and new evidence to update that
+claim (pass the entire serialized record for structured records).
+
+`dream` inspects live embeddings and structured connections to return an emergent
+organization and maintenance pack containing:
+- `categories`: emergent category summaries with vectorized `centroid` prototypes,
+- `category_suggestions`: vector-prototype category suggestions for categorizing related claims,
+- `schemas`: emergent `record_type` schemas (observed field names, relations, and categories),
+- `hubs`: high-degree graph hubs across incoming and outgoing connections,
+- `associations`: cross-category vector similarity, triadic closure (`2-hop` bridges), and shared-target associations,
+- `unresolved_targets`: connection targets that do not yet resolve to a live claim,
+- `contradictions`: conflicting live claims sharing a subject and predicate,
+- `short_term_claims`: `short_term` claims ready for `promote`,
+- `unsummarized_evidence_ids`: evidence ready for `nap`, and
+- `stale_summary_ids`: summary nodes marked stale and ready for `rebuild`.
+
+Model-made categories and connections remain caller-supplied claims, not
+owner-confirmed facts, a schema migration, generated executable code, or execution
+authority. Connection targets are exact named subjects and may be unresolved; they
+are not foreign keys and never fetch another owner's memory. The source claim's
+normal scope, citation, feature gates, correction, deletion and replication apply.
 Records are limited to 16 KiB, 64 fields and 64 connections; reads retain ZKR's
-usual count and byte bounds. No schema migration or new dependency is required.
-The APIs organize memory; they do not schedule or execute tasks.
+usual count and byte bounds. No schema migration or new dependency is required. The
+APIs organize memory; they do not schedule or execute tasks.

@@ -2,7 +2,7 @@ use serde::de::DeserializeOwned;
 use serde_json::json;
 use std::{env, io::Read, process::ExitCode};
 use zkr::{
-    ApplyInput, ArchiveInput, ClaimEvidence, CorrectInput, DeleteInput, EmbeddingInput,
+    ApplyInput, ArchiveInput, ClaimEvidence, CorrectInput, DeleteInput, DreamInput, EmbeddingInput,
     EvidenceLocatorInput, ExportInput, GetInput, MemoryDb, MergeInput, NapInput, ProfileInput,
     ProfilesInput, ProjectMemoryInput, ProjectQuery, ProjectRecordInput, ProjectionAuditInput,
     PromoteInput, RebuildInput, RememberRequest, RepairInput, ReviewInput, ReviewsInput,
@@ -11,7 +11,7 @@ use zkr::{
 
 const MAX_REQUEST_BYTES: u64 = 1024 * 1024;
 
-const HELP: &str = "zkr --db PATH COMMAND\n\nCommands (read one JSON object from stdin; write JSON to stdout):\n  remember     Store source evidence and an optional typed claim or transcript locator\n  locator      Read a live evidence transcript locator\n  search       Retrieve bounded, cited memory matches\n  wake         Retrieve cited raw matches plus a bounded summary-tree cover\n  zoom         Expand one live summary into its two children\n  nap          Store a cited leaf summary\n  merge        Merge two adjacent live summaries\n  rebuild      Replace one stale summary explicitly\n  get          Read one live cited memory by target\n  correct      Supersede a claim using new correction evidence\n  promote      Promote a short-term processed claim to long-term\n  archive      Move a processed claim to archive tier\n  link         Attach supporting or contradicting evidence to a claim\n  delete       Tombstone a source and propagate unavailable evidence\n  repair       Process projection repairs and report stale summaries\n  profile      Project a live profile-fact claim into the current profile\n  profiles     Retrieve bounded live profile entries\n  remember-project  Store a cited fact/task under an exact project/category\n  remember-project-record  Store a caller-defined cited JSON record and connections\n  project-memories  Read current cited project/category memories\n  review       Store a cited daily review without invoking an LLM\n  reviews      Retrieve bounded daily reviews\n  projections  List bounded stale or missing embedding inputs\n  embed        Upsert a rebuildable embedding projection\n  export       Read a bounded page from the scoped authoritative commit feed\n  apply        Materialize complete authoritative commits authored elsewhere\n  help         Show this help\n";
+const HELP: &str = "zkr --db PATH COMMAND\n\nCommands (read one JSON object from stdin; write JSON to stdout):\n  remember     Store source evidence and an optional typed claim or transcript locator\n  locator      Read a live evidence transcript locator\n  search       Retrieve bounded, cited memory matches\n  wake         Retrieve cited raw matches plus a bounded summary-tree cover\n  zoom         Expand one live summary into its two children\n  nap          Store a cited leaf summary\n  merge        Merge two adjacent live summaries\n  rebuild      Replace one stale summary explicitly\n  get          Read one live cited memory by target\n  correct      Supersede a claim using new correction evidence\n  promote      Promote a short-term processed claim to long-term\n  archive      Move a processed claim to archive tier\n  link         Attach supporting or contradicting evidence to a claim\n  delete       Tombstone a source and propagate unavailable evidence\n  repair       Process projection repairs and report stale summaries\n  profile      Project a live profile-fact claim into the current profile\n  profiles     Retrieve bounded live profile entries\n  remember-project  Store a cited fact/task under an exact project/category\n  remember-project-record  Store a caller-defined cited JSON record and connections\n  project-memories  Read current cited project/category memories and connections\n  dream        Discover associative connections, unresolved targets, and consolidation candidates\n  review       Store a cited daily review without invoking an LLM\n  reviews      Retrieve bounded daily reviews\n  projections  List bounded stale or missing embedding inputs\n  embed        Upsert a rebuildable embedding projection\n  export       Read a bounded page from the scoped authoritative commit feed\n  apply        Materialize complete authoritative commits authored elsewhere\n  help         Show this help\n";
 
 fn main() -> ExitCode {
     match run() {
@@ -90,6 +90,7 @@ fn dispatch_command(
         "project-memories" => {
             serde_json::to_value(database.project_memories(read_json::<ProjectQuery>()?)?)?
         }
+        "dream" => serde_json::to_value(database.dream(read_json::<DreamInput>()?)?)?,
         "profiles" => serde_json::to_value(database.profiles(read_json::<ProfilesInput>()?)?)?,
         "review" => serde_json::to_value(database.store_review(read_json::<ReviewInput>()?)?)?,
         "reviews" => serde_json::to_value(database.reviews(read_json::<ReviewsInput>()?)?)?,

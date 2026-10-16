@@ -170,8 +170,10 @@ pub struct RememberRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct ClaimInput {
+    #[serde(default)]
     pub subject: String,
     pub predicate: String,
+    #[serde(default)]
     pub value: String,
     pub kind: ClaimKind,
     pub valid_from: Timestamp,

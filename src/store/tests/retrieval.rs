@@ -819,3 +819,316 @@ fn get_returns_not_found_for_missing_or_deleted_targets() {
     });
     assert!(matches!(result, Err(Error::NotFound)));
 }
+
+#[test]
+fn search_and_wake_recall_claims_by_subject_predicate_and_value_without_source_overlap() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+
+    let remembered = db
+        .remember(RememberInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            ingestion_key: None,
+            kind: SourceKind::Conversation,
+            text: "Plain raw note with no structured labels".into(),
+            captured_at: 10,
+            recorded_at: 10,
+            claim: Some(ClaimInput {
+                subject: r#"zkr:project:["Project Tofu","Neurobiology"]"#.into(),
+                predicate: "concept:hippocampal_consolidation".into(),
+                value: r#"{"record_type":"concept","fields":{"mechanism":"sharp_wave_ripples"},"connections":["neocortex_transfer"]}"#.into(),
+                kind: ClaimKind::Fact,
+                valid_from: 10,
+                tier: MemoryTier::LongTerm,
+                processing_state: MemoryProcessingState::Processed,
+            }),
+            feature_flag: None,
+        })
+        .unwrap();
+    let expected_claim = MemoryRef::Claim(remembered.claim_id.unwrap());
+
+    for query in [
+        "Neurobiology",
+        "Project Tofu",
+        "hippocampal_consolidation",
+        "hippocampal consolidation",
+        "sharp_wave_ripples",
+        "neocortex_transfer",
+        "record_type",
+    ] {
+        let found = db
+            .search(SearchInput {
+                tenant_id: TenantId("a".into()),
+                person_id: PersonId("sam".into()),
+                query: query.into(),
+                limit: 5,
+                query_embedding: None,
+                as_of: None,
+                enabled_features: Vec::new(),
+            })
+            .unwrap();
+        assert_eq!(
+            found.items.len(),
+            1,
+            "search failed to recall claim for query: {query}"
+        );
+        assert_eq!(found.items[0].memory, expected_claim);
+        assert_eq!(
+            found.items[0].evidence_ids,
+            vec![remembered.evidence_id.clone()]
+        );
+
+        let woke = db
+            .wake(WakeInput {
+                search: SearchInput {
+                    tenant_id: TenantId("a".into()),
+                    person_id: PersonId("sam".into()),
+                    query: query.into(),
+                    limit: 5,
+                    query_embedding: None,
+                    as_of: None,
+                    enabled_features: Vec::new(),
+                },
+                max_bytes: 1024,
+            })
+            .unwrap();
+        assert_eq!(
+            woke.retrieval.items.len(),
+            1,
+            "wake failed to recall claim for query: {query}"
+        );
+        assert_eq!(woke.retrieval.items[0].memory, expected_claim);
+    }
+}
+
+#[test]
+fn claim_lexical_fallback_enforces_scope_deletion_supersession_as_of_and_features() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+
+    // 1. Other tenant/person scope must not leak
+    db.remember(RememberInput {
+        tenant_id: TenantId("b".into()),
+        person_id: PersonId("sam".into()),
+        ingestion_key: None,
+        kind: SourceKind::Conversation,
+        text: "Unrelated raw text".into(),
+        captured_at: 10,
+        recorded_at: 10,
+        claim: Some(ClaimInput {
+            subject: r#"zkr:project:["Tofu","ScopedCategory"]"#.into(),
+            predicate: "concept:secret_pathway".into(),
+            value: r#"{"record_type":"concept","fields":{"note":"other_tenant_secret"}}"#.into(),
+            kind: ClaimKind::Fact,
+            valid_from: 10,
+            tier: MemoryTier::LongTerm,
+            processing_state: MemoryProcessingState::Processed,
+        }),
+        feature_flag: None,
+    })
+    .unwrap();
+    db.remember(RememberInput {
+        tenant_id: TenantId("a".into()),
+        person_id: PersonId("other".into()),
+        ingestion_key: None,
+        kind: SourceKind::Conversation,
+        text: "Unrelated raw text".into(),
+        captured_at: 10,
+        recorded_at: 10,
+        claim: Some(ClaimInput {
+            subject: r#"zkr:project:["Tofu","ScopedCategory"]"#.into(),
+            predicate: "concept:secret_pathway".into(),
+            value: r#"{"record_type":"concept","fields":{"note":"other_person_secret"}}"#.into(),
+            kind: ClaimKind::Fact,
+            valid_from: 10,
+            tier: MemoryTier::LongTerm,
+            processing_state: MemoryProcessingState::Processed,
+        }),
+        feature_flag: None,
+    })
+    .unwrap();
+
+    assert!(
+        db.search(SearchInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            query: "ScopedCategory secret_pathway".into(),
+            limit: 5,
+            query_embedding: None,
+            as_of: None,
+            enabled_features: Vec::new(),
+        })
+        .unwrap()
+        .items
+        .is_empty()
+    );
+
+    // 2. Feature flag gating on claim fallback
+    let gated = db
+        .remember(RememberInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            ingestion_key: None,
+            kind: SourceKind::Conversation,
+            text: "Opaque source text".into(),
+            captured_at: 10,
+            recorded_at: 10,
+            claim: Some(ClaimInput {
+                subject: r#"zkr:project:["Tofu","FeatureLab"]"#.into(),
+                predicate: "experiment:quantum_fold".into(),
+                value: r#"{"record_type":"experiment","fields":{"stage":"canary_only"}}"#.into(),
+                kind: ClaimKind::Fact,
+                valid_from: 10,
+                tier: MemoryTier::LongTerm,
+                processing_state: MemoryProcessingState::Processed,
+            }),
+            feature_flag: Some("canary".into()),
+        })
+        .unwrap();
+
+    assert!(
+        db.search(SearchInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            query: "quantum_fold canary_only".into(),
+            limit: 5,
+            query_embedding: None,
+            as_of: None,
+            enabled_features: Vec::new(),
+        })
+        .unwrap()
+        .items
+        .is_empty()
+    );
+
+    let gated_found = db
+        .search(SearchInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            query: "quantum_fold canary_only".into(),
+            limit: 5,
+            query_embedding: None,
+            as_of: None,
+            enabled_features: vec!["canary".into()],
+        })
+        .unwrap();
+    assert_eq!(gated_found.items.len(), 1);
+    assert_eq!(
+        gated_found.items[0].memory,
+        MemoryRef::Claim(gated.claim_id.unwrap())
+    );
+
+    // 3. Supersession / correction and bitemporal as_of
+    let v1 = db
+        .remember(RememberInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            ingestion_key: None,
+            kind: SourceKind::Conversation,
+            text: "Initial observation note".into(),
+            captured_at: 10,
+            recorded_at: 10,
+            claim: Some(ClaimInput {
+                subject: r#"zkr:project:["Tofu","Architecture"]"#.into(),
+                predicate: "component:storage_engine".into(),
+                value: r#"{"record_type":"decision","fields":{"engine":"legacy_btree"}}"#.into(),
+                kind: ClaimKind::Fact,
+                valid_from: 10,
+                tier: MemoryTier::LongTerm,
+                processing_state: MemoryProcessingState::Processed,
+            }),
+            feature_flag: None,
+        })
+        .unwrap();
+    let v1_claim_id = v1.claim_id.unwrap();
+
+    let v2 = db
+        .correct(CorrectInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            claim_id: v1_claim_id.clone(),
+            text: "Updated observation note".into(),
+            value: r#"{"record_type":"decision","fields":{"engine":"append_only_lsm"}}"#.into(),
+            valid_at: 20,
+            recorded_at: 20,
+        })
+        .unwrap();
+
+    // Live search must NOT return superseded claim value, and MUST return replacement value
+    assert!(
+        db.search(SearchInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            query: "legacy_btree".into(),
+            limit: 5,
+            query_embedding: None,
+            as_of: None,
+            enabled_features: Vec::new(),
+        })
+        .unwrap()
+        .items
+        .is_empty()
+    );
+    let live_v2 = db
+        .search(SearchInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            query: "append_only_lsm".into(),
+            limit: 5,
+            query_embedding: None,
+            as_of: None,
+            enabled_features: Vec::new(),
+        })
+        .unwrap();
+    assert_eq!(live_v2.items.len(), 1);
+    assert_eq!(
+        live_v2.items[0].memory,
+        MemoryRef::Claim(v2.claim_id.clone())
+    );
+
+    // Historical as_of search at t=15 must recall v1 and NOT v2
+    let as_of_15 = db
+        .search(SearchInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            query: "Architecture storage_engine".into(),
+            limit: 5,
+            query_embedding: None,
+            as_of: Some(TemporalQuery {
+                valid_at: 15,
+                recorded_at: 15,
+            }),
+            enabled_features: Vec::new(),
+        })
+        .unwrap();
+    assert_eq!(as_of_15.items.len(), 1);
+    assert_eq!(as_of_15.items[0].memory, MemoryRef::Claim(v1_claim_id));
+
+    // 4. Source deletion removes the claim from claim-text lexical fallback
+    db.delete_source(DeleteInput {
+        tenant_id: TenantId("a".into()),
+        person_id: PersonId("sam".into()),
+        source_id: v2.source_id,
+        deleted_at: 30,
+    })
+    .unwrap();
+    assert!(
+        db.search(SearchInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            query: "append_only_lsm".into(),
+            limit: 5,
+            query_embedding: None,
+            as_of: None,
+            enabled_features: Vec::new(),
+        })
+        .unwrap()
+        .items
+        .is_empty()
+    );
+}
