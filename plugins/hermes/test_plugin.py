@@ -57,7 +57,15 @@ class PluginTest(unittest.TestCase):
         self.assertEqual(calls[0][0], "review")
         self.assertIn("[evidence: e-1]", provider.prefetch("report style"))
         self.assertEqual({schema["name"] for schema in provider.get_tool_schemas()}, {
-            "zkr_search", "zkr_store", "zkr_correct", "zkr_delete", "zkr_reflect"
+            "zkr_search",
+            "zkr_store",
+            "zkr_correct",
+            "zkr_delete",
+            "zkr_reflect",
+            "zkr_remember_project",
+            "zkr_remember_project_record",
+            "zkr_project_memories",
+            "zkr_dream",
         })
 
     def test_configured_scope_cannot_be_overridden_by_tool_payload(self):
@@ -122,6 +130,200 @@ class PluginTest(unittest.TestCase):
                         },
                     },
                 )
+            ],
+        )
+
+    def test_project_and_dream_tool_mappings(self):
+        provider = plugin.ZkrMemoryProvider()
+        calls = []
+
+        def run(command, payload):
+            calls.append((command, payload))
+            return {"ok": True}
+
+        provider._run = run
+        provider.handle_tool_call(
+            "zkr_remember_project",
+            {
+                "categories": ["work", "launch"],
+                "content": "Launch status is planned",
+                "predicate": "task:launch:status",
+                "value": "planned",
+                "claim_kind": "task",
+                "embedding": {
+                    "vector": [0.1, 0.2],
+                    "model": "nomic-embed",
+                    "version": "v1",
+                    "normalization": "l2",
+                    "distance": "cosine",
+                },
+                "captured_at": 100,
+                "valid_from": 90,
+                "recorded_at": 110,
+            },
+        )
+        provider.handle_tool_call(
+            "zkr_remember_project_record",
+            {
+                "project": "Tofu",
+                "category": "work",
+                "categories": ["work", "roadmap"],
+                "content": "Launch work item",
+                "predicate": "record:work_item:launch",
+                "record_type": "work_item",
+                "fields": {"title": "Launch", "priority": 1},
+                "connections": [
+                    {
+                        "relation": "blocked_by",
+                        "target": "cupboard:pairing",
+                        "weight_basis_points": 9000,
+                        "note": "Requires cupboard pairing first",
+                    }
+                ],
+                "embedding": {"vector": [0.3, 0.4]},
+                "claim_kind": "task",
+                "captured_at": 120,
+                "valid_from": 120,
+                "recorded_at": 125,
+            },
+        )
+        provider.handle_tool_call(
+            "zkr_project_memories",
+            {
+                "project": "Tofu",
+                "projects": ["Tofu", "Cupboard"],
+                "category": "work",
+                "categories": ["work", "roadmap"],
+                "all_categories": ["work"],
+                "predicate": "record:work_item:launch",
+                "record_type": "work_item",
+                "relation": "blocked_by",
+                "target": "cupboard:pairing",
+                "where_fields": {"priority": 1},
+                "connected_to": "cupboard:pairing",
+                "max_hops": 2,
+                "vector_query": "launch work item",
+                "query_embedding": {
+                    "vector": [0.3, 0.4],
+                    "model": "nomic-embed",
+                    "version": "v1",
+                },
+                "limit": 25,
+            },
+        )
+        provider.handle_tool_call(
+            "zkr_dream",
+            {
+                "model": "nomic-embed",
+                "version": "v1",
+                "min_similarity_basis_points": 7500,
+                "limit": 10,
+            },
+        )
+        missing_category = json.loads(
+            provider.handle_tool_call(
+                "zkr_remember_project",
+                {
+                    "project": "Tofu",
+                    "content": "Missing category",
+                    "predicate": "task:missing",
+                },
+            )
+        )
+        self.assertEqual(missing_category, {"error": "zkr operation failed"})
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "remember-project",
+                    {
+                        "project": "general",
+                        "categories": ["work", "launch"],
+                        "kind": "conversation",
+                        "text": "Launch status is planned",
+                        "captured_at": 100,
+                        "recorded_at": 110,
+                        "claim": {
+                            "subject": "user",
+                            "predicate": "task:launch:status",
+                            "value": "planned",
+                            "kind": "task",
+                            "valid_from": 90,
+                        },
+                        "embedding": {
+                            "vector": [0.1, 0.2],
+                            "model": "nomic-embed",
+                            "version": "v1",
+                            "normalization": "l2",
+                            "distance": "cosine",
+                        },
+                    },
+                ),
+                (
+                    "remember-project-record",
+                    {
+                        "project": "Tofu",
+                        "category": "work",
+                        "categories": ["work", "roadmap"],
+                        "kind": "conversation",
+                        "text": "Launch work item",
+                        "captured_at": 120,
+                        "recorded_at": 125,
+                        "claim": {
+                            "subject": "user",
+                            "predicate": "record:work_item:launch",
+                            "value": "Launch work item",
+                            "kind": "task",
+                            "valid_from": 120,
+                        },
+                        "record": {
+                            "record_type": "work_item",
+                            "fields": {"title": "Launch", "priority": 1},
+                            "connections": [
+                                {
+                                    "relation": "blocked_by",
+                                    "target": "cupboard:pairing",
+                                    "weight_basis_points": 9000,
+                                    "note": "Requires cupboard pairing first",
+                                }
+                            ],
+                        },
+                        "embedding": {"vector": [0.3, 0.4]},
+                    },
+                ),
+                (
+                    "project-memories",
+                    {
+                        "project": "Tofu",
+                        "projects": ["Tofu", "Cupboard"],
+                        "category": "work",
+                        "categories": ["work", "roadmap"],
+                        "all_categories": ["work"],
+                        "predicate": "record:work_item:launch",
+                        "record_type": "work_item",
+                        "relation": "blocked_by",
+                        "target": "cupboard:pairing",
+                        "where_fields": {"priority": 1},
+                        "connected_to": "cupboard:pairing",
+                        "max_hops": 2,
+                        "vector_query": "launch work item",
+                        "query_embedding": {
+                            "vector": [0.3, 0.4],
+                            "model": "nomic-embed",
+                            "version": "v1",
+                        },
+                        "limit": 25,
+                    },
+                ),
+                (
+                    "dream",
+                    {
+                        "model": "nomic-embed",
+                        "version": "v1",
+                        "min_similarity_basis_points": 7500,
+                        "limit": 10,
+                    },
+                ),
             ],
         )
 

@@ -74,6 +74,25 @@ impl MemoryDb {
         )?;
         let mut seen = HashSet::new();
         lexical.retain(|target| seen.insert(target.clone()));
+        let lowered_query = input.query.to_lowercase();
+        let phrase_terms = [lowered_query];
+        if lexical.len() < candidate_limit as usize {
+            for target in self.claim_lexical_targets(
+                &input.tenant_id,
+                &input.person_id,
+                &phrase_terms,
+                candidate_limit.saturating_add(lexical.len() as u32),
+                input.as_of.as_ref(),
+                &input.enabled_features,
+            )? {
+                if seen.insert(target.clone()) {
+                    lexical.push(target);
+                    if lexical.len() >= candidate_limit as usize {
+                        break;
+                    }
+                }
+            }
+        }
         if lexical.len() < candidate_limit as usize {
             if let Some(token_query) = token_query {
                 for target in self.lexical_targets(
@@ -81,6 +100,26 @@ impl MemoryDb {
                     &input.person_id,
                     &token_query,
                     candidate_limit,
+                    input.as_of.as_ref(),
+                    &input.enabled_features,
+                )? {
+                    if seen.insert(target.clone()) {
+                        lexical.push(target);
+                        if lexical.len() >= candidate_limit as usize {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        if lexical.len() < candidate_limit as usize {
+            let terms = lexical_terms(&input.query);
+            if !terms.is_empty() && terms.as_slice() != phrase_terms {
+                for target in self.claim_lexical_targets(
+                    &input.tenant_id,
+                    &input.person_id,
+                    &terms,
+                    candidate_limit.saturating_add(lexical.len() as u32),
                     input.as_of.as_ref(),
                     &input.enabled_features,
                 )? {
@@ -169,6 +208,120 @@ impl MemoryDb {
                 Some(claim_id) => RetrievalTarget::Claim(ClaimId(claim_id)),
                 None => RetrievalTarget::Source(SourceId(source_id)),
             })
+        })?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    fn claim_lexical_targets(
+        &self,
+        tenant_id: &TenantId,
+        person_id: &PersonId,
+        terms: &[String],
+        candidate_limit: u32,
+        as_of: Option<&TemporalQuery>,
+        enabled_features: &[String],
+    ) -> Result<Vec<RetrievalTarget>> {
+        if terms.is_empty() || candidate_limit == 0 {
+            return Ok(Vec::new());
+        }
+        let terms_json =
+            serde_json::to_string(terms).map_err(|error| Error::Invalid(error.to_string()))?;
+        let feature_condition = if enabled_features.is_empty() {
+            "s.feature_flag IS NULL".to_string()
+        } else {
+            let placeholders = (5..5 + enabled_features.len())
+                .map(|i| format!("?{i}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("(s.feature_flag IS NULL OR s.feature_flag IN ({placeholders}))")
+        };
+        let as_of_feature_condition = if enabled_features.is_empty() {
+            "s.feature_flag IS NULL".to_string()
+        } else {
+            let placeholders = (7..7 + enabled_features.len())
+                .map(|i| format!("?{i}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("(s.feature_flag IS NULL OR s.feature_flag IN ({placeholders}))")
+        };
+        let (sql, mut values): (String, Vec<&dyn rusqlite::ToSql>) = match as_of {
+            None => (
+                format!(
+                    "SELECT id
+                     FROM (
+                         SELECT c.id AS id,
+                                c.recorded_from AS recorded_from,
+                                (
+                                    SELECT COUNT(*)
+                                    FROM json_each(?1) term
+                                    WHERE instr(lower(c.subject || ' ' || c.predicate || ' ' || c.value), term.value) > 0
+                                ) AS match_count
+                         FROM claims c
+                         JOIN claim_evidence ce ON ce.claim_id = c.id AND ce.tenant_id = c.tenant_id AND ce.person_id = c.person_id AND ce.relation = '\"supports\"'
+                         JOIN evidence e ON e.id = ce.evidence_id AND e.tenant_id = ce.tenant_id AND e.person_id = ce.person_id AND e.deleted_at IS NULL
+                         JOIN sources s ON s.id = e.source_id AND s.tenant_id = e.tenant_id AND s.person_id = e.person_id AND s.deleted_at IS NULL
+                         WHERE c.tenant_id = ?2
+                           AND c.person_id = ?3
+                           AND c.status = 'accepted'
+                           AND c.valid_until IS NULL
+                           AND c.recorded_until IS NULL
+                           AND c.tier IN ('short_term', 'long_term')
+                           AND c.processing_state = 'processed'
+                           AND {feature_condition}
+                         GROUP BY c.id, c.recorded_from, c.subject, c.predicate, c.value
+                     )
+                     WHERE match_count > 0
+                     ORDER BY match_count DESC, recorded_from DESC, id ASC
+                     LIMIT ?4"
+                ),
+                vec![&terms_json, &tenant_id.0, &person_id.0, &candidate_limit],
+            ),
+            Some(as_of) => (
+                format!(
+                    "SELECT id
+                     FROM (
+                         SELECT c.id AS id,
+                                c.recorded_from AS recorded_from,
+                                (
+                                    SELECT COUNT(*)
+                                    FROM json_each(?1) term
+                                    WHERE instr(lower(c.subject || ' ' || c.predicate || ' ' || c.value), term.value) > 0
+                                ) AS match_count
+                         FROM claims c
+                         JOIN claim_evidence ce ON ce.claim_id = c.id AND ce.tenant_id = c.tenant_id AND ce.person_id = c.person_id AND ce.relation = '\"supports\"'
+                         JOIN evidence e ON e.id = ce.evidence_id AND e.tenant_id = ce.tenant_id AND e.person_id = ce.person_id AND e.deleted_at IS NULL AND e.recorded_at <= ?5
+                         JOIN sources s ON s.id = e.source_id AND s.tenant_id = e.tenant_id AND s.person_id = e.person_id AND s.deleted_at IS NULL AND s.captured_at <= ?4 AND s.recorded_at <= ?5
+                         WHERE c.tenant_id = ?2
+                           AND c.person_id = ?3
+                           AND c.status IN ('accepted', 'superseded')
+                           AND c.valid_from <= ?4
+                           AND (c.valid_until IS NULL OR c.valid_until > ?4)
+                           AND c.recorded_from <= ?5
+                           AND (c.recorded_until IS NULL OR c.recorded_until > ?5)
+                           AND c.processing_state = 'processed'
+                           AND {as_of_feature_condition}
+                         GROUP BY c.id, c.recorded_from, c.subject, c.predicate, c.value
+                     )
+                     WHERE match_count > 0
+                     ORDER BY match_count DESC, recorded_from DESC, id ASC
+                     LIMIT ?6"
+                ),
+                vec![
+                    &terms_json,
+                    &tenant_id.0,
+                    &person_id.0,
+                    &as_of.valid_at,
+                    &as_of.recorded_at,
+                    &candidate_limit,
+                ],
+            ),
+        };
+        for feature in enabled_features {
+            values.push(feature);
+        }
+        let mut statement = self.connection.prepare(&sql)?;
+        let rows = statement.query_map(rusqlite::params_from_iter(values), |row| {
+            Ok(RetrievalTarget::Claim(ClaimId(row.get(0)?)))
         })?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
@@ -497,6 +650,17 @@ pub(super) fn lexical_queries(query: &str) -> (String, Option<String>) {
         .collect::<Vec<_>>();
     let tokens = (terms.len() > 1).then(|| terms.join(" OR "));
     (phrase, tokens)
+}
+
+fn lexical_terms(query: &str) -> Vec<String> {
+    let mut seen = HashSet::new();
+    query
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|term| !term.is_empty())
+        .map(str::to_lowercase)
+        .filter(|term| seen.insert(term.clone()))
+        .take(MAX_LEXICAL_TERMS)
+        .collect()
 }
 
 const MAX_LEXICAL_TERMS: usize = 32;

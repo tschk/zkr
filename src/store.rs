@@ -12,6 +12,7 @@ mod apply;
 mod embeddings;
 mod export;
 mod lifecycle;
+mod projects;
 mod repair;
 mod retrieval;
 mod schema;
@@ -19,6 +20,7 @@ mod summaries;
 mod utils;
 
 use embeddings::*;
+pub use projects::*;
 #[cfg(test)]
 use retrieval::MAX_EXCERPT_BYTES;
 
@@ -172,8 +174,10 @@ pub struct RememberRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct ClaimInput {
+    #[serde(default)]
     pub subject: String,
     pub predicate: String,
+    #[serde(default)]
     pub value: String,
     pub kind: ClaimKind,
     pub valid_from: Timestamp,
