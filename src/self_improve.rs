@@ -53,6 +53,7 @@ impl SelfImprove {
             recorded_at: now,
             claim: Some(claim),
             feature_flag: None,
+            aliases: Vec::new(),
         })
     }
 
@@ -219,5 +220,29 @@ mod tests {
         let lessons = improve.lessons("deploy", 5).unwrap();
         let set: HashSet<_> = lessons.iter().cloned().collect();
         assert_eq!(lessons.len(), set.len());
+    }
+
+    #[test]
+    fn record_returns_remembered_with_claim_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("memory.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut improve = SelfImprove::new(db, tenant_id, person_id);
+
+        let remembered = improve
+            .record("context", "action", "outcome", "lesson")
+            .unwrap();
+
+        assert!(remembered.claim_id.is_some());
+    }
+
+    #[test]
+    fn record_fails_with_invalid_tenant() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("memory.db")).unwrap();
+        let mut improve = SelfImprove::new(db, TenantId("".into()), PersonId("p1".into()));
+
+        let result = improve.record("context", "action", "outcome", "lesson");
+        assert!(result.is_err());
     }
 }

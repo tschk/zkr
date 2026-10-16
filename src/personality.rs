@@ -507,6 +507,7 @@ impl Personality {
             recorded_at: now,
             claim: Some(claim),
             feature_flag: Some(FEATURE_FLAG.into()),
+            aliases: Vec::new(),
         })?;
         Ok(())
     }
@@ -529,6 +530,7 @@ impl Personality {
             recorded_at: now,
             claim: None,
             feature_flag: Some(FEATURE_FLAG.into()),
+            aliases: Vec::new(),
         })?;
         // Derive signals from the new event.
         self.derive_signals(event)?;
@@ -732,6 +734,7 @@ impl Personality {
             recorded_at: now,
             claim: None,
             feature_flag: Some(FEATURE_FLAG.into()),
+            aliases: Vec::new(),
         })?;
         Ok(())
     }
@@ -790,6 +793,7 @@ impl Personality {
             recorded_at: now,
             claim: Some(claim),
             feature_flag: Some(FEATURE_FLAG.into()),
+            aliases: Vec::new(),
         })?;
         Ok(())
     }
@@ -902,6 +906,7 @@ impl Personality {
             recorded_at: now,
             claim: Some(claim),
             feature_flag: Some(FEATURE_FLAG.into()),
+            aliases: Vec::new(),
         })?;
         Ok(())
     }
@@ -947,6 +952,7 @@ impl Personality {
             recorded_at: now,
             claim: Some(claim),
             feature_flag: Some(FEATURE_FLAG.into()),
+            aliases: Vec::new(),
         })?;
         Ok(())
     }
@@ -1035,6 +1041,7 @@ impl Personality {
             recorded_at: now,
             claim: Some(claim),
             feature_flag: Some(FEATURE_FLAG.into()),
+            aliases: Vec::new(),
         })?;
         Ok(())
     }
@@ -1182,6 +1189,7 @@ impl Personality {
             recorded_at: now,
             claim: Some(claim),
             feature_flag: Some(FEATURE_FLAG.into()),
+            aliases: Vec::new(),
         })?;
         Ok(())
     }
@@ -1781,6 +1789,99 @@ mod tests {
     }
 
     #[test]
+    fn signal_summary_computes_all_metrics() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        // Let's set epoch so conversation velocity can be calculated.
+        personality.epoch = 10;
+
+        // Sequence of events to trigger all metrics:
+        // 1. Message from 'alice' at epoch 1
+        personality
+            .record_event(&ConversationEvent {
+                epoch: 1,
+                participant: "alice".into(),
+                event_kind: "message".into(),
+                content: "hello".into(),
+            })
+            .unwrap();
+
+        // 2. Message from 'bob' at epoch 3 (Latency for bob: 3 - 1 = 2)
+        personality
+            .record_event(&ConversationEvent {
+                epoch: 3,
+                participant: "bob".into(),
+                event_kind: "message".into(),
+                content: "hi alice".into(),
+            })
+            .unwrap();
+
+        // 3. Reaction from 'bob' at epoch 4
+        personality
+            .record_event(&ConversationEvent {
+                epoch: 4,
+                participant: "bob".into(),
+                event_kind: "reaction".into(),
+                content: "thumbsup".into(),
+            })
+            .unwrap();
+
+        // 4. Message from 'alice' at epoch 6 (Latency for alice: 6 - 3 = 3)
+        personality
+            .record_event(&ConversationEvent {
+                epoch: 6,
+                participant: "alice".into(),
+                event_kind: "message".into(),
+                content: "how are you?".into(),
+            })
+            .unwrap();
+
+        // 5. Typing from 'bob' at epoch 7.
+        // No message sent by 'bob' within 5 epochs (up to epoch 12).
+        personality
+            .record_event(&ConversationEvent {
+                epoch: 7,
+                participant: "bob".into(),
+                event_kind: "typing".into(),
+                content: "true".into(),
+            })
+            .unwrap();
+
+        // 6. Message from 'bob' at epoch 13 (Outside the 5 epoch window for typing without send)
+        // (Latency for bob: 13 - 6 = 7)
+        personality
+            .record_event(&ConversationEvent {
+                epoch: 13,
+                participant: "bob".into(),
+                event_kind: "message".into(),
+                content: "doing great!".into(),
+            })
+            .unwrap();
+
+        let summary = personality.signal_summary("bob");
+
+        assert_eq!(summary.participant, "bob");
+        assert_eq!(summary.message_count, 2); // epochs 3 and 13
+        assert_eq!(summary.reaction_count, 1); // epoch 4
+        assert_eq!(summary.typing_without_send, 1); // epoch 7
+
+        // Total messages: alice (2) + bob (2) = 4.
+        assert_eq!(summary.participation_share, 0.5); // 2 / 4
+
+        // Latency for bob (using windows(2) on all events, irrespective of type):
+        // (1 "alice" msg, 3 "bob" msg) -> 3 - 1 = 2
+        // (6 "alice" msg, 7 "bob" typing) -> 7 - 6 = 1
+        // (Avg: (2 + 1) / 2 = 1.5)
+        assert_eq!(summary.avg_response_latency_ms, Some(1.5));
+
+        // Conversation velocity: 4 total messages / max(1, 10) = 0.4
+        assert_eq!(summary.conversation_velocity, 0.4);
+    }
+
+    #[test]
     fn derives_conversation_velocity() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
@@ -1801,6 +1902,42 @@ mod tests {
         let summary = personality.signal_summary("user");
         assert!(summary.conversation_velocity > 0.0);
         assert_eq!(summary.message_count, 5);
+    }
+
+    #[test]
+    fn signal_summary_handles_empty_events() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let personality = Personality::new(db, tenant_id, person_id);
+
+        let summary = personality.signal_summary("user");
+        assert_eq!(summary.message_count, 0);
+        assert_eq!(summary.avg_response_latency_ms, None);
+        assert_eq!(summary.participation_share, 0.0);
+        assert_eq!(summary.conversation_velocity, 0.0);
+        assert_eq!(summary.typing_without_send, 0);
+        assert_eq!(summary.reaction_count, 0);
+    }
+
+    #[test]
+    fn signal_summary_computes_reaction_count() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        personality
+            .record_event(&ConversationEvent {
+                epoch: 1,
+                participant: "user".into(),
+                event_kind: "reaction".into(),
+                content: "👍".into(),
+            })
+            .unwrap();
+
+        let summary = personality.signal_summary("user");
+        assert_eq!(summary.reaction_count, 1);
     }
 
     #[test]
@@ -2710,6 +2847,17 @@ mod tests {
     }
 
     #[test]
+    fn observation_context_returns_empty_when_no_match() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let personality = Personality::new(db, tenant_id, person_id);
+
+        let context = personality.observation_context("nonexistent", 5).unwrap();
+        assert!(context.is_empty());
+    }
+
+    #[test]
     fn observation_context_filters_by_scope() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
@@ -2746,6 +2894,42 @@ mod tests {
         assert!(!context2.is_empty());
         assert!(context2[0].contains("thread-99"));
         assert!(context2[0].contains("interrupted"));
+    }
+
+    #[test]
+    fn observation_context_respects_limit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        for i in 0..3 {
+            personality
+                .record_finding(&ObservationFinding {
+                    scope: "thread-100".into(),
+                    finding: format!("finding {i}"),
+                    evidence: vec![],
+                    recommendation: None,
+                    severity: ObservationSeverity::Info,
+                })
+                .unwrap();
+        }
+
+        let context = personality.observation_context("thread-100", 2).unwrap();
+        assert_eq!(context.len(), 2);
+    }
+
+    #[test]
+    fn observation_context_propagates_db_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        // Use an empty TenantId to trigger a database validation error
+        let tenant_id = TenantId("".into());
+        let person_id = PersonId("p1".into());
+        let personality = Personality::new(db, tenant_id, person_id);
+
+        let result = personality.observation_context("thread-error", 5);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -2790,6 +2974,51 @@ mod tests {
         let context = personality.search_personality("hey help", 5).unwrap();
         assert_eq!(context.len(), 1);
         assert!(context[0].contains("hey can you help?"));
+    }
+
+    #[test]
+    fn record_event_updates_internal_state() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        let event = ConversationEvent {
+            epoch: 42,
+            participant: "alice".into(),
+            event_kind: "message".into(),
+            content: "hello world".into(),
+        };
+
+        personality.record_event(&event).unwrap();
+
+        assert_eq!(personality.recent_events.len(), 1);
+        let stored = &personality.recent_events[0];
+        assert_eq!(stored.epoch, 42);
+        assert_eq!(stored.participant, "alice");
+        assert_eq!(stored.event_kind, "message");
+        assert_eq!(stored.content, "hello world");
+    }
+
+    #[test]
+    fn record_event_propagates_db_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        // Use an empty TenantId, which makes db.remember fail validation
+        let tenant_id = TenantId("".into());
+        let person_id = PersonId("p1".into());
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        let event = ConversationEvent {
+            epoch: 1,
+            participant: "bob".into(),
+            event_kind: "message".into(),
+            content: "this should fail".into(),
+        };
+
+        let result = personality.record_event(&event);
+        assert!(result.is_err());
+        assert_eq!(personality.recent_events.len(), 1); // It is pushed before the db.remember call
     }
 
     #[test]
@@ -2855,6 +3084,66 @@ mod tests {
             .unwrap();
         assert!(augmented.contains("<personality_context>"));
         assert!(augmented.contains("professional"));
+    }
+
+    #[test]
+    fn augment_prompt_injects_multiple_contexts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        // Turn context
+        personality
+            .record_event(&ConversationEvent {
+                epoch: 1,
+                participant: "user".into(),
+                event_kind: "message".into(),
+                content: "hello query".into(),
+            })
+            .unwrap();
+
+        // TOM context
+        personality
+            .record_hypothesis(&MindHypothesis {
+                participant: "user".into(),
+                belief: "likes query".into(),
+                emotion: None,
+                goal: None,
+                predicted_reaction: None,
+                confidence_basis_points: 8000,
+                valid_until: None,
+            })
+            .unwrap();
+
+        // Persona context
+        personality
+            .store_persona(&PersonaBlueprint {
+                name: "test persona query".into(),
+                traits: vec![],
+                system_prompt: "test prompt".into(),
+                constraints: vec![],
+                citations: vec![],
+            })
+            .unwrap();
+
+        // Observation context
+        personality
+            .record_finding(&ObservationFinding {
+                scope: "query".into(),
+                finding: "user is nice".into(),
+                evidence: vec![],
+                recommendation: None,
+                severity: ObservationSeverity::Info,
+            })
+            .unwrap();
+
+        let augmented = personality.augment_prompt("query", "Base prompt.").unwrap();
+        assert!(augmented.contains("<personality_context>"));
+        assert!(augmented.contains("hello query"));
+        assert!(augmented.contains("likes query"));
+        assert!(augmented.contains("test persona query"));
+        assert!(augmented.contains("user is nice"));
     }
 
     #[test]
@@ -2943,6 +3232,62 @@ mod tests {
         let personality = Personality::new(db, tenant_id, person_id);
 
         let result = personality.search_personality("query", 5);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn voice_card_context_retrieves_inserted_mock_data() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut personality = Personality::new(db, tenant_id, person_id);
+
+        personality
+            .store_voice_card(&VoiceCard {
+                scope: "dev-team".into(),
+                version: 1,
+                register: "technical".into(),
+                humor: "dry".into(),
+                lexicon: vec!["refactor".into()],
+                banned_phrases: vec![],
+                roles: vec![],
+                taboos: vec![],
+                in_jokes: vec![],
+                group_norms: vec!["code review".into()],
+                confidence_basis_points: 8000,
+                supporting_event_epochs: vec![],
+                valid_from: 0,
+                valid_until: None,
+            })
+            .unwrap();
+
+        let context = personality.voice_card_context("dev-team", 5).unwrap();
+        assert_eq!(context.len(), 1);
+        assert!(context[0].contains("technical"));
+        assert!(context[0].contains("dev-team") || context[0].contains("norms"));
+    }
+
+    #[test]
+    fn voice_card_context_returns_empty_when_no_match() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let personality = Personality::new(db, tenant_id, person_id);
+
+        let context = personality.voice_card_context("missing-scope", 5).unwrap();
+        assert!(context.is_empty());
+    }
+
+    #[test]
+    fn voice_card_context_propagates_db_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        // Use an empty TenantId, which makes db.search fail validation
+        let tenant_id = TenantId("".into());
+        let person_id = PersonId("p1".into());
+        let personality = Personality::new(db, tenant_id, person_id);
+
+        let result = personality.voice_card_context("any-scope", 5);
         assert!(result.is_err());
     }
 
