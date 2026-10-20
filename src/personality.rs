@@ -497,18 +497,13 @@ impl Personality {
             tier: MemoryTier::ShortTerm,
             processing_state: MemoryProcessingState::Processed,
         };
-        self.db.remember(RememberInput {
-            tenant_id: self.tenant_id.clone(),
-            person_id: self.person_id.clone(),
-            ingestion_key: Some(format!("turn:{}", decision.epoch)),
-            kind: SourceKind::Conversation,
+        self.remember_inner(
+            format!("turn:{}", decision.epoch),
+            SourceKind::Conversation,
             text,
-            captured_at: now,
-            recorded_at: now,
-            claim: Some(claim),
-            feature_flag: Some(FEATURE_FLAG.into()),
-            aliases: Vec::new(),
-        })?;
+            now,
+            Some(claim),
+        )?;
         Ok(())
     }
 
@@ -520,18 +515,13 @@ impl Personality {
             "[epoch {}] {} {}: {}",
             event.epoch, event.event_kind, event.participant, event.content
         );
-        self.db.remember(RememberInput {
-            tenant_id: self.tenant_id.clone(),
-            person_id: self.person_id.clone(),
-            ingestion_key: Some(format!("event:{}:{}", event.epoch, nanos())),
-            kind: SourceKind::Conversation,
+        self.remember_inner(
+            format!("event:{}:{}", event.epoch, nanos()),
+            SourceKind::Conversation,
             text,
-            captured_at: now,
-            recorded_at: now,
-            claim: None,
-            feature_flag: Some(FEATURE_FLAG.into()),
-            aliases: Vec::new(),
-        })?;
+            now,
+            None,
+        )?;
         // Derive signals from the new event.
         self.derive_signals(event)?;
         Ok(())
@@ -721,21 +711,16 @@ impl Personality {
             "Signal {} for {} at epoch {}: {}",
             signal.signal_kind, signal.participant, signal.epoch, signal.value
         );
-        self.db.remember(RememberInput {
-            tenant_id: self.tenant_id.clone(),
-            person_id: self.person_id.clone(),
-            ingestion_key: Some(format!(
+        self.remember_inner(
+            format!(
                 "signal:{}:{}:{}",
                 signal.signal_kind, signal.participant, signal.epoch
-            )),
-            kind: SourceKind::Conversation,
+            ),
+            SourceKind::Conversation,
             text,
-            captured_at: now,
-            recorded_at: now,
-            claim: None,
-            feature_flag: Some(FEATURE_FLAG.into()),
-            aliases: Vec::new(),
-        })?;
+            now,
+            None,
+        )?;
         Ok(())
     }
 
@@ -783,18 +768,13 @@ impl Personality {
             tier: MemoryTier::LongTerm,
             processing_state: MemoryProcessingState::Processed,
         };
-        self.db.remember(RememberInput {
-            tenant_id: self.tenant_id.clone(),
-            person_id: self.person_id.clone(),
-            ingestion_key: Some(format!("voice_card:{}:{}", card.scope, card.version)),
-            kind: SourceKind::Integration,
+        self.remember_inner(
+            format!("voice_card:{}:{}", card.scope, card.version),
+            SourceKind::Integration,
             text,
-            captured_at: now,
-            recorded_at: now,
-            claim: Some(claim),
-            feature_flag: Some(FEATURE_FLAG.into()),
-            aliases: Vec::new(),
-        })?;
+            now,
+            Some(claim),
+        )?;
         Ok(())
     }
 
@@ -896,18 +876,13 @@ impl Personality {
             tier: MemoryTier::ShortTerm,
             processing_state: MemoryProcessingState::Processed,
         };
-        self.db.remember(RememberInput {
-            tenant_id: self.tenant_id.clone(),
-            person_id: self.person_id.clone(),
-            ingestion_key: Some(format!("tom:{}:{}", hyp.participant, nanos())),
-            kind: SourceKind::Conversation,
+        self.remember_inner(
+            format!("tom:{}:{}", hyp.participant, nanos()),
+            SourceKind::Conversation,
             text,
-            captured_at: now,
-            recorded_at: now,
-            claim: Some(claim),
-            feature_flag: Some(FEATURE_FLAG.into()),
-            aliases: Vec::new(),
-        })?;
+            now,
+            Some(claim),
+        )?;
         Ok(())
     }
 
@@ -939,21 +914,13 @@ impl Personality {
             tier: MemoryTier::LongTerm,
             processing_state: MemoryProcessingState::Processed,
         };
-        self.db.remember(RememberInput {
-            tenant_id: self.tenant_id.clone(),
-            person_id: self.person_id.clone(),
-            ingestion_key: Some(format!(
-                "calibration:{}:{}",
-                record.participant, record.epoch
-            )),
-            kind: SourceKind::Integration,
+        self.remember_inner(
+            format!("calibration:{}:{}", record.participant, record.epoch),
+            SourceKind::Integration,
             text,
-            captured_at: now,
-            recorded_at: now,
-            claim: Some(claim),
-            feature_flag: Some(FEATURE_FLAG.into()),
-            aliases: Vec::new(),
-        })?;
+            now,
+            Some(claim),
+        )?;
         Ok(())
     }
 
@@ -1031,18 +998,13 @@ impl Personality {
             tier: MemoryTier::LongTerm,
             processing_state: MemoryProcessingState::Processed,
         };
-        self.db.remember(RememberInput {
-            tenant_id: self.tenant_id.clone(),
-            person_id: self.person_id.clone(),
-            ingestion_key: Some(format!("persona:{}", persona.name)),
-            kind: SourceKind::Document,
+        self.remember_inner(
+            format!("persona:{}", persona.name),
+            SourceKind::Document,
             text,
-            captured_at: now,
-            recorded_at: now,
-            claim: Some(claim),
-            feature_flag: Some(FEATURE_FLAG.into()),
-            aliases: Vec::new(),
-        })?;
+            now,
+            Some(claim),
+        )?;
         Ok(())
     }
 
@@ -1179,18 +1141,13 @@ impl Personality {
             tier: MemoryTier::LongTerm,
             processing_state: MemoryProcessingState::Processed,
         };
-        self.db.remember(RememberInput {
-            tenant_id: self.tenant_id.clone(),
-            person_id: self.person_id.clone(),
-            ingestion_key: Some(format!("observation:{}:{}", finding.scope, nanos())),
-            kind: SourceKind::Integration,
+        self.remember_inner(
+            format!("observation:{}:{}", finding.scope, nanos()),
+            SourceKind::Integration,
             text,
-            captured_at: now,
-            recorded_at: now,
-            claim: Some(claim),
-            feature_flag: Some(FEATURE_FLAG.into()),
-            aliases: Vec::new(),
-        })?;
+            now,
+            Some(claim),
+        )?;
         Ok(())
     }
 
@@ -1228,6 +1185,29 @@ impl Personality {
     }
 
     // --- Internal ----------------------------------------------------------
+
+    fn remember_inner(
+        &mut self,
+        ingestion_key: String,
+        kind: SourceKind,
+        text: String,
+        now: i64,
+        claim: Option<ClaimInput>,
+    ) -> Result<()> {
+        self.db.remember(RememberInput {
+            tenant_id: self.tenant_id.clone(),
+            person_id: self.person_id.clone(),
+            ingestion_key: Some(ingestion_key),
+            kind,
+            text,
+            captured_at: now,
+            recorded_at: now,
+            claim,
+            feature_flag: Some(FEATURE_FLAG.into()),
+            aliases: Vec::new(),
+        })?;
+        Ok(())
+    }
 
     fn search_personality(&self, query: &str, limit: u32) -> Result<Vec<String>> {
         let pack = self.db.search(SearchInput {
