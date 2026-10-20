@@ -21,13 +21,15 @@ fn wake(db: &MemoryDb) -> WakePack {
     .unwrap()
 }
 
-#[test]
-fn summary_tree_wakes_zooms_stales_and_rebuilds() {
-    let mut db = MemoryDb {
-        connection: Connection::open_in_memory().unwrap(),
-    };
-    db.migrate().unwrap();
-    let (tenant_id, person_id) = scope();
+struct SummaryTree {
+    leaves: Vec<SummaryId>,
+    first_half: SummaryId,
+    second_half: SummaryId,
+    root: SummaryId,
+    source_ids: Vec<SourceId>,
+}
+
+fn build_summary_tree(db: &mut MemoryDb, tenant_id: &TenantId, person_id: &PersonId) -> SummaryTree {
     let remembered = (0..4)
         .map(|index| {
             let mut input = remember_raw("a", "sam", &format!("rollout item {index}"));
@@ -36,6 +38,7 @@ fn summary_tree_wakes_zooms_stales_and_rebuilds() {
             db.remember(input).unwrap()
         })
         .collect::<Vec<_>>();
+    let source_ids = remembered.iter().map(|m| m.source_id.clone()).collect();
     let leaves = remembered
         .iter()
         .enumerate()
@@ -81,41 +84,61 @@ fn summary_tree_wakes_zooms_stales_and_rebuilds() {
         })
         .unwrap()
         .summary_id;
-    assert_eq!(
-        wake(&db).summaries,
-        vec![
-            db.zoom(ZoomInput {
-                tenant_id: tenant_id.clone(),
-                person_id: person_id.clone(),
-                summary_id: root.clone()
-            })
-            .unwrap()
-            .summary
-        ]
-    );
+
+    SummaryTree {
+        leaves,
+        first_half,
+        second_half,
+        root,
+        source_ids,
+    }
+}
+
+#[test]
+fn test_summary_tree_zooms_into_children() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let (tenant_id, person_id) = scope();
+    let tree = build_summary_tree(&mut db, &tenant_id, &person_id);
+
     let zoom = db
         .zoom(ZoomInput {
-            tenant_id: tenant_id.clone(),
-            person_id: person_id.clone(),
-            summary_id: root.clone(),
+            tenant_id,
+            person_id,
+            summary_id: tree.root,
         })
         .unwrap();
     assert_eq!(zoom.children.len(), 2);
+}
+
+#[test]
+fn test_deleting_source_stales_dependent_summaries() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let (tenant_id, person_id) = scope();
+    let tree = build_summary_tree(&mut db, &tenant_id, &person_id);
+
     db.delete_source(DeleteInput {
         tenant_id: tenant_id.clone(),
         person_id: person_id.clone(),
-        source_id: remembered[0].source_id.clone(),
+        source_id: tree.source_ids[0].clone(),
         deleted_at: 100,
     })
     .unwrap();
+
     assert!(matches!(
         db.zoom(ZoomInput {
             tenant_id: tenant_id.clone(),
             person_id: person_id.clone(),
-            summary_id: root.clone(),
+            summary_id: tree.root.clone(),
         }),
         Err(Error::NotFound)
     ));
+
     assert_eq!(
         db.repair_projections(RepairInput {
             tenant_id: tenant_id.clone(),
@@ -126,45 +149,91 @@ fn summary_tree_wakes_zooms_stales_and_rebuilds() {
         .summaries_stale,
         3
     );
+}
+
+#[test]
+fn test_rebuilding_staled_summaries_restores_them() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let (tenant_id, person_id) = scope();
+    let tree = build_summary_tree(&mut db, &tenant_id, &person_id);
+
+    db.delete_source(DeleteInput {
+        tenant_id: tenant_id.clone(),
+        person_id: person_id.clone(),
+        source_id: tree.source_ids[0].clone(),
+        deleted_at: 100,
+    })
+    .unwrap();
+
     let replacement = db
         .remember(remember_raw("a", "sam", "rollout replacement"))
         .unwrap();
+
     let first_leaf = db
         .rebuild(RebuildInput {
             tenant_id: tenant_id.clone(),
             person_id: person_id.clone(),
-            summary_id: leaves[0].clone(),
+            summary_id: tree.leaves[0].clone(),
             summary: "item 0 corrected".into(),
             evidence_ids: vec![replacement.evidence_id],
             recorded_at: 101,
         })
         .unwrap()
         .summary_id;
+
     let rebuilt_half = db
         .rebuild(RebuildInput {
             tenant_id: tenant_id.clone(),
             person_id: person_id.clone(),
-            summary_id: first_half,
+            summary_id: tree.first_half,
             summary: "first half corrected".into(),
             evidence_ids: Vec::new(),
             recorded_at: 102,
         })
         .unwrap()
         .summary_id;
-    assert_ne!(first_leaf, leaves[0]);
+    assert_ne!(first_leaf, tree.leaves[0]);
+
     let rebuilt_root = db
         .rebuild(RebuildInput {
             tenant_id: tenant_id.clone(),
             person_id: person_id.clone(),
-            summary_id: root,
+            summary_id: tree.root,
             summary: "all fixed".into(),
             evidence_ids: Vec::new(),
             recorded_at: 103,
         })
         .unwrap()
         .summary_id;
-    assert_ne!(rebuilt_half, second_half);
+
+    assert_ne!(rebuilt_half, tree.second_half);
     assert_eq!(wake(&db).summaries[0].id, rebuilt_root);
+}
+
+#[test]
+fn test_summary_tree_wakes_top_level() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let (tenant_id, person_id) = scope();
+    let tree = build_summary_tree(&mut db, &tenant_id, &person_id);
+
+    assert_eq!(
+        wake(&db).summaries,
+        vec![
+            db.zoom(ZoomInput {
+                tenant_id: tenant_id.clone(),
+                person_id: person_id.clone(),
+                summary_id: tree.root.clone()
+            })
+            .unwrap()
+            .summary
+        ]
+    );
 }
 
 #[test]
