@@ -213,40 +213,35 @@ pub(super) fn claim_records_by_ids(
     let mut stmt = transaction.prepare(
         "SELECT claims.subject, claims.predicate, claims.value, claims.kind, claims.valid_from, claims.valid_until, claims.recorded_from, claims.recorded_until, claims.status, claims.tier, claims.processing_state, claims.id FROM claims JOIN json_each(?3) j ON claims.id = j.value WHERE claims.tenant_id = ?1 AND claims.person_id = ?2",
     )?;
-    stmt.query_map(
-        params![tenant_id.0, person_id.0, claim_ids_json],
-        |row| {
-            let kind: String = row.get(3)?;
-            let status: String = row.get(8)?;
-            let tier: String = row.get(9)?;
-            let processing_state: String = row.get(10)?;
-            let claim_id_str: String = row.get(11)?;
-            Ok(Claim {
-                id: ClaimId(claim_id_str),
-                tenant_id: tenant_id.clone(),
-                person_id: person_id.clone(),
-                subject: row.get(0)?,
-                predicate: row.get(1)?,
-                value: row.get(2)?,
-                kind: serde_json::from_str(&format!("\"{kind}\""))
-                    .map_err(super::sql_json_error)?,
-                valid_time: crate::TimeRange {
-                    from: row.get(4)?,
-                    until: row.get(5)?,
-                },
-                recorded_time: crate::TimeRange {
-                    from: row.get(6)?,
-                    until: row.get(7)?,
-                },
-                status: serde_json::from_str(&format!("\"{status}\""))
-                    .map_err(super::sql_json_error)?,
-                tier: serde_json::from_str(&format!("\"{tier}\""))
-                    .map_err(super::sql_json_error)?,
-                processing_state: serde_json::from_str(&format!("\"{processing_state}\""))
-                    .map_err(super::sql_json_error)?,
-            })
-        },
-    )?
+    stmt.query_map(params![tenant_id.0, person_id.0, claim_ids_json], |row| {
+        let kind: String = row.get(3)?;
+        let status: String = row.get(8)?;
+        let tier: String = row.get(9)?;
+        let processing_state: String = row.get(10)?;
+        let claim_id_str: String = row.get(11)?;
+        Ok(Claim {
+            id: ClaimId(claim_id_str),
+            tenant_id: tenant_id.clone(),
+            person_id: person_id.clone(),
+            subject: row.get(0)?,
+            predicate: row.get(1)?,
+            value: row.get(2)?,
+            kind: serde_json::from_str(&format!("\"{kind}\"")).map_err(super::sql_json_error)?,
+            valid_time: crate::TimeRange {
+                from: row.get(4)?,
+                until: row.get(5)?,
+            },
+            recorded_time: crate::TimeRange {
+                from: row.get(6)?,
+                until: row.get(7)?,
+            },
+            status: serde_json::from_str(&format!("\"{status}\""))
+                .map_err(super::sql_json_error)?,
+            tier: serde_json::from_str(&format!("\"{tier}\"")).map_err(super::sql_json_error)?,
+            processing_state: serde_json::from_str(&format!("\"{processing_state}\""))
+                .map_err(super::sql_json_error)?,
+        })
+    })?
     .collect::<std::result::Result<Vec<_>, _>>()
     .map_err(Error::from)
 }
