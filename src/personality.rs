@@ -1251,6 +1251,14 @@ mod tests {
         (TenantId("t1".into()), PersonId("p1".into()))
     }
 
+    fn setup_test_personality() -> (tempfile::TempDir, Personality) {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let personality = Personality::new(db, tenant_id, person_id);
+        (tmp, personality)
+    }
+
     // --- Validation tests --------------------------------------------------
 
     #[test]
@@ -1338,10 +1346,7 @@ mod tests {
 
     #[test]
     fn record_event_stores_in_memory_and_db() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         let event = ConversationEvent {
             epoch: 1,
@@ -1386,10 +1391,7 @@ mod tests {
 
     #[test]
     fn record_turn_decision_stores_evidence_and_claim() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         let decision = TurnDecision {
             epoch: 42,
@@ -1436,10 +1438,7 @@ mod tests {
 
     #[test]
     fn router_replies_to_direct_mention() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         let result = personality
             .route_event(&ConversationEvent {
@@ -1457,10 +1456,7 @@ mod tests {
 
     #[test]
     fn router_replies_to_commands() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         let result = personality
             .route_event(&ConversationEvent {
@@ -1477,10 +1473,7 @@ mod tests {
 
     #[test]
     fn router_replies_to_bang_commands() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         let result = personality
             .route_event(&ConversationEvent {
@@ -1497,10 +1490,7 @@ mod tests {
 
     #[test]
     fn router_stays_silent_for_unaddressed_messages() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         let result = personality
             .route_event(&ConversationEvent {
@@ -1517,10 +1507,7 @@ mod tests {
 
     #[test]
     fn router_reacts_to_reaction_events() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         let result = personality
             .route_event(&ConversationEvent {
@@ -1537,10 +1524,7 @@ mod tests {
 
     #[test]
     fn router_continues_pending_for_unknown_events() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         let result = personality
             .route_event(&ConversationEvent {
@@ -1557,10 +1541,7 @@ mod tests {
 
     #[test]
     fn router_replies_to_addressed_messages() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         let result = personality
             .route_event(&ConversationEvent {
@@ -1577,10 +1558,7 @@ mod tests {
 
     #[test]
     fn router_answers_questions() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         let result = personality
             .route_event(&ConversationEvent {
@@ -1696,10 +1674,7 @@ mod tests {
 
     #[test]
     fn router_returns_behavioral_context() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         // Store a voice card first.
         personality
@@ -1738,10 +1713,7 @@ mod tests {
 
     #[test]
     fn derives_response_latency_signal() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         // User sends message at epoch 1.
         personality
@@ -1769,10 +1741,7 @@ mod tests {
 
     #[test]
     fn derives_typing_without_send_signal() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         // User types but never sends.
         personality
@@ -1790,10 +1759,7 @@ mod tests {
 
     #[test]
     fn signal_summary_computes_all_metrics() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         // Let's set epoch so conversation velocity can be calculated.
         personality.epoch = 10;
@@ -1883,10 +1849,7 @@ mod tests {
 
     #[test]
     fn derives_conversation_velocity() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         for i in 1..=5 {
             personality
@@ -1906,10 +1869,7 @@ mod tests {
 
     #[test]
     fn signal_summary_handles_empty_events() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, personality) = setup_test_personality();
 
         let summary = personality.signal_summary("user");
         assert_eq!(summary.message_count, 0);
@@ -1922,10 +1882,7 @@ mod tests {
 
     #[test]
     fn signal_summary_computes_reaction_count() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         personality
             .record_event(&ConversationEvent {
@@ -1942,10 +1899,7 @@ mod tests {
 
     #[test]
     fn signal_summary_computes_participation_share() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         // 3 user messages, 1 agent message.
         personality
@@ -1990,10 +1944,7 @@ mod tests {
 
     #[test]
     fn risk_assessment_proceeds_for_safe_candidate() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         // Give the user some normal participation.
         for i in 1..=5 {
@@ -2014,10 +1965,7 @@ mod tests {
 
     #[test]
     fn risk_assessment_refines_for_aggressive_candidate() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         for i in 1..=5 {
             personality
@@ -2036,10 +1984,7 @@ mod tests {
 
     #[test]
     fn risk_assessment_flags_excluded_participant() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         // Only agent messages — user has 0 participation.
         for i in 1..=5 {
@@ -2059,10 +2004,7 @@ mod tests {
 
     #[test]
     fn risk_assessment_aborts_for_high_overall_risk() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         // Add 4 typing events for the user with spacing > 5 epochs
         for i in 1..=4 {
@@ -2098,10 +2040,7 @@ mod tests {
 
     #[test]
     fn risk_assessment_flags_high_churn_risk_for_low_velocity() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         for _ in 0..20 {
             personality.advance_epoch();
@@ -2122,10 +2061,7 @@ mod tests {
 
     #[test]
     fn risk_assessment_mid_tier_risks_for_low_participation() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         personality
             .record_event(&ConversationEvent {
@@ -2154,10 +2090,7 @@ mod tests {
 
     #[test]
     fn calibration_records_roundtrip() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         personality
             .record_calibration(&CalibrationRecord {
@@ -2197,10 +2130,7 @@ mod tests {
 
     #[test]
     fn record_calibration_multiple_epochs() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         personality
             .record_calibration(&CalibrationRecord {
@@ -2236,10 +2166,7 @@ mod tests {
 
     #[test]
     fn record_calibration_true_correct() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         personality
             .record_calibration(&CalibrationRecord {
@@ -2314,10 +2241,7 @@ mod tests {
 
     #[test]
     fn analyze_conversation_detects_imbalance() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         // 9 agent messages, 1 user message.
         for i in 1..=9 {
@@ -2351,10 +2275,7 @@ mod tests {
 
     #[test]
     fn analyze_conversation_detects_high_error_rate() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         for i in 1..=10 {
             personality
@@ -2379,10 +2300,7 @@ mod tests {
 
     #[test]
     fn analyze_conversation_detects_typing_without_send() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         for i in 1..=5 {
             personality
@@ -2406,10 +2324,7 @@ mod tests {
 
     #[test]
     fn analyze_conversation_produces_clean_health_for_balanced_convo() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         // Balanced conversation.
         for i in 1..=10 {
@@ -2430,10 +2345,7 @@ mod tests {
 
     #[test]
     fn analyze_conversation_detects_low_velocity() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         for _ in 0..100 {
             personality.advance_epoch();
@@ -2461,10 +2373,7 @@ mod tests {
 
     #[test]
     fn analyze_conversation_empty() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         let health = personality.analyze_conversation("thread-empty").unwrap();
         assert_eq!(health.total_turns, 0);
@@ -2479,10 +2388,7 @@ mod tests {
 
     #[test]
     fn records_and_retrieves_turn_decisions() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         personality
             .record_turn_decision(&TurnDecision {
@@ -2502,10 +2408,7 @@ mod tests {
 
     #[test]
     fn voice_cards_are_stored_and_retrieved() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         personality
             .store_voice_card(&VoiceCard {
@@ -2622,10 +2525,7 @@ mod tests {
 
     #[test]
     fn theory_of_mind_hypotheses_roundtrip() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         personality
             .record_hypothesis(&MindHypothesis {
@@ -2646,10 +2546,7 @@ mod tests {
 
     #[test]
     fn tom_context_retrieves_participant_context() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         personality
             .record_hypothesis(&MindHypothesis {
@@ -2671,10 +2568,7 @@ mod tests {
 
     #[test]
     fn tom_context_returns_empty_when_no_match() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         personality
             .record_hypothesis(&MindHypothesis {
@@ -2694,10 +2588,7 @@ mod tests {
 
     #[test]
     fn tom_context_respects_limit() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         for i in 0..5 {
             personality
@@ -2720,10 +2611,7 @@ mod tests {
 
     #[test]
     fn personas_are_stored_and_retrieved() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         personality
             .store_persona(&PersonaBlueprint {
@@ -2742,10 +2630,7 @@ mod tests {
 
     #[test]
     fn store_persona_serializes_all_fields() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         personality
             .store_persona(&PersonaBlueprint {
@@ -2772,10 +2657,7 @@ mod tests {
 
     #[test]
     fn store_persona_idempotency() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         let blueprint = PersonaBlueprint {
             name: "idempotent-bot".into(),
@@ -2815,10 +2697,7 @@ mod tests {
 
     #[test]
     fn observations_are_stored_and_retrieved() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         personality
             .record_finding(&ObservationFinding {
@@ -2837,10 +2716,7 @@ mod tests {
 
     #[test]
     fn observation_context_returns_empty() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, personality) = setup_test_personality();
 
         let context = personality.observation_context("thread-99", 5).unwrap();
         assert!(context.is_empty());
@@ -2848,10 +2724,7 @@ mod tests {
 
     #[test]
     fn observation_context_returns_empty_when_no_match() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, personality) = setup_test_personality();
 
         let context = personality.observation_context("nonexistent", 5).unwrap();
         assert!(context.is_empty());
@@ -2859,10 +2732,7 @@ mod tests {
 
     #[test]
     fn observation_context_filters_by_scope() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         personality
             .record_finding(&ObservationFinding {
@@ -2898,10 +2768,7 @@ mod tests {
 
     #[test]
     fn observation_context_respects_limit() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         for i in 0..3 {
             personality
@@ -2934,10 +2801,7 @@ mod tests {
 
     #[test]
     fn social_signals_are_stored() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         personality
             .record_signal(&SocialSignal {
@@ -2957,10 +2821,7 @@ mod tests {
 
     #[test]
     fn conversation_events_are_stored() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         personality
             .record_event(&ConversationEvent {
@@ -2978,10 +2839,7 @@ mod tests {
 
     #[test]
     fn record_event_updates_internal_state() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         let event = ConversationEvent {
             epoch: 42,
@@ -3023,10 +2881,7 @@ mod tests {
 
     #[test]
     fn personality_items_are_hidden_without_feature_flag() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         personality
             .store_persona(&PersonaBlueprint {
@@ -3055,10 +2910,7 @@ mod tests {
 
     #[test]
     fn augment_prompt_injects_context() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         personality
             .store_voice_card(&VoiceCard {
@@ -3088,10 +2940,7 @@ mod tests {
 
     #[test]
     fn augment_prompt_injects_multiple_contexts() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         // Turn context
         personality
@@ -3148,10 +2997,7 @@ mod tests {
 
     #[test]
     fn augment_prompt_returns_base_when_empty() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, personality) = setup_test_personality();
 
         let augmented = personality
             .augment_prompt("nothing", "Base prompt.")
@@ -3161,10 +3007,7 @@ mod tests {
 
     #[test]
     fn augment_prompt_combines_multiple_contexts() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         personality
             .store_voice_card(&VoiceCard {
@@ -3237,10 +3080,7 @@ mod tests {
 
     #[test]
     fn voice_card_context_retrieves_inserted_mock_data() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         personality
             .store_voice_card(&VoiceCard {
@@ -3269,10 +3109,7 @@ mod tests {
 
     #[test]
     fn voice_card_context_returns_empty_when_no_match() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, personality) = setup_test_personality();
 
         let context = personality.voice_card_context("missing-scope", 5).unwrap();
         assert!(context.is_empty());
@@ -3293,10 +3130,7 @@ mod tests {
 
     #[test]
     fn signal_summary_basic_metrics() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         // Advance epoch a few times to test conversation velocity
         personality.advance_epoch();
@@ -3365,10 +3199,7 @@ mod tests {
 
     #[test]
     fn signal_summary_latency() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         personality
             .record_event(&ConversationEvent {
@@ -3421,10 +3252,7 @@ mod tests {
 
     #[test]
     fn signal_summary_typing() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         // Typing event 1: followed by message within 5 epochs (should not count as typing without send)
         personality
@@ -3577,10 +3405,7 @@ mod tests {
 
     #[test]
     fn persona_context_retrieves_stored_persona() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         personality
             .store_persona(&PersonaBlueprint {
@@ -3600,10 +3425,7 @@ mod tests {
 
     #[test]
     fn persona_context_empty_when_no_match() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, personality) = setup_test_personality();
 
         let context = personality.persona_context("nonexistent", 5).unwrap();
         assert!(context.is_empty());
@@ -3646,10 +3468,7 @@ mod tests {
 
     #[test]
     fn record_hypothesis_persists_in_db() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         let hyp = MindHypothesis {
             participant: "alice".into(),
@@ -3724,10 +3543,7 @@ mod tests {
 
     #[test]
     fn turn_context_retrieves_recent_events() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
-        let (tenant_id, person_id) = test_ids();
-        let mut personality = Personality::new(db, tenant_id, person_id);
+        let (_tmp, mut personality) = setup_test_personality();
 
         personality
             .record_event(&ConversationEvent {
