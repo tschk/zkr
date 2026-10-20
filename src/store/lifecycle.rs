@@ -1310,12 +1310,8 @@ fn build_deletion_records(
         }),
     ];
 
-    let evidence_recs = super::export::evidence_records(
-        transaction,
-        tenant_id,
-        person_id,
-        evidence_ids,
-    )?;
+    let evidence_recs =
+        super::export::evidence_records(transaction, tenant_id, person_id, evidence_ids)?;
 
     for record in evidence_recs {
         let evidence_id = record.evidence.id.clone();
