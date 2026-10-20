@@ -1309,7 +1309,9 @@ fn build_deletion_records(
             deleted_at,
         }),
     ];
-    for evidence in super::export::evidence_records(transaction, tenant_id, person_id, evidence_ids)? {
+    for evidence in
+        super::export::evidence_records(transaction, tenant_id, person_id, evidence_ids)?
+    {
         let evidence_id = evidence.evidence.id.clone();
         records.push(ExportRecord::Evidence(evidence));
         records.push(ExportRecord::Deletion(DeletionRecord {
