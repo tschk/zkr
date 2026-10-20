@@ -981,7 +981,11 @@ fn archive_requires_valid_scope() {
         connection: Connection::open_in_memory().unwrap(),
     };
     db.migrate().unwrap();
-    let claim_id = db.remember(remember("a", "sam", "Acme")).unwrap().claim_id.unwrap();
+    let claim_id = db
+        .remember(remember("a", "sam", "Acme"))
+        .unwrap()
+        .claim_id
+        .unwrap();
     assert!(matches!(
         db.archive(ArchiveInput {
             tenant_id: TenantId("".into()),
@@ -999,7 +1003,11 @@ fn archive_requires_processed_state() {
         connection: Connection::open_in_memory().unwrap(),
     };
     db.migrate().unwrap();
-    let claim_id = db.remember(remember("a", "sam", "Acme")).unwrap().claim_id.unwrap();
+    let claim_id = db
+        .remember(remember("a", "sam", "Acme"))
+        .unwrap()
+        .claim_id
+        .unwrap();
     db.connection.execute("UPDATE claims SET processing_state = 'pending', status = 'pending', tier = 'short_term' WHERE id = ?1", [&claim_id.0]).unwrap();
     let result = db.archive(ArchiveInput {
         tenant_id: TenantId("a".into()),
@@ -1007,7 +1015,9 @@ fn archive_requires_processed_state() {
         claim_id: claim_id.clone(),
         recorded_at: 20,
     });
-    assert!(matches!(result, Err(Error::Invalid(msg)) if msg == "archive requires processing_state=processed"));
+    assert!(
+        matches!(result, Err(Error::Invalid(msg)) if msg == "archive requires processing_state=processed")
+    );
 }
 
 #[test]
@@ -1016,7 +1026,11 @@ fn archive_rejects_superseded_claim() {
         connection: Connection::open_in_memory().unwrap(),
     };
     db.migrate().unwrap();
-    let old_claim_id = db.remember(remember("a", "sam", "Acme")).unwrap().claim_id.unwrap();
+    let old_claim_id = db
+        .remember(remember("a", "sam", "Acme"))
+        .unwrap()
+        .claim_id
+        .unwrap();
 
     let _corrected = db
         .correct(CorrectInput {
@@ -1057,7 +1071,9 @@ fn archive_rejects_predating_recorded_at() {
         recorded_at: 9,
     });
 
-    assert!(matches!(result, Err(Error::Invalid(msg)) if msg == "archive recorded_at must not predate claim"));
+    assert!(
+        matches!(result, Err(Error::Invalid(msg)) if msg == "archive recorded_at must not predate claim")
+    );
 }
 
 #[test]
@@ -1102,12 +1118,16 @@ fn archive_updates_tier_to_archive() {
         person_id: PersonId("sam".into()),
         claim_id: claim_id.clone(),
         recorded_at: 11,
-    }).unwrap();
+    })
+    .unwrap();
 
-    let tier: String = db.connection.query_row(
-        "SELECT tier FROM claims WHERE id = ?1",
-        [&claim_id.0],
-        |row| row.get(0)
-    ).unwrap();
+    let tier: String = db
+        .connection
+        .query_row(
+            "SELECT tier FROM claims WHERE id = ?1",
+            [&claim_id.0],
+            |row| row.get(0),
+        )
+        .unwrap();
     assert_eq!(tier, "archive");
 }
