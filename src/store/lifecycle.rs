@@ -1310,12 +1310,7 @@ fn build_deletion_records(
             deleted_at,
         }),
     ];
-    let evidence_records_list = evidence_records(
-        transaction,
-        tenant_id,
-        person_id,
-        evidence_ids,
-    )?;
+    let evidence_records_list = evidence_records(transaction, tenant_id, person_id, evidence_ids)?;
     for record in evidence_records_list {
         let ev_id = record.evidence.id.clone();
         records.push(ExportRecord::Evidence(record));

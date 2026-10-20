@@ -29,7 +29,7 @@ fn main() -> Result<(), rusqlite::Error> {
             end_ms INTEGER,
             PRIMARY KEY (evidence_id, tenant_id, person_id)
         );
-        "
+        ",
     )?;
 
     let num_items = 1000;
