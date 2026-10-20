@@ -103,7 +103,7 @@ pub struct SignalSummary {
 // ---------------------------------------------------------------------------
 
 /// A versioned, evidence-cited voice card for a conversation scope.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct VoiceCard {
     pub scope: String,
     pub version: u64,
@@ -1708,16 +1708,10 @@ mod tests {
                 version: 1,
                 register: "professional".into(),
                 humor: "subtle".into(),
-                lexicon: vec![],
-                banned_phrases: vec![],
-                roles: vec![],
-                taboos: vec![],
-                in_jokes: vec![],
                 group_norms: vec!["be concise".into()],
                 confidence_basis_points: 8000,
                 supporting_event_epochs: vec![1],
-                valid_from: 0,
-                valid_until: None,
+                ..Default::default()
             })
             .unwrap();
 
@@ -2521,8 +2515,7 @@ mod tests {
                 group_norms: vec!["cite sources".into()],
                 confidence_basis_points: 7200,
                 supporting_event_epochs: vec![1, 2],
-                valid_from: 0,
-                valid_until: None,
+                ..Default::default()
             })
             .unwrap();
 
@@ -2549,12 +2542,10 @@ mod tests {
                 banned_phrases: vec!["hack".into()],
                 roles: vec!["reviewer".into()],
                 taboos: vec!["politics".into()],
-                in_jokes: vec![],
                 group_norms: vec!["write tests".into()],
                 confidence_basis_points: 9000,
                 supporting_event_epochs: vec![3, 4],
-                valid_from: 0,
-                valid_until: None,
+                ..Default::default()
             })
             .unwrap();
 
@@ -2605,16 +2596,9 @@ mod tests {
             version: 1,
             register: "formal".into(),
             humor: "none".into(),
-            lexicon: vec![],
-            banned_phrases: vec![],
-            roles: vec![],
-            taboos: vec![],
-            in_jokes: vec![],
-            group_norms: vec![],
             confidence_basis_points: 9000,
             supporting_event_epochs: vec![3, 4],
-            valid_from: 0,
-            valid_until: None,
+            ..Default::default()
         });
 
         assert!(matches!(result, Err(crate::store::Error::Invalid(_))));
@@ -3066,16 +3050,9 @@ mod tests {
                 version: 1,
                 register: "professional".into(),
                 humor: "subtle".into(),
-                lexicon: vec![],
-                banned_phrases: vec![],
-                roles: vec![],
-                taboos: vec![],
-                in_jokes: vec![],
                 group_norms: vec!["be concise".into()],
                 confidence_basis_points: 8000,
-                supporting_event_epochs: vec![],
-                valid_from: 0,
-                valid_until: None,
+                ..Default::default()
             })
             .unwrap();
 
@@ -3172,16 +3149,9 @@ mod tests {
                 version: 1,
                 register: "professional".into(),
                 humor: "subtle".into(),
-                lexicon: vec![],
-                banned_phrases: vec![],
-                roles: vec![],
-                taboos: vec![],
-                in_jokes: vec![],
                 group_norms: vec!["be concise".into()],
                 confidence_basis_points: 8000,
-                supporting_event_epochs: vec![],
-                valid_from: 0,
-                valid_until: None,
+                ..Default::default()
             })
             .unwrap();
 
@@ -3249,15 +3219,9 @@ mod tests {
                 register: "technical".into(),
                 humor: "dry".into(),
                 lexicon: vec!["refactor".into()],
-                banned_phrases: vec![],
-                roles: vec![],
-                taboos: vec![],
-                in_jokes: vec![],
                 group_norms: vec!["code review".into()],
                 confidence_basis_points: 8000,
-                supporting_event_epochs: vec![],
-                valid_from: 0,
-                valid_until: None,
+                ..Default::default()
             })
             .unwrap();
 
