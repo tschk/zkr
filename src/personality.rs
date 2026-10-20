@@ -497,19 +497,13 @@ impl Personality {
             tier: MemoryTier::ShortTerm,
             processing_state: MemoryProcessingState::Processed,
         };
-        self.db.remember(RememberInput {
-            tenant_id: self.tenant_id.clone(),
-            person_id: self.person_id.clone(),
-            ingestion_key: Some(format!("turn:{}", decision.epoch)),
-            kind: SourceKind::Conversation,
+        self.remember_feature(
+            format!("turn:{}", decision.epoch),
+            SourceKind::Conversation,
             text,
-            captured_at: now,
-            recorded_at: now,
-            claim: Some(claim),
-            feature_flag: Some(FEATURE_FLAG.into()),
-            aliases: Vec::new(),
-        })?;
-        Ok(())
+            now,
+            Some(claim),
+        )
     }
 
     /// Record a raw conversation event for signal derivation.
@@ -520,18 +514,13 @@ impl Personality {
             "[epoch {}] {} {}: {}",
             event.epoch, event.event_kind, event.participant, event.content
         );
-        self.db.remember(RememberInput {
-            tenant_id: self.tenant_id.clone(),
-            person_id: self.person_id.clone(),
-            ingestion_key: Some(format!("event:{}:{}", event.epoch, nanos())),
-            kind: SourceKind::Conversation,
+        self.remember_feature(
+            format!("event:{}:{}", event.epoch, nanos()),
+            SourceKind::Conversation,
             text,
-            captured_at: now,
-            recorded_at: now,
-            claim: None,
-            feature_flag: Some(FEATURE_FLAG.into()),
-            aliases: Vec::new(),
-        })?;
+            now,
+            None,
+        )?;
         // Derive signals from the new event.
         self.derive_signals(event)?;
         Ok(())
@@ -721,22 +710,16 @@ impl Personality {
             "Signal {} for {} at epoch {}: {}",
             signal.signal_kind, signal.participant, signal.epoch, signal.value
         );
-        self.db.remember(RememberInput {
-            tenant_id: self.tenant_id.clone(),
-            person_id: self.person_id.clone(),
-            ingestion_key: Some(format!(
+        self.remember_feature(
+            format!(
                 "signal:{}:{}:{}",
                 signal.signal_kind, signal.participant, signal.epoch
-            )),
-            kind: SourceKind::Conversation,
+            ),
+            SourceKind::Conversation,
             text,
-            captured_at: now,
-            recorded_at: now,
-            claim: None,
-            feature_flag: Some(FEATURE_FLAG.into()),
-            aliases: Vec::new(),
-        })?;
-        Ok(())
+            now,
+            None,
+        )
     }
 
     // --- Social norms (voice card) -----------------------------------------
@@ -783,19 +766,13 @@ impl Personality {
             tier: MemoryTier::LongTerm,
             processing_state: MemoryProcessingState::Processed,
         };
-        self.db.remember(RememberInput {
-            tenant_id: self.tenant_id.clone(),
-            person_id: self.person_id.clone(),
-            ingestion_key: Some(format!("voice_card:{}:{}", card.scope, card.version)),
-            kind: SourceKind::Integration,
+        self.remember_feature(
+            format!("voice_card:{}:{}", card.scope, card.version),
+            SourceKind::Integration,
             text,
-            captured_at: now,
-            recorded_at: now,
-            claim: Some(claim),
-            feature_flag: Some(FEATURE_FLAG.into()),
-            aliases: Vec::new(),
-        })?;
-        Ok(())
+            now,
+            Some(claim),
+        )
     }
 
     /// Retrieve the voice card context for a scope.
@@ -896,19 +873,13 @@ impl Personality {
             tier: MemoryTier::ShortTerm,
             processing_state: MemoryProcessingState::Processed,
         };
-        self.db.remember(RememberInput {
-            tenant_id: self.tenant_id.clone(),
-            person_id: self.person_id.clone(),
-            ingestion_key: Some(format!("tom:{}:{}", hyp.participant, nanos())),
-            kind: SourceKind::Conversation,
+        self.remember_feature(
+            format!("tom:{}:{}", hyp.participant, nanos()),
+            SourceKind::Conversation,
             text,
-            captured_at: now,
-            recorded_at: now,
-            claim: Some(claim),
-            feature_flag: Some(FEATURE_FLAG.into()),
-            aliases: Vec::new(),
-        })?;
-        Ok(())
+            now,
+            Some(claim),
+        )
     }
 
     /// Retrieve theory-of-mind context for a participant.
@@ -939,22 +910,13 @@ impl Personality {
             tier: MemoryTier::LongTerm,
             processing_state: MemoryProcessingState::Processed,
         };
-        self.db.remember(RememberInput {
-            tenant_id: self.tenant_id.clone(),
-            person_id: self.person_id.clone(),
-            ingestion_key: Some(format!(
-                "calibration:{}:{}",
-                record.participant, record.epoch
-            )),
-            kind: SourceKind::Integration,
+        self.remember_feature(
+            format!("calibration:{}:{}", record.participant, record.epoch),
+            SourceKind::Integration,
             text,
-            captured_at: now,
-            recorded_at: now,
-            claim: Some(claim),
-            feature_flag: Some(FEATURE_FLAG.into()),
-            aliases: Vec::new(),
-        })?;
-        Ok(())
+            now,
+            Some(claim),
+        )
     }
 
     // --- Personas: validation ----------------------------------------------
@@ -1031,19 +993,13 @@ impl Personality {
             tier: MemoryTier::LongTerm,
             processing_state: MemoryProcessingState::Processed,
         };
-        self.db.remember(RememberInput {
-            tenant_id: self.tenant_id.clone(),
-            person_id: self.person_id.clone(),
-            ingestion_key: Some(format!("persona:{}", persona.name)),
-            kind: SourceKind::Document,
+        self.remember_feature(
+            format!("persona:{}", persona.name),
+            SourceKind::Document,
             text,
-            captured_at: now,
-            recorded_at: now,
-            claim: Some(claim),
-            feature_flag: Some(FEATURE_FLAG.into()),
-            aliases: Vec::new(),
-        })?;
-        Ok(())
+            now,
+            Some(claim),
+        )
     }
 
     /// Retrieve persona context by name or traits.
@@ -1179,19 +1135,13 @@ impl Personality {
             tier: MemoryTier::LongTerm,
             processing_state: MemoryProcessingState::Processed,
         };
-        self.db.remember(RememberInput {
-            tenant_id: self.tenant_id.clone(),
-            person_id: self.person_id.clone(),
-            ingestion_key: Some(format!("observation:{}:{}", finding.scope, nanos())),
-            kind: SourceKind::Integration,
+        self.remember_feature(
+            format!("observation:{}:{}", finding.scope, nanos()),
+            SourceKind::Integration,
             text,
-            captured_at: now,
-            recorded_at: now,
-            claim: Some(claim),
-            feature_flag: Some(FEATURE_FLAG.into()),
-            aliases: Vec::new(),
-        })?;
-        Ok(())
+            now,
+            Some(claim),
+        )
     }
 
     /// Retrieve observability findings for a scope.
@@ -1228,6 +1178,29 @@ impl Personality {
     }
 
     // --- Internal ----------------------------------------------------------
+
+    fn remember_feature(
+        &mut self,
+        ingestion_key: String,
+        kind: SourceKind,
+        text: String,
+        now: Timestamp,
+        claim: Option<ClaimInput>,
+    ) -> Result<()> {
+        self.db.remember(RememberInput {
+            tenant_id: self.tenant_id.clone(),
+            person_id: self.person_id.clone(),
+            ingestion_key: Some(ingestion_key),
+            kind,
+            text,
+            captured_at: now,
+            recorded_at: now,
+            claim,
+            feature_flag: Some(FEATURE_FLAG.into()),
+            aliases: Vec::new(),
+        })?;
+        Ok(())
+    }
 
     fn search_personality(&self, query: &str, limit: u32) -> Result<Vec<String>> {
         let pack = self.db.search(SearchInput {
@@ -3337,6 +3310,8 @@ mod tests {
                 content: "how are you?".into(),
             })
             .unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
 
         personality
             .record_event(&ConversationEvent {
