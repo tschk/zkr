@@ -163,6 +163,54 @@ pub(super) fn claim_records(
         .collect()
 }
 
+pub(super) fn evidence_records(
+    transaction: &Transaction<'_>,
+    tenant_id: &TenantId,
+    person_id: &PersonId,
+    evidence_ids: &[EvidenceId],
+) -> Result<Vec<EvidenceRecord>> {
+    if evidence_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let json_ids = serde_json::to_string(evidence_ids)?;
+    let mut stmt = transaction.prepare_cached(
+        "SELECT e.id, e.source_id, e.source_revision, e.quote, e.recorded_at, e.deleted_at, l.device_id, l.provider, l.stream_id, l.segment_id, l.start_ms, l.end_ms FROM json_each(?1) j JOIN evidence e ON e.id = j.value AND e.tenant_id = ?2 AND e.person_id = ?3 LEFT JOIN evidence_locators l ON l.evidence_id = e.id AND l.tenant_id = e.tenant_id AND l.person_id = e.person_id"
+    )?;
+
+    let records = stmt.query_map(params![json_ids, tenant_id.0, person_id.0], |row| {
+        let device_id = row.get::<_, Option<String>>(6)?;
+        let locator = match device_id {
+            Some(device_id) => Some(TranscriptLocator {
+                device_id,
+                provider: row.get(7)?,
+                stream_id: row.get(8)?,
+                segment_id: row.get(9)?,
+                start_ms: row.get(10)?,
+                end_ms: row.get(11)?,
+            }),
+            None => None,
+        };
+        Ok(EvidenceRecord {
+            evidence: Evidence {
+                id: EvidenceId(row.get(0)?),
+                tenant_id: tenant_id.clone(),
+                person_id: person_id.clone(),
+                source_id: SourceId(row.get(1)?),
+                source_revision: row.get(2)?,
+                quote: row.get(3)?,
+                byte_range: None,
+                recorded_at: row.get(4)?,
+            },
+            locator,
+            deleted_at: row.get(5)?,
+        })
+    })?
+    .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    Ok(records)
+}
+
 pub(super) fn evidence_record(
     transaction: &Transaction<'_>,
     tenant_id: &TenantId,
