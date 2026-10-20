@@ -112,8 +112,7 @@ mod tests {
 
     #[test]
     fn records_a_lesson_successfully() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("memory.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut improve = SelfImprove::new(db, tenant_id, person_id);
 
@@ -156,8 +155,7 @@ mod tests {
 
     #[test]
     fn records_and_retrieves_lessons() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("memory.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut improve = SelfImprove::new(db, tenant_id, person_id);
 
@@ -177,8 +175,7 @@ mod tests {
 
     #[test]
     fn augment_injects_lessons_into_prompt() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("memory.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut improve = SelfImprove::new(db, tenant_id, person_id);
 
@@ -195,8 +192,7 @@ mod tests {
 
     #[test]
     fn augment_with_no_lessons_returns_base() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("memory.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let improve = SelfImprove::new(db, tenant_id, person_id);
 
@@ -208,8 +204,7 @@ mod tests {
 
     #[test]
     fn deduplicates_lessons_across_queries() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("memory.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut improve = SelfImprove::new(db, tenant_id, person_id);
 
@@ -224,8 +219,7 @@ mod tests {
 
     #[test]
     fn record_returns_remembered_with_claim_id() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("memory.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut improve = SelfImprove::new(db, tenant_id, person_id);
 
@@ -238,8 +232,7 @@ mod tests {
 
     #[test]
     fn record_fails_with_invalid_tenant() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("memory.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let mut improve = SelfImprove::new(db, TenantId("".into()), PersonId("p1".into()));
 
         let result = improve.record("context", "action", "outcome", "lesson");

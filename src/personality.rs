@@ -1338,8 +1338,7 @@ mod tests {
 
     #[test]
     fn record_event_stores_in_memory_and_db() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -1364,8 +1363,7 @@ mod tests {
 
     #[test]
     fn record_event_fails_on_invalid_db_input() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         // Use an empty TenantId to intentionally trigger a DB validation failure
         let invalid_tenant_id = TenantId("".into());
         let (_, person_id) = test_ids();
@@ -1386,8 +1384,7 @@ mod tests {
 
     #[test]
     fn record_turn_decision_stores_evidence_and_claim() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -1414,8 +1411,7 @@ mod tests {
 
     #[test]
     fn record_turn_decision_propagates_db_error() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         // Provide empty TenantId, causing db.remember to fail
         let tenant_id = TenantId("".into());
         let person_id = PersonId("p1".into());
@@ -1436,8 +1432,7 @@ mod tests {
 
     #[test]
     fn router_replies_to_direct_mention() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -1457,8 +1452,7 @@ mod tests {
 
     #[test]
     fn router_replies_to_commands() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -1477,8 +1471,7 @@ mod tests {
 
     #[test]
     fn router_replies_to_bang_commands() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -1497,8 +1490,7 @@ mod tests {
 
     #[test]
     fn router_stays_silent_for_unaddressed_messages() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -1517,8 +1509,7 @@ mod tests {
 
     #[test]
     fn router_reacts_to_reaction_events() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -1537,8 +1528,7 @@ mod tests {
 
     #[test]
     fn router_continues_pending_for_unknown_events() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -1557,8 +1547,7 @@ mod tests {
 
     #[test]
     fn router_replies_to_addressed_messages() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -1577,8 +1566,7 @@ mod tests {
 
     #[test]
     fn router_answers_questions() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -1597,8 +1585,7 @@ mod tests {
 
     #[test]
     fn router_enforces_consecutive_turn_limit() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id).with_rules(RouterRules {
             max_consecutive_turns: 2,
@@ -1626,8 +1613,7 @@ mod tests {
 
     #[test]
     fn router_resets_consecutive_turns_on_silence() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id).with_rules(RouterRules {
             max_consecutive_turns: 2,
@@ -1662,8 +1648,7 @@ mod tests {
 
     #[test]
     fn router_enforces_rate_limit() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id).with_rules(RouterRules {
             min_reply_interval: 5,
@@ -1696,8 +1681,7 @@ mod tests {
 
     #[test]
     fn router_returns_behavioral_context() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -1738,8 +1722,7 @@ mod tests {
 
     #[test]
     fn derives_response_latency_signal() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -1769,8 +1752,7 @@ mod tests {
 
     #[test]
     fn derives_typing_without_send_signal() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -1790,8 +1772,7 @@ mod tests {
 
     #[test]
     fn signal_summary_computes_all_metrics() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -1883,8 +1864,7 @@ mod tests {
 
     #[test]
     fn derives_conversation_velocity() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -1906,8 +1886,7 @@ mod tests {
 
     #[test]
     fn signal_summary_handles_empty_events() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let personality = Personality::new(db, tenant_id, person_id);
 
@@ -1922,8 +1901,7 @@ mod tests {
 
     #[test]
     fn signal_summary_computes_reaction_count() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -1942,8 +1920,7 @@ mod tests {
 
     #[test]
     fn signal_summary_computes_participation_share() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -1990,8 +1967,7 @@ mod tests {
 
     #[test]
     fn risk_assessment_proceeds_for_safe_candidate() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -2014,8 +1990,7 @@ mod tests {
 
     #[test]
     fn risk_assessment_refines_for_aggressive_candidate() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -2036,8 +2011,7 @@ mod tests {
 
     #[test]
     fn risk_assessment_flags_excluded_participant() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -2059,8 +2033,7 @@ mod tests {
 
     #[test]
     fn risk_assessment_aborts_for_high_overall_risk() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -2098,8 +2071,7 @@ mod tests {
 
     #[test]
     fn risk_assessment_flags_high_churn_risk_for_low_velocity() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -2122,8 +2094,7 @@ mod tests {
 
     #[test]
     fn risk_assessment_mid_tier_risks_for_low_participation() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -2154,8 +2125,7 @@ mod tests {
 
     #[test]
     fn calibration_records_roundtrip() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -2178,8 +2148,7 @@ mod tests {
 
     #[test]
     fn record_calibration_propagates_db_error() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let tenant_id = TenantId("".into());
         let person_id = PersonId("p1".into());
         let mut personality = Personality::new(db, tenant_id, person_id);
@@ -2197,8 +2166,7 @@ mod tests {
 
     #[test]
     fn record_calibration_multiple_epochs() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -2236,8 +2204,7 @@ mod tests {
 
     #[test]
     fn record_calibration_true_correct() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -2314,8 +2281,7 @@ mod tests {
 
     #[test]
     fn analyze_conversation_detects_imbalance() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -2351,8 +2317,7 @@ mod tests {
 
     #[test]
     fn analyze_conversation_detects_high_error_rate() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -2379,8 +2344,7 @@ mod tests {
 
     #[test]
     fn analyze_conversation_detects_typing_without_send() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -2406,8 +2370,7 @@ mod tests {
 
     #[test]
     fn analyze_conversation_produces_clean_health_for_balanced_convo() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -2430,8 +2393,7 @@ mod tests {
 
     #[test]
     fn analyze_conversation_detects_low_velocity() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -2461,8 +2423,7 @@ mod tests {
 
     #[test]
     fn analyze_conversation_empty() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -2479,8 +2440,7 @@ mod tests {
 
     #[test]
     fn records_and_retrieves_turn_decisions() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -2502,8 +2462,7 @@ mod tests {
 
     #[test]
     fn voice_cards_are_stored_and_retrieved() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -2534,8 +2493,7 @@ mod tests {
 
     #[test]
     fn store_voice_card_internals() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id.clone(), person_id.clone());
 
@@ -2594,8 +2552,7 @@ mod tests {
 
     #[test]
     fn store_voice_card_invalid_tenant() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let person_id = PersonId("p1".into());
         // Use an empty tenant_id to trigger a database validation error.
         let mut personality = Personality::new(db, TenantId("".into()), person_id);
@@ -2622,8 +2579,7 @@ mod tests {
 
     #[test]
     fn theory_of_mind_hypotheses_roundtrip() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -2646,8 +2602,7 @@ mod tests {
 
     #[test]
     fn tom_context_retrieves_participant_context() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -2671,8 +2626,7 @@ mod tests {
 
     #[test]
     fn tom_context_returns_empty_when_no_match() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -2694,8 +2648,7 @@ mod tests {
 
     #[test]
     fn tom_context_respects_limit() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -2720,8 +2673,7 @@ mod tests {
 
     #[test]
     fn personas_are_stored_and_retrieved() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -2742,8 +2694,7 @@ mod tests {
 
     #[test]
     fn store_persona_serializes_all_fields() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -2772,8 +2723,7 @@ mod tests {
 
     #[test]
     fn store_persona_idempotency() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -2795,8 +2745,7 @@ mod tests {
 
     #[test]
     fn store_persona_propagates_db_error() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let tenant_id = TenantId("".into());
         let person_id = PersonId("p1".into());
         let mut personality = Personality::new(db, tenant_id, person_id);
@@ -2815,8 +2764,7 @@ mod tests {
 
     #[test]
     fn observations_are_stored_and_retrieved() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -2837,8 +2785,7 @@ mod tests {
 
     #[test]
     fn observation_context_returns_empty() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let personality = Personality::new(db, tenant_id, person_id);
 
@@ -2848,8 +2795,7 @@ mod tests {
 
     #[test]
     fn observation_context_returns_empty_when_no_match() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let personality = Personality::new(db, tenant_id, person_id);
 
@@ -2859,8 +2805,7 @@ mod tests {
 
     #[test]
     fn observation_context_filters_by_scope() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -2898,8 +2843,7 @@ mod tests {
 
     #[test]
     fn observation_context_respects_limit() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -2921,8 +2865,7 @@ mod tests {
 
     #[test]
     fn observation_context_propagates_db_error() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         // Use an empty TenantId to trigger a database validation error
         let tenant_id = TenantId("".into());
         let person_id = PersonId("p1".into());
@@ -2934,8 +2877,7 @@ mod tests {
 
     #[test]
     fn social_signals_are_stored() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -2957,8 +2899,7 @@ mod tests {
 
     #[test]
     fn conversation_events_are_stored() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -2978,8 +2919,7 @@ mod tests {
 
     #[test]
     fn record_event_updates_internal_state() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -3002,8 +2942,7 @@ mod tests {
 
     #[test]
     fn record_event_propagates_db_error() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         // Use an empty TenantId, which makes db.remember fail validation
         let tenant_id = TenantId("".into());
         let person_id = PersonId("p1".into());
@@ -3023,8 +2962,7 @@ mod tests {
 
     #[test]
     fn personality_items_are_hidden_without_feature_flag() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -3055,8 +2993,7 @@ mod tests {
 
     #[test]
     fn augment_prompt_injects_context() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -3088,8 +3025,7 @@ mod tests {
 
     #[test]
     fn augment_prompt_injects_multiple_contexts() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -3148,8 +3084,7 @@ mod tests {
 
     #[test]
     fn augment_prompt_returns_base_when_empty() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let personality = Personality::new(db, tenant_id, person_id);
 
@@ -3161,8 +3096,7 @@ mod tests {
 
     #[test]
     fn augment_prompt_combines_multiple_contexts() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -3211,8 +3145,7 @@ mod tests {
 
     #[test]
     fn augment_prompt_propagates_error() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         // Use an empty TenantId, which makes db.search fail validation
         let tenant_id = TenantId("".into());
         let person_id = PersonId("p1".into());
@@ -3224,8 +3157,7 @@ mod tests {
 
     #[test]
     fn search_personality_propagates_db_error() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         // Use an empty TenantId, which makes db.search fail validation
         let tenant_id = TenantId("".into());
         let person_id = PersonId("p1".into());
@@ -3237,8 +3169,7 @@ mod tests {
 
     #[test]
     fn voice_card_context_retrieves_inserted_mock_data() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -3269,8 +3200,7 @@ mod tests {
 
     #[test]
     fn voice_card_context_returns_empty_when_no_match() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let personality = Personality::new(db, tenant_id, person_id);
 
@@ -3280,8 +3210,7 @@ mod tests {
 
     #[test]
     fn voice_card_context_propagates_db_error() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         // Use an empty TenantId, which makes db.search fail validation
         let tenant_id = TenantId("".into());
         let person_id = PersonId("p1".into());
@@ -3293,8 +3222,7 @@ mod tests {
 
     #[test]
     fn signal_summary_basic_metrics() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -3365,8 +3293,7 @@ mod tests {
 
     #[test]
     fn signal_summary_latency() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -3421,8 +3348,7 @@ mod tests {
 
     #[test]
     fn signal_summary_typing() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -3500,8 +3426,7 @@ mod tests {
 
     #[test]
     fn record_finding_formats_claim_correctly() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id.clone(), person_id.clone());
 
@@ -3556,8 +3481,7 @@ mod tests {
 
     #[test]
     fn record_finding_propagates_db_error() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let tenant_id = TenantId("".into()); // Invalid tenant_id causes db validation error
         let person_id = PersonId("p1".into());
         let mut personality = Personality::new(db, tenant_id, person_id);
@@ -3577,8 +3501,7 @@ mod tests {
 
     #[test]
     fn persona_context_retrieves_stored_persona() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -3600,8 +3523,7 @@ mod tests {
 
     #[test]
     fn persona_context_empty_when_no_match() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let personality = Personality::new(db, tenant_id, person_id);
 
@@ -3611,8 +3533,7 @@ mod tests {
 
     #[test]
     fn persona_context_propagates_db_error() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let tenant_id = TenantId("".into());
         let person_id = PersonId("p1".into());
         let personality = Personality::new(db, tenant_id, person_id);
@@ -3623,8 +3544,7 @@ mod tests {
 
     #[test]
     fn record_hypothesis_propagates_db_error() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         // Use an empty TenantId, which makes db.search fail validation
         let tenant_id = TenantId("".into());
         let person_id = PersonId("p1".into());
@@ -3646,8 +3566,7 @@ mod tests {
 
     #[test]
     fn record_hypothesis_persists_in_db() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -3672,8 +3591,7 @@ mod tests {
 
     #[test]
     fn record_signal_propagates_db_error() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         // Use an empty TenantId, which makes db.remember fail validation
         let tenant_id = TenantId("".into());
         let person_id = PersonId("p1".into());
@@ -3690,8 +3608,7 @@ mod tests {
 
     #[test]
     fn record_signal_stores_and_mutates_state() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id.clone(), person_id.clone());
 
@@ -3724,8 +3641,7 @@ mod tests {
 
     #[test]
     fn turn_context_retrieves_recent_events() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id, person_id);
 
@@ -3745,8 +3661,7 @@ mod tests {
 
     #[test]
     fn turn_context_propagates_db_error() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let db = MemoryDb::open_in_memory().unwrap();
         // Use an empty TenantId, which makes db.search fail validation
         let tenant_id = TenantId("".into());
         let person_id = PersonId("p1".into());
