@@ -497,41 +497,29 @@ impl Personality {
             tier: MemoryTier::ShortTerm,
             processing_state: MemoryProcessingState::Processed,
         };
-        self.db.remember(RememberInput {
-            tenant_id: self.tenant_id.clone(),
-            person_id: self.person_id.clone(),
-            ingestion_key: Some(format!("turn:{}", decision.epoch)),
-            kind: SourceKind::Conversation,
+        self.record_personality_fact(
+            format!("turn:{}", decision.epoch),
+            SourceKind::Conversation,
             text,
-            captured_at: now,
-            recorded_at: now,
-            claim: Some(claim),
-            feature_flag: Some(FEATURE_FLAG.into()),
-            aliases: Vec::new(),
-        })?;
+            Some(claim),
+        )?;
         Ok(())
     }
 
     /// Record a raw conversation event for signal derivation.
     pub fn record_event(&mut self, event: &ConversationEvent) -> Result<()> {
         self.recent_events.push(event.clone());
-        let now = now_seconds();
+        let _now = now_seconds();
         let text = format!(
             "[epoch {}] {} {}: {}",
             event.epoch, event.event_kind, event.participant, event.content
         );
-        self.db.remember(RememberInput {
-            tenant_id: self.tenant_id.clone(),
-            person_id: self.person_id.clone(),
-            ingestion_key: Some(format!("event:{}:{}", event.epoch, nanos())),
-            kind: SourceKind::Conversation,
+        self.record_personality_fact(
+            format!("event:{}:{}", event.epoch, nanos()),
+            SourceKind::Conversation,
             text,
-            captured_at: now,
-            recorded_at: now,
-            claim: None,
-            feature_flag: Some(FEATURE_FLAG.into()),
-            aliases: Vec::new(),
-        })?;
+            None,
+        )?;
         // Derive signals from the new event.
         self.derive_signals(event)?;
         Ok(())
@@ -716,26 +704,20 @@ impl Personality {
 
     /// Record a derived social signal.
     pub fn record_signal(&mut self, signal: &SocialSignal) -> Result<()> {
-        let now = now_seconds();
+        let _now = now_seconds();
         let text = format!(
             "Signal {} for {} at epoch {}: {}",
             signal.signal_kind, signal.participant, signal.epoch, signal.value
         );
-        self.db.remember(RememberInput {
-            tenant_id: self.tenant_id.clone(),
-            person_id: self.person_id.clone(),
-            ingestion_key: Some(format!(
+        self.record_personality_fact(
+            format!(
                 "signal:{}:{}:{}",
                 signal.signal_kind, signal.participant, signal.epoch
-            )),
-            kind: SourceKind::Conversation,
+            ),
+            SourceKind::Conversation,
             text,
-            captured_at: now,
-            recorded_at: now,
-            claim: None,
-            feature_flag: Some(FEATURE_FLAG.into()),
-            aliases: Vec::new(),
-        })?;
+            None,
+        )?;
         Ok(())
     }
 
@@ -783,18 +765,12 @@ impl Personality {
             tier: MemoryTier::LongTerm,
             processing_state: MemoryProcessingState::Processed,
         };
-        self.db.remember(RememberInput {
-            tenant_id: self.tenant_id.clone(),
-            person_id: self.person_id.clone(),
-            ingestion_key: Some(format!("voice_card:{}:{}", card.scope, card.version)),
-            kind: SourceKind::Integration,
+        self.record_personality_fact(
+            format!("voice_card:{}:{}", card.scope, card.version),
+            SourceKind::Integration,
             text,
-            captured_at: now,
-            recorded_at: now,
-            claim: Some(claim),
-            feature_flag: Some(FEATURE_FLAG.into()),
-            aliases: Vec::new(),
-        })?;
+            Some(claim),
+        )?;
         Ok(())
     }
 
@@ -896,18 +872,12 @@ impl Personality {
             tier: MemoryTier::ShortTerm,
             processing_state: MemoryProcessingState::Processed,
         };
-        self.db.remember(RememberInput {
-            tenant_id: self.tenant_id.clone(),
-            person_id: self.person_id.clone(),
-            ingestion_key: Some(format!("tom:{}:{}", hyp.participant, nanos())),
-            kind: SourceKind::Conversation,
+        self.record_personality_fact(
+            format!("tom:{}:{}", hyp.participant, nanos()),
+            SourceKind::Conversation,
             text,
-            captured_at: now,
-            recorded_at: now,
-            claim: Some(claim),
-            feature_flag: Some(FEATURE_FLAG.into()),
-            aliases: Vec::new(),
-        })?;
+            Some(claim),
+        )?;
         Ok(())
     }
 
@@ -939,21 +909,12 @@ impl Personality {
             tier: MemoryTier::LongTerm,
             processing_state: MemoryProcessingState::Processed,
         };
-        self.db.remember(RememberInput {
-            tenant_id: self.tenant_id.clone(),
-            person_id: self.person_id.clone(),
-            ingestion_key: Some(format!(
-                "calibration:{}:{}",
-                record.participant, record.epoch
-            )),
-            kind: SourceKind::Integration,
+        self.record_personality_fact(
+            format!("calibration:{}:{}", record.participant, record.epoch),
+            SourceKind::Integration,
             text,
-            captured_at: now,
-            recorded_at: now,
-            claim: Some(claim),
-            feature_flag: Some(FEATURE_FLAG.into()),
-            aliases: Vec::new(),
-        })?;
+            Some(claim),
+        )?;
         Ok(())
     }
 
@@ -1031,18 +992,12 @@ impl Personality {
             tier: MemoryTier::LongTerm,
             processing_state: MemoryProcessingState::Processed,
         };
-        self.db.remember(RememberInput {
-            tenant_id: self.tenant_id.clone(),
-            person_id: self.person_id.clone(),
-            ingestion_key: Some(format!("persona:{}", persona.name)),
-            kind: SourceKind::Document,
+        self.record_personality_fact(
+            format!("persona:{}", persona.name),
+            SourceKind::Document,
             text,
-            captured_at: now,
-            recorded_at: now,
-            claim: Some(claim),
-            feature_flag: Some(FEATURE_FLAG.into()),
-            aliases: Vec::new(),
-        })?;
+            Some(claim),
+        )?;
         Ok(())
     }
 
@@ -1179,18 +1134,12 @@ impl Personality {
             tier: MemoryTier::LongTerm,
             processing_state: MemoryProcessingState::Processed,
         };
-        self.db.remember(RememberInput {
-            tenant_id: self.tenant_id.clone(),
-            person_id: self.person_id.clone(),
-            ingestion_key: Some(format!("observation:{}:{}", finding.scope, nanos())),
-            kind: SourceKind::Integration,
+        self.record_personality_fact(
+            format!("observation:{}:{}", finding.scope, nanos()),
+            SourceKind::Integration,
             text,
-            captured_at: now,
-            recorded_at: now,
-            claim: Some(claim),
-            feature_flag: Some(FEATURE_FLAG.into()),
-            aliases: Vec::new(),
-        })?;
+            Some(claim),
+        )?;
         Ok(())
     }
 
@@ -1228,6 +1177,29 @@ impl Personality {
     }
 
     // --- Internal ----------------------------------------------------------
+
+    fn record_personality_fact(
+        &mut self,
+        ingestion_key: String,
+        kind: SourceKind,
+        text: String,
+        claim: Option<ClaimInput>,
+    ) -> Result<()> {
+        let now = now_seconds();
+        self.db.remember(RememberInput {
+            tenant_id: self.tenant_id.clone(),
+            person_id: self.person_id.clone(),
+            ingestion_key: Some(ingestion_key),
+            kind,
+            text,
+            captured_at: now,
+            recorded_at: now,
+            claim,
+            feature_flag: Some(FEATURE_FLAG.into()),
+            aliases: Vec::new(),
+        })?;
+        Ok(())
+    }
 
     fn search_personality(&self, query: &str, limit: u32) -> Result<Vec<String>> {
         let pack = self.db.search(SearchInput {
