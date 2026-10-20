@@ -1309,17 +1309,15 @@ fn build_deletion_records(
             deleted_at,
         }),
     ];
-    for evidence_id in evidence_ids {
-        records.push(ExportRecord::Evidence(evidence_record(
-            transaction,
-            tenant_id,
-            person_id,
-            evidence_id,
-        )?));
+    let evidence_records =
+        super::export::evidence_records(transaction, tenant_id, person_id, evidence_ids)?;
+    for record in evidence_records {
+        let evidence_id = record.evidence.id.clone();
+        records.push(ExportRecord::Evidence(record));
         records.push(ExportRecord::Deletion(DeletionRecord {
             tenant_id: tenant_id.clone(),
             person_id: person_id.clone(),
-            target: MemoryRef::Evidence(evidence_id.clone()),
+            target: MemoryRef::Evidence(evidence_id),
             deleted_at,
         }));
     }
