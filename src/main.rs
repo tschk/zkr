@@ -111,12 +111,35 @@ fn dispatch_command(
 }
 
 fn read_json<T: DeserializeOwned>() -> Result<T, Box<dyn std::error::Error>> {
+    read_json_from_reader(std::io::stdin())
+}
+
+fn read_json_from_reader<R: Read, T: DeserializeOwned>(
+    reader: R,
+) -> Result<T, Box<dyn std::error::Error>> {
     let mut input = Vec::new();
-    std::io::stdin()
-        .take(MAX_REQUEST_BYTES + 1)
-        .read_to_end(&mut input)?;
+    reader.take(MAX_REQUEST_BYTES + 1).read_to_end(&mut input)?;
     if input.len() as u64 > MAX_REQUEST_BYTES {
         return Err("request exceeds 1048576 bytes".into());
     }
     Ok(serde_json::from_slice(&input)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_read_json_exceeds_limit() {
+        // Create an input stream that provides MAX_REQUEST_BYTES + 1 bytes.
+        let large_input = std::io::repeat(b' ').take(MAX_REQUEST_BYTES + 1);
+
+        let result: Result<serde_json::Value, _> = read_json_from_reader(large_input);
+
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "request exceeds 1048576 bytes"
+        );
+    }
 }
