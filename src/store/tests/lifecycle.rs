@@ -974,3 +974,34 @@ fn correction_creates_superseding_claim_and_updates_old() {
     assert_eq!(new_claim.4, 20);
     assert_eq!(new_claim.5, "Beta");
 }
+
+#[test]
+fn profiles_with_zero_limit_returns_empty() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+
+    let mut profile_fact = remember("a", "sam", "Acme");
+    profile_fact.claim.as_mut().unwrap().kind = ClaimKind::ProfileFact;
+    let claimed = db.remember(profile_fact).unwrap();
+
+    db.store_profile(ProfileInput {
+        tenant_id: TenantId("a".into()),
+        person_id: PersonId("sam".into()),
+        stability: ProfileStability::Current,
+        claim_id: claimed.claim_id.clone().unwrap(),
+        recorded_at: 10,
+    })
+    .unwrap();
+
+    let profiles = db
+        .profiles(ProfilesInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            limit: 0,
+        })
+        .unwrap();
+
+    assert!(profiles.is_empty(), "Profiles with limit 0 should return empty list");
+}

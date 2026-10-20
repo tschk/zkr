@@ -660,6 +660,9 @@ impl MemoryDb {
 
     pub fn profiles(&self, input: ProfilesInput) -> Result<Vec<ProfileEntry>> {
         require_scope(&input.tenant_id, &input.person_id)?;
+        if input.limit == 0 {
+            return Ok(vec![]);
+        }
         let mut statement = self.connection.prepare(
             "SELECT p.id, p.key, p.value, p.stability, p.claim_id, p.recorded_at FROM profile_entries p JOIN claims c ON c.id = p.claim_id AND c.tenant_id = p.tenant_id AND c.person_id = p.person_id WHERE p.tenant_id = ?1 AND p.person_id = ?2 AND c.kind = 'profile_fact' AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL ORDER BY p.recorded_at DESC, p.id LIMIT ?3",
         )?;
