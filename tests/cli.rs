@@ -657,3 +657,14 @@ fn json_cli_stores_and_gates_a_feature_flagged_product_plan() {
     assert_eq!(items[0]["memory"]["kind"], "source");
     std::fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn cli_rejects_invalid_arguments() {
+    let output = Command::new(env!("CARGO_BIN_EXE_zkr"))
+        .args(["foo", "bar", "baz"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("usage: zkr --db PATH COMMAND (use --help)"));
+}
