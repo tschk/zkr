@@ -427,6 +427,47 @@ fn profile_entries_require_valid_recorded_at_and_can_be_replayed() {
 }
 
 #[test]
+fn profile_limit_zero_returns_empty() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let mut profile_fact = remember("a", "sam", "Acme");
+    profile_fact.claim.as_mut().unwrap().kind = ClaimKind::ProfileFact;
+    let claimed = db.remember(profile_fact).unwrap();
+
+    let entry = db
+        .store_profile(ProfileInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            stability: ProfileStability::Current,
+            claim_id: claimed.claim_id.clone().unwrap(),
+            recorded_at: 10,
+        })
+        .unwrap();
+
+    assert_eq!(
+        db.profiles(ProfilesInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            limit: 10,
+        })
+        .unwrap(),
+        vec![entry]
+    );
+
+    assert_eq!(
+        db.profiles(ProfilesInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            limit: 0,
+        })
+        .unwrap(),
+        vec![]
+    );
+}
+
+#[test]
 fn profile_pager_renders_markdown_one_pager() {
     let mut db = MemoryDb {
         connection: Connection::open_in_memory().unwrap(),
