@@ -29,7 +29,11 @@ struct SummaryTree {
     source_ids: Vec<SourceId>,
 }
 
-fn build_summary_tree(db: &mut MemoryDb, tenant_id: &TenantId, person_id: &PersonId) -> SummaryTree {
+fn build_summary_tree(
+    db: &mut MemoryDb,
+    tenant_id: &TenantId,
+    person_id: &PersonId,
+) -> SummaryTree {
     let remembered = (0..4)
         .map(|index| {
             let mut input = remember_raw("a", "sam", &format!("rollout item {index}"));
