@@ -1,5 +1,6 @@
 use super::export::{
-    append_commit, claim_evidence_record, claim_record, evidence_record, source_record,
+    append_commit, claim_evidence_record, claim_record, claim_records_by_ids, evidence_record,
+    source_record,
 };
 use super::repair::{enqueue_projection_repair, enqueue_projection_repairs, record_operation};
 use super::summaries::invalidate_summaries_for_evidence;
@@ -1323,13 +1324,11 @@ fn build_deletion_records(
             deleted_at,
         }));
     }
-    for claim_id in changed_claim_ids {
-        records.push(ExportRecord::Claim(claim_record(
-            transaction,
-            tenant_id,
-            person_id,
-            claim_id,
-        )?));
+    if !changed_claim_ids.is_empty() {
+        let claims = claim_records_by_ids(transaction, tenant_id, person_id, changed_claim_ids)?;
+        for claim in claims {
+            records.push(ExportRecord::Claim(claim));
+        }
     }
     if !profile_ids.is_empty() {
         let profile_ids_json = serde_json::to_string(&profile_ids)?;

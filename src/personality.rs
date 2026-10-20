@@ -3338,6 +3338,8 @@ mod tests {
             })
             .unwrap();
 
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
         personality
             .record_event(&ConversationEvent {
                 epoch: personality.current_epoch(),
