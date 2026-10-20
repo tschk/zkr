@@ -64,7 +64,8 @@ fn test_invalid_arguments_error() {
         let stderr = String::from_utf8(output.stderr).unwrap();
         assert!(
             stderr.contains(r#"{"error":"usage: zkr --db PATH COMMAND (use --help)"}"#),
-            "Failed on args: {:?}", args
+            "Failed on args: {:?}",
+            args
         );
     }
 }
