@@ -34,146 +34,24 @@ impl MemoryDb {
             params![source_id.0, input.tenant_id.0, input.person_id.0, input.ingestion_key, kind, input.text, input.captured_at, input.recorded_at, input.feature_flag],
         )?;
         if inserted == 0 {
-            let replay = transaction.query_row(
-                "SELECT s.id, e.id, c.id, s.kind, s.content, s.captured_at, s.recorded_at, s.deleted_at, e.deleted_at, c.subject, c.predicate, c.value, c.valid_from, c.kind, s.feature_flag FROM sources s JOIN evidence e ON e.id = s.origin_evidence_id AND e.tenant_id = s.tenant_id AND e.person_id = s.person_id LEFT JOIN claims c ON c.id = s.origin_claim_id AND c.tenant_id = s.tenant_id AND c.person_id = s.person_id WHERE s.tenant_id = ?1 AND s.person_id = ?2 AND s.ingestion_key = ?3",
-                params![input.tenant_id.0, input.person_id.0, input.ingestion_key],
-                |row| {
-                    Ok((
-                        Remembered {
-                            source_id: SourceId(row.get(0)?),
-                            evidence_id: EvidenceId(row.get(1)?),
-                            claim_id: row.get::<_, Option<String>>(2)?.map(ClaimId),
-                        },
-                        row.get::<_, String>(3)?,
-                        row.get::<_, String>(4)?,
-                        row.get::<_, i64>(5)?,
-                        row.get::<_, i64>(6)?,
-                        row.get::<_, Option<i64>>(7)?,
-                        row.get::<_, Option<i64>>(8)?,
-                        row.get::<_, Option<String>>(9)?,
-                        row.get::<_, Option<String>>(10)?,
-                        row.get::<_, Option<String>>(11)?,
-                        row.get::<_, Option<i64>>(12)?,
-                        row.get::<_, Option<String>>(13)?,
-                        row.get::<_, Option<String>>(14)?,
-                    ))
-                },
-            ).optional()?.ok_or(Error::NotFound)?;
-            if replay.5.is_some() || replay.6.is_some() {
-                return Err(Error::NotFound);
-            }
-            let stored_locator = transaction
-                .query_row(
-                    "SELECT device_id, provider, stream_id, segment_id, start_ms, end_ms FROM evidence_locators WHERE tenant_id = ?1 AND person_id = ?2 AND evidence_id = ?3",
-                    params![input.tenant_id.0, input.person_id.0, replay.0.evidence_id.0],
-                    |row| {
-                        Ok(TranscriptLocator {
-                            device_id: row.get(0)?,
-                            provider: row.get(1)?,
-                            stream_id: row.get(2)?,
-                            segment_id: row.get(3)?,
-                            start_ms: row.get(4)?,
-                            end_ms: row.get(5)?,
-                        })
-                    },
-                )
-                .optional()?;
-            let stored_claim = match (&replay.7, &replay.8, &replay.9, replay.10, &replay.11) {
-                (Some(subject), Some(predicate), Some(value), Some(valid_from), Some(kind)) => {
-                    Some((subject, predicate, value, valid_from, kind.as_str()))
-                }
-                (None, None, None, None, None) => None,
-                _ => return Err(Error::NotFound),
-            };
-            let input_claim = input.claim.as_ref().map(|claim| {
-                (
-                    &claim.subject,
-                    &claim.predicate,
-                    &claim.value,
-                    claim.valid_from,
-                    claim_kind_name(&claim.kind),
-                )
-            });
-            if replay.1 != kind
-                || replay.2 != input.text
-                || replay.3 != input.captured_at
-                || replay.4 != input.recorded_at
-                || stored_claim != input_claim
-                || stored_locator.as_ref() != locator.as_ref()
-                || replay.12 != input.feature_flag
-            {
-                return Err(Error::Invalid(
-                    "ingestion_key conflicts with different memory payload".to_owned(),
-                ));
-            }
+            let remembered = handle_existing_remember(&transaction, &input, &locator, &kind)?;
             transaction.commit()?;
-            return Ok(replay.0);
+            return Ok(remembered);
         }
-        transaction.execute(
-            "INSERT INTO source_fts(source_id, tenant_id, person_id, content) VALUES(?1, ?2, ?3, ?4)",
-            params![
-                source_id.0,
-                input.tenant_id.0,
-                input.person_id.0,
-                fts_content(&input.text, &input.aliases)
-            ],
+        let claim_id = insert_remember_components(
+            &transaction,
+            &input,
+            &locator,
+            &source_id,
+            &evidence_id,
         )?;
-        transaction.execute(
-            "INSERT INTO evidence(id, tenant_id, person_id, source_id, source_revision, quote, recorded_at) VALUES(?1, ?2, ?3, ?4, 1, ?5, ?6)",
-            params![evidence_id.0, input.tenant_id.0, input.person_id.0, source_id.0, input.text, input.recorded_at],
+        let records = build_remember_records(
+            &transaction,
+            &input,
+            &source_id,
+            &evidence_id,
+            &claim_id,
         )?;
-        if let Some(locator) = locator {
-            transaction.execute(
-                "INSERT INTO evidence_locators(tenant_id, person_id, evidence_id, device_id, provider, stream_id, segment_id, start_ms, end_ms) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                params![input.tenant_id.0, input.person_id.0, evidence_id.0, locator.device_id, locator.provider, locator.stream_id, locator.segment_id, locator.start_ms, locator.end_ms],
-            )?;
-        }
-        let claim_id = input
-            .claim
-            .map(|claim| {
-                insert_claim(
-                    &transaction,
-                    &input.tenant_id,
-                    &input.person_id,
-                    &evidence_id,
-                    claim,
-                    input.recorded_at,
-                )
-            })
-            .transpose()?;
-        transaction.execute(
-            "UPDATE sources SET origin_evidence_id = ?1, origin_claim_id = ?2 WHERE id = ?3 AND tenant_id = ?4 AND person_id = ?5",
-            params![evidence_id.0, claim_id.as_ref().map(|id| &id.0), source_id.0, input.tenant_id.0, input.person_id.0],
-        )?;
-        let mut records = vec![
-            ExportRecord::Source(source_record(
-                &transaction,
-                &input.tenant_id,
-                &input.person_id,
-                &source_id,
-            )?),
-            ExportRecord::Evidence(evidence_record(
-                &transaction,
-                &input.tenant_id,
-                &input.person_id,
-                &evidence_id,
-            )?),
-        ];
-        if let Some(claim_id) = &claim_id {
-            records.push(ExportRecord::Claim(claim_record(
-                &transaction,
-                &input.tenant_id,
-                &input.person_id,
-                claim_id,
-            )?));
-            records.push(ExportRecord::ClaimEvidence(claim_evidence_record(
-                &transaction,
-                &input.tenant_id,
-                &input.person_id,
-                claim_id,
-                &evidence_id,
-            )?));
-        }
         append_commit(
             &transaction,
             &input.tenant_id,
@@ -1383,4 +1261,179 @@ fn render_profile_pager(generated_at: Timestamp, entries: &[ProfileEntry]) -> St
         ));
     }
     markdown
+}
+
+fn handle_existing_remember(
+    transaction: &rusqlite::Transaction<'_>,
+    input: &RememberInput,
+    locator: &Option<TranscriptLocator>,
+    kind: &str,
+) -> Result<Remembered> {
+    let replay = transaction.query_row(
+        "SELECT s.id, e.id, c.id, s.kind, s.content, s.captured_at, s.recorded_at, s.deleted_at, e.deleted_at, c.subject, c.predicate, c.value, c.valid_from, c.kind, s.feature_flag FROM sources s JOIN evidence e ON e.id = s.origin_evidence_id AND e.tenant_id = s.tenant_id AND e.person_id = s.person_id LEFT JOIN claims c ON c.id = s.origin_claim_id AND c.tenant_id = s.tenant_id AND c.person_id = s.person_id WHERE s.tenant_id = ?1 AND s.person_id = ?2 AND s.ingestion_key = ?3",
+        params![input.tenant_id.0, input.person_id.0, input.ingestion_key],
+        |row| {
+            Ok((
+                Remembered {
+                    source_id: SourceId(row.get(0)?),
+                    evidence_id: EvidenceId(row.get(1)?),
+                    claim_id: row.get::<_, Option<String>>(2)?.map(ClaimId),
+                },
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(6)?,
+                row.get::<_, Option<i64>>(7)?,
+                row.get::<_, Option<i64>>(8)?,
+                row.get::<_, Option<String>>(9)?,
+                row.get::<_, Option<String>>(10)?,
+                row.get::<_, Option<String>>(11)?,
+                row.get::<_, Option<i64>>(12)?,
+                row.get::<_, Option<String>>(13)?,
+                row.get::<_, Option<String>>(14)?,
+            ))
+        },
+    ).optional()?.ok_or(Error::NotFound)?;
+    if replay.5.is_some() || replay.6.is_some() {
+        return Err(Error::NotFound);
+    }
+    let stored_locator = transaction
+        .query_row(
+            "SELECT device_id, provider, stream_id, segment_id, start_ms, end_ms FROM evidence_locators WHERE tenant_id = ?1 AND person_id = ?2 AND evidence_id = ?3",
+            params![input.tenant_id.0, input.person_id.0, replay.0.evidence_id.0],
+            |row| {
+                Ok(TranscriptLocator {
+                    device_id: row.get(0)?,
+                    provider: row.get(1)?,
+                    stream_id: row.get(2)?,
+                    segment_id: row.get(3)?,
+                    start_ms: row.get(4)?,
+                    end_ms: row.get(5)?,
+                })
+            },
+        )
+        .optional()?;
+    let stored_claim = match (&replay.7, &replay.8, &replay.9, replay.10, &replay.11) {
+        (Some(subject), Some(predicate), Some(value), Some(valid_from), Some(kind)) => {
+            Some((subject, predicate, value, valid_from, kind.as_str()))
+        }
+        (None, None, None, None, None) => None,
+        _ => return Err(Error::NotFound),
+    };
+    let input_claim = input.claim.as_ref().map(|claim| {
+        (
+            &claim.subject,
+            &claim.predicate,
+            &claim.value,
+            claim.valid_from,
+            claim_kind_name(&claim.kind),
+        )
+    });
+    if replay.1 != kind
+        || replay.2 != input.text
+        || replay.3 != input.captured_at
+        || replay.4 != input.recorded_at
+        || stored_claim != input_claim
+        || stored_locator.as_ref() != locator.as_ref()
+        || replay.12 != input.feature_flag
+    {
+        return Err(Error::Invalid(
+            "ingestion_key conflicts with different memory payload".to_owned(),
+        ));
+    }
+    Ok(replay.0)
+}
+
+fn insert_remember_components(
+    transaction: &rusqlite::Transaction<'_>,
+    input: &RememberInput,
+    locator: &Option<TranscriptLocator>,
+    source_id: &SourceId,
+    evidence_id: &EvidenceId,
+) -> Result<Option<ClaimId>> {
+    transaction.execute(
+        "INSERT INTO source_fts(source_id, tenant_id, person_id, content) VALUES(?1, ?2, ?3, ?4)",
+        params![
+            source_id.0,
+            input.tenant_id.0,
+            input.person_id.0,
+            fts_content(&input.text, &input.aliases)
+        ],
+    )?;
+    transaction.execute(
+        "INSERT INTO evidence(id, tenant_id, person_id, source_id, source_revision, quote, recorded_at) VALUES(?1, ?2, ?3, ?4, 1, ?5, ?6)",
+        params![evidence_id.0, input.tenant_id.0, input.person_id.0, source_id.0, input.text, input.recorded_at],
+    )?;
+    if let Some(locator) = locator {
+        transaction.execute(
+            "INSERT INTO evidence_locators(tenant_id, person_id, evidence_id, device_id, provider, stream_id, segment_id, start_ms, end_ms) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![input.tenant_id.0, input.person_id.0, evidence_id.0, locator.device_id, locator.provider, locator.stream_id, locator.segment_id, locator.start_ms, locator.end_ms],
+        )?;
+    }
+    let claim_id = input
+        .claim
+        .as_ref()
+        .map(|claim| {
+            insert_claim(
+                transaction,
+                &input.tenant_id,
+                &input.person_id,
+                evidence_id,
+                ClaimInput {
+                    subject: claim.subject.clone(),
+                    predicate: claim.predicate.clone(),
+                    value: claim.value.clone(),
+                    valid_from: claim.valid_from,
+                    kind: claim.kind.clone(),
+                    tier: claim.tier.clone(),
+                    processing_state: claim.processing_state.clone(),
+                },
+                input.recorded_at,
+            )
+        })
+        .transpose()?;
+    transaction.execute(
+        "UPDATE sources SET origin_evidence_id = ?1, origin_claim_id = ?2 WHERE id = ?3 AND tenant_id = ?4 AND person_id = ?5",
+        params![evidence_id.0, claim_id.as_ref().map(|id| &id.0), source_id.0, input.tenant_id.0, input.person_id.0],
+    )?;
+    Ok(claim_id)
+}
+
+fn build_remember_records(
+    transaction: &rusqlite::Transaction<'_>,
+    input: &RememberInput,
+    source_id: &SourceId,
+    evidence_id: &EvidenceId,
+    claim_id: &Option<ClaimId>,
+) -> Result<Vec<ExportRecord>> {
+    let mut records = vec![
+        ExportRecord::Source(source_record(
+            transaction,
+            &input.tenant_id,
+            &input.person_id,
+            source_id,
+        )?),
+        ExportRecord::Evidence(evidence_record(
+            transaction,
+            &input.tenant_id,
+            &input.person_id,
+            evidence_id,
+        )?),
+    ];
+    if let Some(claim_id) = claim_id {
+        records.push(ExportRecord::Claim(claim_record(
+            transaction,
+            &input.tenant_id,
+            &input.person_id,
+            claim_id,
+        )?));
+        records.push(ExportRecord::ClaimEvidence(claim_evidence_record(
+            transaction,
+            &input.tenant_id,
+            &input.person_id,
+            claim_id,
+            evidence_id,
+        )?));
+    }
+    Ok(records)
 }
