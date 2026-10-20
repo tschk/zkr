@@ -1,5 +1,6 @@
 use super::export::{
-    append_commit, claim_evidence_record, claim_record, evidence_record, source_record,
+    append_commit, claim_evidence_record, claim_record, evidence_record, evidence_records,
+    source_record,
 };
 use super::repair::{enqueue_projection_repair, enqueue_projection_repairs, record_operation};
 use super::summaries::invalidate_summaries_for_evidence;
@@ -1309,17 +1310,19 @@ fn build_deletion_records(
             deleted_at,
         }),
     ];
-    for evidence_id in evidence_ids {
-        records.push(ExportRecord::Evidence(evidence_record(
-            transaction,
-            tenant_id,
-            person_id,
-            evidence_id,
-        )?));
+    let evidence_records_list = evidence_records(
+        transaction,
+        tenant_id,
+        person_id,
+        evidence_ids,
+    )?;
+    for record in evidence_records_list {
+        let ev_id = record.evidence.id.clone();
+        records.push(ExportRecord::Evidence(record));
         records.push(ExportRecord::Deletion(DeletionRecord {
             tenant_id: tenant_id.clone(),
             person_id: person_id.clone(),
-            target: MemoryRef::Evidence(evidence_id.clone()),
+            target: MemoryRef::Evidence(ev_id),
             deleted_at,
         }));
     }
