@@ -337,21 +337,7 @@ fn apply_source_origin(transaction: &Transaction<'_>, record: &SourceRecord) -> 
     Ok(())
 }
 
-fn apply_evidence(
-    transaction: &Transaction<'_>,
-    record: &EvidenceRecord,
-    applied_at: Timestamp,
-) -> Result<()> {
-    let evidence = &record.evidence;
-    if evidence.byte_range.is_some() {
-        return Err(Error::Invalid(format!(
-            "applied evidence {} carries an unsupported byte_range",
-            evidence.id.0
-        )));
-    }
-    if let Some(locator) = &record.locator {
-        validate_transcript_locator(locator)?;
-    }
+fn check_evidence_source(transaction: &Transaction<'_>, evidence: &Evidence) -> Result<()> {
     let source_exists: bool = transaction.query_row(
         "SELECT EXISTS(SELECT 1 FROM sources WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3)",
         params![
@@ -367,38 +353,35 @@ fn apply_evidence(
             evidence.id.0, evidence.source_id.0
         )));
     }
-    let stored = transaction
-        .query_row(
-            "SELECT source_id, source_revision, quote, recorded_at, deleted_at FROM evidence WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3",
-            params![evidence.id.0, evidence.tenant_id.0, evidence.person_id.0],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, u64>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, Timestamp>(3)?,
-                    row.get::<_, Option<Timestamp>>(4)?,
-                ))
-            },
-        )
-        .optional()?;
-    let Some(stored) = stored else {
+    Ok(())
+}
+
+fn insert_evidence(transaction: &Transaction<'_>, record: &EvidenceRecord) -> Result<()> {
+    let evidence = &record.evidence;
+    transaction.execute(
+        "INSERT INTO evidence(id, tenant_id, person_id, source_id, source_revision, quote, recorded_at, deleted_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![evidence.id.0, evidence.tenant_id.0, evidence.person_id.0, evidence.source_id.0, evidence.source_revision, evidence.quote, evidence.recorded_at, record.deleted_at],
+    )?;
+    if let Some(locator) = &record.locator {
         transaction.execute(
-            "INSERT INTO evidence(id, tenant_id, person_id, source_id, source_revision, quote, recorded_at, deleted_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![evidence.id.0, evidence.tenant_id.0, evidence.person_id.0, evidence.source_id.0, evidence.source_revision, evidence.quote, evidence.recorded_at, record.deleted_at],
+            "INSERT INTO evidence_locators(tenant_id, person_id, evidence_id, device_id, provider, stream_id, segment_id, start_ms, end_ms) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![evidence.tenant_id.0, evidence.person_id.0, evidence.id.0, locator.device_id, locator.provider, locator.stream_id, locator.segment_id, locator.start_ms, locator.end_ms],
         )?;
-        if let Some(locator) = &record.locator {
-            transaction.execute(
-                "INSERT INTO evidence_locators(tenant_id, person_id, evidence_id, device_id, provider, stream_id, segment_id, start_ms, end_ms) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                params![evidence.tenant_id.0, evidence.person_id.0, evidence.id.0, locator.device_id, locator.provider, locator.stream_id, locator.segment_id, locator.start_ms, locator.end_ms],
-            )?;
-        }
-        return Ok(());
-    };
-    if stored.0 != evidence.source_id.0
-        || stored.1 != evidence.source_revision
-        || stored.2 != evidence.quote
-        || stored.3 != evidence.recorded_at
+    }
+    Ok(())
+}
+
+fn update_existing_evidence(
+    transaction: &Transaction<'_>,
+    record: &EvidenceRecord,
+    stored: &StoredEvidence,
+    applied_at: Timestamp,
+) -> Result<()> {
+    let evidence = &record.evidence;
+    if stored.source_id != evidence.source_id.0
+        || stored.source_revision != evidence.source_revision
+        || stored.quote != evidence.quote
+        || stored.recorded_at != evidence.recorded_at
     {
         return Err(Error::Invalid(format!(
             "applied evidence {} conflicts with the stored evidence payload",
@@ -427,13 +410,13 @@ fn apply_evidence(
             evidence.id.0
         )));
     }
-    if stored.4.is_some() && record.deleted_at.is_none() {
+    if stored.deleted_at.is_some() && record.deleted_at.is_none() {
         return Err(Error::Invalid(format!(
             "applied evidence {} cannot revive tombstoned evidence",
             evidence.id.0
         )));
     }
-    if let Some(deleted_at) = record.deleted_at.filter(|_| stored.4.is_none()) {
+    if let Some(deleted_at) = record.deleted_at.filter(|_| stored.deleted_at.is_none()) {
         transaction.execute(
             "UPDATE evidence SET deleted_at = ?1 WHERE id = ?2 AND tenant_id = ?3 AND person_id = ?4",
             params![deleted_at, evidence.id.0, evidence.tenant_id.0, evidence.person_id.0],
@@ -448,6 +431,56 @@ fn apply_evidence(
         )?;
     }
     Ok(())
+}
+
+fn apply_evidence(
+    transaction: &Transaction<'_>,
+    record: &EvidenceRecord,
+    applied_at: Timestamp,
+) -> Result<()> {
+    let evidence = &record.evidence;
+    if evidence.byte_range.is_some() {
+        return Err(Error::Invalid(format!(
+            "applied evidence {} carries an unsupported byte_range",
+            evidence.id.0
+        )));
+    }
+    if let Some(locator) = &record.locator {
+        validate_transcript_locator(locator)?;
+    }
+
+    check_evidence_source(transaction, evidence)?;
+
+    let stored = transaction
+        .query_row(
+            "SELECT source_id, source_revision, quote, recorded_at, deleted_at FROM evidence WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3",
+            params![evidence.id.0, evidence.tenant_id.0, evidence.person_id.0],
+            |row| {
+                Ok(StoredEvidence {
+                    source_id: row.get::<_, String>(0)?,
+                    source_revision: row.get::<_, u64>(1)?,
+                    quote: row.get::<_, String>(2)?,
+                    recorded_at: row.get::<_, Timestamp>(3)?,
+                    deleted_at: row.get::<_, Option<Timestamp>>(4)?,
+                })
+            },
+        )
+        .optional()?;
+
+    if let Some(stored) = stored {
+        update_existing_evidence(transaction, record, &stored, applied_at)?;
+    } else {
+        insert_evidence(transaction, record)?;
+    }
+    Ok(())
+}
+
+struct StoredEvidence {
+    source_id: String,
+    source_revision: u64,
+    quote: String,
+    recorded_at: Timestamp,
+    deleted_at: Option<Timestamp>,
 }
 
 struct StoredClaim {
