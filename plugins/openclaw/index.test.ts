@@ -33,6 +33,26 @@ describe("zkr OpenClaw tools", () => {
     expect(resolveZkrExecutable("./target/release/zkr")).toBe(
       "./target/release/zkr",
     );
+    expect(resolveZkrExecutable("~/my-dir/zkr")).toBe("~/my-dir/zkr");
+  });
+
+  test("rejects executables with spaces or shell metacharacters", () => {
+    expect(() => resolveZkrExecutable("echo vulnerable && zkr")).toThrow(
+      ZKR_COMMAND_FAILED,
+    );
+    expect(() => resolveZkrExecutable("sh -c 'malicious' # /zkr")).toThrow(
+      ZKR_COMMAND_FAILED,
+    );
+    expect(() => resolveZkrExecutable("/usr/bin/zkr; rm -rf /")).toThrow(
+      ZKR_COMMAND_FAILED,
+    );
+    expect(() => resolveZkrExecutable("zkr --help")).toThrow(
+      ZKR_COMMAND_FAILED,
+    );
+    expect(() => resolveZkrExecutable("zkr\n")).toThrow(ZKR_COMMAND_FAILED);
+    expect(() => resolveZkrExecutable("zkr$(echo)")).toThrow(
+      ZKR_COMMAND_FAILED,
+    );
   });
 
   test("rejects non-zkr executables without leaking the command", async () => {
