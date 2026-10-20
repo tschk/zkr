@@ -118,9 +118,7 @@ fn read_json_from<T: DeserializeOwned, R: Read>(
     reader: R,
 ) -> Result<T, Box<dyn std::error::Error>> {
     let mut input = Vec::new();
-    reader
-        .take(MAX_REQUEST_BYTES + 1)
-        .read_to_end(&mut input)?;
+    reader.take(MAX_REQUEST_BYTES + 1).read_to_end(&mut input)?;
     if input.len() as u64 > MAX_REQUEST_BYTES {
         return Err("request exceeds 1048576 bytes".into());
     }
