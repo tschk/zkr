@@ -74,62 +74,53 @@ impl MemoryDb {
         )?;
         let mut seen = HashSet::new();
         lexical.retain(|target| seen.insert(target.clone()));
+
+        macro_rules! add_targets {
+            ($targets:expr) => {
+                lexical.extend(
+                    $targets
+                        .into_iter()
+                        .filter(|target| seen.insert(target.clone()))
+                        .take((candidate_limit as usize).saturating_sub(lexical.len())),
+                );
+            };
+        }
+
         let lowered_query = input.query.to_lowercase();
         let phrase_terms = [lowered_query];
         if lexical.len() < candidate_limit as usize {
-            for target in self.claim_lexical_targets(
+            add_targets!(self.claim_lexical_targets(
                 &input.tenant_id,
                 &input.person_id,
                 &phrase_terms,
                 candidate_limit.saturating_add(lexical.len() as u32),
                 input.as_of.as_ref(),
                 &input.enabled_features,
-            )? {
-                if seen.insert(target.clone()) {
-                    lexical.push(target);
-                    if lexical.len() >= candidate_limit as usize {
-                        break;
-                    }
-                }
-            }
+            )?);
         }
         if lexical.len() < candidate_limit as usize {
             if let Some(token_query) = token_query {
-                for target in self.lexical_targets(
+                add_targets!(self.lexical_targets(
                     &input.tenant_id,
                     &input.person_id,
                     &token_query,
                     candidate_limit,
                     input.as_of.as_ref(),
                     &input.enabled_features,
-                )? {
-                    if seen.insert(target.clone()) {
-                        lexical.push(target);
-                        if lexical.len() >= candidate_limit as usize {
-                            break;
-                        }
-                    }
-                }
+                )?);
             }
         }
         if lexical.len() < candidate_limit as usize {
             let terms = lexical_terms(&input.query);
             if !terms.is_empty() && terms.as_slice() != phrase_terms {
-                for target in self.claim_lexical_targets(
+                add_targets!(self.claim_lexical_targets(
                     &input.tenant_id,
                     &input.person_id,
                     &terms,
                     candidate_limit.saturating_add(lexical.len() as u32),
                     input.as_of.as_ref(),
                     &input.enabled_features,
-                )? {
-                    if seen.insert(target.clone()) {
-                        lexical.push(target);
-                        if lexical.len() >= candidate_limit as usize {
-                            break;
-                        }
-                    }
-                }
+                )?);
             }
         }
         Ok(lexical)
