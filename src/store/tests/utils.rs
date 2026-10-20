@@ -1,5 +1,5 @@
-use crate::store::utils::new_id;
 use crate::store::MemoryDb;
+use crate::store::utils::new_id;
 use rusqlite::Connection;
 
 #[test]
