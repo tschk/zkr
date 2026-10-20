@@ -142,7 +142,6 @@ impl Default for VoiceCard {
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // Theory of mind
 // ---------------------------------------------------------------------------
@@ -2608,13 +2607,13 @@ mod tests {
         let mut personality = Personality::new(db, TenantId("".into()), person_id);
 
         let result = personality.store_voice_card(&VoiceCard {
-                scope: "engineering".into(),
-                register: "formal".into(),
-                humor: "none".into(),
-                confidence_basis_points: 9000,
-                supporting_event_epochs: vec![3, 4],
-                ..Default::default()
-            });
+            scope: "engineering".into(),
+            register: "formal".into(),
+            humor: "none".into(),
+            confidence_basis_points: 9000,
+            supporting_event_epochs: vec![3, 4],
+            ..Default::default()
+        });
 
         assert!(matches!(result, Err(crate::store::Error::Invalid(_))));
     }
