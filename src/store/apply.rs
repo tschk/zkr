@@ -356,10 +356,7 @@ fn check_evidence_source(transaction: &Transaction<'_>, evidence: &Evidence) -> 
     Ok(())
 }
 
-fn insert_evidence(
-    transaction: &Transaction<'_>,
-    record: &EvidenceRecord,
-) -> Result<()> {
+fn insert_evidence(transaction: &Transaction<'_>, record: &EvidenceRecord) -> Result<()> {
     let evidence = &record.evidence;
     transaction.execute(
         "INSERT INTO evidence(id, tenant_id, person_id, source_id, source_revision, quote, recorded_at, deleted_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
