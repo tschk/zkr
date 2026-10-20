@@ -1254,6 +1254,56 @@ mod tests {
     // --- Validation tests --------------------------------------------------
 
     #[test]
+    fn test_with_rules() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let p = Personality::new(db, tenant_id, person_id);
+
+        let initial_rules = p.rules.clone();
+        assert!(initial_rules.mention_triggers_reply);
+
+        let new_rules = RouterRules {
+            mention_triggers_reply: false,
+            command_triggers_reply: false,
+            min_reply_interval: 10,
+            max_consecutive_turns: 5,
+        };
+
+        let p_updated = p.with_rules(new_rules);
+
+        assert!(!p_updated.rules.mention_triggers_reply);
+        assert!(!p_updated.rules.command_triggers_reply);
+        assert_eq!(p_updated.rules.min_reply_interval, 10);
+        assert_eq!(p_updated.rules.max_consecutive_turns, 5);
+    }
+
+    #[test]
+    fn test_set_rules() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut p = Personality::new(db, tenant_id, person_id);
+
+        let initial_rules = p.rules.clone();
+        assert!(initial_rules.mention_triggers_reply);
+
+        let new_rules = RouterRules {
+            mention_triggers_reply: false,
+            command_triggers_reply: false,
+            min_reply_interval: 10,
+            max_consecutive_turns: 5,
+        };
+
+        p.set_rules(new_rules.clone());
+
+        assert!(!p.rules.mention_triggers_reply);
+        assert!(!p.rules.command_triggers_reply);
+        assert_eq!(p.rules.min_reply_interval, 10);
+        assert_eq!(p.rules.max_consecutive_turns, 5);
+    }
+
+    #[test]
     fn test_validate_persona_valid() {
         let blueprint = PersonaBlueprint {
             name: "Test Persona".to_string(),
