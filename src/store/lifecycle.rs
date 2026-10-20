@@ -38,20 +38,10 @@ impl MemoryDb {
             transaction.commit()?;
             return Ok(remembered);
         }
-        let claim_id = insert_remember_components(
-            &transaction,
-            &input,
-            &locator,
-            &source_id,
-            &evidence_id,
-        )?;
-        let records = build_remember_records(
-            &transaction,
-            &input,
-            &source_id,
-            &evidence_id,
-            &claim_id,
-        )?;
+        let claim_id =
+            insert_remember_components(&transaction, &input, &locator, &source_id, &evidence_id)?;
+        let records =
+            build_remember_records(&transaction, &input, &source_id, &evidence_id, &claim_id)?;
         append_commit(
             &transaction,
             &input.tenant_id,
