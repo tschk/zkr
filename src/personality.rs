@@ -928,10 +928,7 @@ impl Personality {
             processing_state: MemoryProcessingState::Processed,
         };
         self.remember(
-            format!(
-                "calibration:{}:{}",
-                record.participant, record.epoch
-            ),
+            format!("calibration:{}:{}", record.participant, record.epoch),
             SourceKind::Integration,
             text,
             Some(claim),
