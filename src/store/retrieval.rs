@@ -58,6 +58,25 @@ impl MemoryDb {
         })
     }
 
+    fn extend_targets_with_seen(
+        lexical: &mut Vec<RetrievalTarget>,
+        seen: &mut HashSet<RetrievalTarget>,
+        targets: impl IntoIterator<Item = RetrievalTarget>,
+        limit: usize,
+    ) {
+        if lexical.len() >= limit {
+            return;
+        }
+        for target in targets {
+            if seen.insert(target.clone()) {
+                lexical.push(target);
+                if lexical.len() >= limit {
+                    break;
+                }
+            }
+        }
+    }
+
     fn search_lexical(
         &self,
         input: &SearchInput,
@@ -76,62 +95,63 @@ impl MemoryDb {
         lexical.retain(|target| seen.insert(target.clone()));
         let lowered_query = input.query.to_lowercase();
         let phrase_terms = [lowered_query];
+
         if lexical.len() < candidate_limit as usize {
-            for target in self.claim_lexical_targets(
+            let claim_phrase_targets = self.claim_lexical_targets(
                 &input.tenant_id,
                 &input.person_id,
                 &phrase_terms,
                 candidate_limit.saturating_add(lexical.len() as u32),
                 input.as_of.as_ref(),
                 &input.enabled_features,
-            )? {
-                if seen.insert(target.clone()) {
-                    lexical.push(target);
-                    if lexical.len() >= candidate_limit as usize {
-                        break;
-                    }
-                }
-            }
+            )?;
+            Self::extend_targets_with_seen(
+                &mut lexical,
+                &mut seen,
+                claim_phrase_targets,
+                candidate_limit as usize,
+            );
         }
+
         if lexical.len() < candidate_limit as usize {
             if let Some(token_query) = token_query {
-                for target in self.lexical_targets(
+                let token_targets = self.lexical_targets(
                     &input.tenant_id,
                     &input.person_id,
                     &token_query,
                     candidate_limit,
                     input.as_of.as_ref(),
                     &input.enabled_features,
-                )? {
-                    if seen.insert(target.clone()) {
-                        lexical.push(target);
-                        if lexical.len() >= candidate_limit as usize {
-                            break;
-                        }
-                    }
-                }
+                )?;
+                Self::extend_targets_with_seen(
+                    &mut lexical,
+                    &mut seen,
+                    token_targets,
+                    candidate_limit as usize,
+                );
             }
         }
+
         if lexical.len() < candidate_limit as usize {
             let terms = lexical_terms(&input.query);
             if !terms.is_empty() && terms.as_slice() != phrase_terms {
-                for target in self.claim_lexical_targets(
+                let claim_term_targets = self.claim_lexical_targets(
                     &input.tenant_id,
                     &input.person_id,
                     &terms,
                     candidate_limit.saturating_add(lexical.len() as u32),
                     input.as_of.as_ref(),
                     &input.enabled_features,
-                )? {
-                    if seen.insert(target.clone()) {
-                        lexical.push(target);
-                        if lexical.len() >= candidate_limit as usize {
-                            break;
-                        }
-                    }
-                }
+                )?;
+                Self::extend_targets_with_seen(
+                    &mut lexical,
+                    &mut seen,
+                    claim_term_targets,
+                    candidate_limit as usize,
+                );
             }
         }
+
         Ok(lexical)
     }
 
