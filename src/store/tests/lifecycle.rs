@@ -974,3 +974,94 @@ fn correction_creates_superseding_claim_and_updates_old() {
     assert_eq!(new_claim.4, 20);
     assert_eq!(new_claim.5, "Beta");
 }
+
+#[test]
+fn archive_claim_updates_tier_and_repairs_projection() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+
+    let claim = db.remember(remember("t1", "p1", "value")).unwrap();
+    let claim_id = claim.claim_id.unwrap();
+
+    let archived = db.archive(ArchiveInput {
+        tenant_id: TenantId("t1".into()),
+        person_id: PersonId("p1".into()),
+        claim_id: claim_id.clone(),
+        recorded_at: 20,
+    }).unwrap();
+
+    assert_eq!(archived.claim_id, claim_id);
+
+    let tier = db.connection.query_row(
+        "SELECT tier FROM claims WHERE id = ?1",
+        [&claim_id.0],
+        |row| row.get::<_, String>(0),
+    ).unwrap();
+    assert_eq!(tier, "archive");
+
+    let archived_again = db.archive(ArchiveInput {
+        tenant_id: TenantId("t1".into()),
+        person_id: PersonId("p1".into()),
+        claim_id: claim_id.clone(),
+        recorded_at: 20,
+    }).unwrap();
+
+    assert_eq!(archived_again.claim_id, claim_id);
+}
+
+#[test]
+fn archive_rejects_invalid_states() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+
+    let claim = db.remember(remember("t1", "p1", "value")).unwrap();
+    let claim_id = claim.claim_id.unwrap();
+
+    // 1. recorded_at must not predate claim
+    let err = db.archive(ArchiveInput {
+        tenant_id: TenantId("t1".into()),
+        person_id: PersonId("p1".into()),
+        claim_id: claim_id.clone(),
+        recorded_at: 5,
+    }).unwrap_err();
+    assert!(matches!(err, Error::Invalid(msg) if msg == "archive recorded_at must not predate claim"));
+
+    // 2. requires processing_state=processed
+    db.connection.execute(
+        "UPDATE claims SET tier = 'volatile', processing_state = 'pending' WHERE id = ?1",
+        [&claim_id.0],
+    ).unwrap();
+
+    let err = db.archive(ArchiveInput {
+        tenant_id: TenantId("t1".into()),
+        person_id: PersonId("p1".into()),
+        claim_id: claim_id.clone(),
+        recorded_at: 20,
+    }).unwrap_err();
+    assert!(matches!(err, Error::Invalid(msg) if msg == "archive requires processing_state=processed"));
+
+    // Reset processing_state for next test
+    db.connection.execute(
+        "UPDATE claims SET tier = 'long_term', processing_state = 'processed' WHERE id = ?1",
+        [&claim_id.0],
+    ).unwrap();
+
+    // 3. cannot be superseded
+    // Note: status 'superseded' with tier 'archive' is illegal, but status 'superseded' with tier 'long_term' is fine
+    db.connection.execute(
+        "UPDATE claims SET status = 'superseded' WHERE id = ?1",
+        [&claim_id.0],
+    ).unwrap();
+
+    let err = db.archive(ArchiveInput {
+        tenant_id: TenantId("t1".into()),
+        person_id: PersonId("p1".into()),
+        claim_id: claim_id.clone(),
+        recorded_at: 20,
+    }).unwrap_err();
+    assert!(matches!(err, Error::Invalid(msg) if msg == "archive cannot be superseded"));
+}
