@@ -26,6 +26,9 @@ export function resolveZkrExecutable(command: string | undefined): string {
   if (typeof executable !== "string" || executable.includes("\0")) {
     throw new Error(ZKR_COMMAND_FAILED);
   }
+  if (/[\r\n;&|`$"'<>]/.test(executable)) {
+    throw new Error(ZKR_COMMAND_FAILED);
+  }
   const name = basename(executable);
   const candidate = process.platform === "win32" ? name.toLowerCase() : name;
   if (candidate !== "zkr" && candidate !== "zkr.exe") {
