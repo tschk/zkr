@@ -163,7 +163,7 @@ fn lifecycle_is_scoped_cited_and_propagates_deletion() {
             claim_id: first.claim_id.unwrap(),
             text: "I moved to Beta".into(),
             value: "Beta".into(),
-            valid_at: 5,
+            valid_at: 15,
             recorded_at: 20,
         })
         .unwrap();
@@ -175,7 +175,7 @@ fn lifecycle_is_scoped_cited_and_propagates_deletion() {
             |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
         )
         .unwrap();
-    assert_eq!(old_intervals, (5, 20));
+    assert_eq!(old_intervals, (15, 20));
     assert!(
         db.search(SearchInput {
             tenant_id: TenantId("a".into()),
@@ -811,7 +811,7 @@ fn correction_requires_valid_scope() {
             claim_id: ClaimId("claim".into()),
             text: "Sam works at Beta".into(),
             value: "Beta".into(),
-            valid_at: 5,
+            valid_at: 15,
             recorded_at: 20,
         })
         .unwrap_err();
@@ -824,7 +824,7 @@ fn correction_requires_valid_scope() {
             claim_id: ClaimId("claim".into()),
             text: "Sam works at Beta".into(),
             value: "Beta".into(),
-            valid_at: 5,
+            valid_at: 15,
             recorded_at: 20,
         })
         .unwrap_err();
@@ -845,7 +845,7 @@ fn correction_requires_text_and_value() {
             claim_id: ClaimId("claim".into()),
             text: "".into(),
             value: "Beta".into(),
-            valid_at: 5,
+            valid_at: 15,
             recorded_at: 20,
         })
         .unwrap_err();
@@ -858,7 +858,7 @@ fn correction_requires_text_and_value() {
             claim_id: ClaimId("claim".into()),
             text: "Sam works at Beta".into(),
             value: "".into(),
-            valid_at: 5,
+            valid_at: 15,
             recorded_at: 20,
         })
         .unwrap_err();
@@ -925,7 +925,7 @@ fn correction_creates_superseding_claim_and_updates_old() {
             claim_id: old_claim_id.clone(),
             text: "Sam works at Beta".into(),
             value: "Beta".into(),
-            valid_at: 5,
+            valid_at: 15,
             recorded_at: 20,
         })
         .unwrap();
@@ -947,7 +947,7 @@ fn correction_creates_superseding_claim_and_updates_old() {
         )
         .unwrap();
     assert_eq!(old_status.0, "superseded");
-    assert_eq!(old_status.1, 5);
+    assert_eq!(old_status.1, 15);
     assert_eq!(old_status.2, 20);
 
     let new_claim = db
@@ -970,7 +970,144 @@ fn correction_creates_superseding_claim_and_updates_old() {
     assert_eq!(new_claim.0, "accepted");
     assert_eq!(new_claim.1, "Sam");
     assert_eq!(new_claim.2, "employer");
-    assert_eq!(new_claim.3, 5);
+    assert_eq!(new_claim.3, 15);
     assert_eq!(new_claim.4, 20);
     assert_eq!(new_claim.5, "Beta");
+}
+
+#[test]
+fn archive_requires_valid_scope() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let claim_id = db.remember(remember("a", "sam", "Acme")).unwrap().claim_id.unwrap();
+    assert!(matches!(
+        db.archive(ArchiveInput {
+            tenant_id: TenantId("".into()),
+            person_id: PersonId("sam".into()),
+            claim_id: claim_id.clone(),
+            recorded_at: 20,
+        }),
+        Err(Error::Invalid(_))
+    ));
+}
+
+#[test]
+fn archive_requires_processed_state() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let claim_id = db.remember(remember("a", "sam", "Acme")).unwrap().claim_id.unwrap();
+    db.connection.execute("UPDATE claims SET processing_state = 'pending', status = 'pending', tier = 'short_term' WHERE id = ?1", [&claim_id.0]).unwrap();
+    let result = db.archive(ArchiveInput {
+        tenant_id: TenantId("a".into()),
+        person_id: PersonId("sam".into()),
+        claim_id: claim_id.clone(),
+        recorded_at: 20,
+    });
+    assert!(matches!(result, Err(Error::Invalid(msg)) if msg == "archive requires processing_state=processed"));
+}
+
+#[test]
+fn archive_rejects_superseded_claim() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let old_claim_id = db.remember(remember("a", "sam", "Acme")).unwrap().claim_id.unwrap();
+
+    let _corrected = db
+        .correct(CorrectInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            claim_id: old_claim_id.clone(),
+            text: "Sam works at Beta".into(),
+            value: "Beta".into(),
+            valid_at: 15,
+            recorded_at: 20,
+        })
+        .unwrap();
+
+    let result = db.archive(ArchiveInput {
+        tenant_id: TenantId("a".into()),
+        person_id: PersonId("sam".into()),
+        claim_id: old_claim_id.clone(),
+        recorded_at: 25,
+    });
+
+    assert!(matches!(result, Err(Error::Invalid(msg)) if msg == "archive cannot be superseded"));
+}
+
+#[test]
+fn archive_rejects_predating_recorded_at() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let mut input = remember("a", "sam", "Acme");
+    input.recorded_at = 10;
+    let claim_id = db.remember(input).unwrap().claim_id.unwrap();
+
+    let result = db.archive(ArchiveInput {
+        tenant_id: TenantId("a".into()),
+        person_id: PersonId("sam".into()),
+        claim_id: claim_id.clone(),
+        recorded_at: 9,
+    });
+
+    assert!(matches!(result, Err(Error::Invalid(msg)) if msg == "archive recorded_at must not predate claim"));
+}
+
+#[test]
+fn archive_is_idempotent() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let mut input = remember("a", "sam", "Acme");
+    input.recorded_at = 10;
+    let claim_id = db.remember(input).unwrap().claim_id.unwrap();
+
+    let result1 = db.archive(ArchiveInput {
+        tenant_id: TenantId("a".into()),
+        person_id: PersonId("sam".into()),
+        claim_id: claim_id.clone(),
+        recorded_at: 11,
+    });
+    assert!(result1.is_ok());
+
+    let result2 = db.archive(ArchiveInput {
+        tenant_id: TenantId("a".into()),
+        person_id: PersonId("sam".into()),
+        claim_id: claim_id.clone(),
+        recorded_at: 11,
+    });
+    assert!(result2.is_ok());
+}
+
+#[test]
+fn archive_updates_tier_to_archive() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let mut input = remember("a", "sam", "Acme");
+    input.recorded_at = 10;
+    let claim_id = db.remember(input).unwrap().claim_id.unwrap();
+
+    db.archive(ArchiveInput {
+        tenant_id: TenantId("a".into()),
+        person_id: PersonId("sam".into()),
+        claim_id: claim_id.clone(),
+        recorded_at: 11,
+    }).unwrap();
+
+    let tier: String = db.connection.query_row(
+        "SELECT tier FROM claims WHERE id = ?1",
+        [&claim_id.0],
+        |row| row.get(0)
+    ).unwrap();
+    assert_eq!(tier, "archive");
 }
