@@ -23,7 +23,11 @@ const MAX_ZKR_OUTPUT_BYTES = 1024 * 1024;
 
 export function resolveZkrExecutable(command: string | undefined): string {
   const executable = command ?? "zkr";
-  if (typeof executable !== "string" || executable.includes("\0")) {
+  if (
+    typeof executable !== "string" ||
+    executable.includes("\0") ||
+    /[^a-zA-Z0-9_.\-\/\\:~]/.test(executable)
+  ) {
     throw new Error(ZKR_COMMAND_FAILED);
   }
   const name = basename(executable);
