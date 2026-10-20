@@ -1003,5 +1003,8 @@ fn profiles_with_zero_limit_returns_empty() {
         })
         .unwrap();
 
-    assert!(profiles.is_empty(), "Profiles with limit 0 should return empty list");
+    assert!(
+        profiles.is_empty(),
+        "Profiles with limit 0 should return empty list"
+    );
 }
