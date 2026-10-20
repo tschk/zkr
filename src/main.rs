@@ -111,12 +111,43 @@ fn dispatch_command(
 }
 
 fn read_json<T: DeserializeOwned>() -> Result<T, Box<dyn std::error::Error>> {
+    read_json_from(std::io::stdin())
+}
+
+fn read_json_from<T: DeserializeOwned, R: Read>(
+    reader: R,
+) -> Result<T, Box<dyn std::error::Error>> {
     let mut input = Vec::new();
-    std::io::stdin()
+    reader
         .take(MAX_REQUEST_BYTES + 1)
         .read_to_end(&mut input)?;
     if input.len() as u64 > MAX_REQUEST_BYTES {
         return Err("request exceeds 1048576 bytes".into());
     }
     Ok(serde_json::from_slice(&input)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_read_json_from_exceeds_limit() {
+        let payload = "x".repeat(MAX_REQUEST_BYTES as usize + 1);
+        let result: Result<serde_json::Value, _> = read_json_from(payload.as_bytes());
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "request exceeds 1048576 bytes"
+        );
+    }
+
+    #[test]
+    fn test_read_json_from_within_limit() {
+        let payload = r#"{"hello": "world"}"#;
+        let result: Result<serde_json::Value, _> = read_json_from(payload.as_bytes());
+        assert!(result.is_ok());
+        let value = result.unwrap();
+        assert_eq!(value["hello"], "world");
+    }
 }
