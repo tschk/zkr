@@ -1566,7 +1566,6 @@ mod tests {
         assert!(vec1[0] != 1.0 || vec1[1..].iter().any(|&x| x != 0.0));
     }
 
-
     fn memory(project: &str, category: &str, person: &str, value: &str) -> ProjectMemoryInput {
         serde_json::from_value(json!({
             "project":project,"category":category,"tenant_id":"local","person_id":person,
