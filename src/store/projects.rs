@@ -2230,7 +2230,6 @@ mod tests {
         assert_eq!(rev_facts.len(), 2);
     }
 
-
     fn setup_dream_db() -> MemoryDb {
         let mut db = MemoryDb::open(":memory:").unwrap();
 
@@ -2488,4 +2487,5 @@ mod tests {
 
         assert_eq!(pack.contradictions, vec![btree_claim_id]);
         assert_eq!(pack.stale_summary_ids, vec![napped.summary_id]);
-    }}
+    }
+}
