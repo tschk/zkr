@@ -1431,6 +1431,154 @@ impl MemoryDb {
     }
 }
 
+
+fn project_graph_activation(
+    all_candidates: &[(ProjectFact, String, i64, String)],
+    connected_to: Option<&String>,
+    max_hops: Option<u32>,
+) -> Option<HashSet<ClaimId>> {
+    let seed = connected_to?;
+    let hops = max_hops.unwrap_or(1);
+    let mut frontier = HashSet::from([seed.clone()]);
+    for (fact, subject, _, _) in all_candidates {
+        if fact_matches_node(fact, subject, seed) {
+            frontier.insert(fact.claim_id.0.clone());
+            frontier.insert(fact.predicate.clone());
+            frontier.insert(subject.clone());
+        }
+    }
+    let mut activated = HashSet::new();
+    for _ in 0..hops {
+        let mut next_frontier = frontier.clone();
+        let mut outgoing_targets = HashSet::new();
+        for (fact, subject, _, _) in all_candidates {
+            let is_in_frontier = frontier
+                .iter()
+                .any(|id| fact_matches_node(fact, subject, id));
+            if is_in_frontier && let Some(rec) = &fact.record {
+                for conn in &rec.connections {
+                    outgoing_targets.insert(conn.target.clone());
+                    next_frontier.insert(conn.target.clone());
+                }
+            }
+        }
+        for (fact, subject, _, _) in all_candidates {
+            if fact_matches_node(fact, subject, seed) {
+                continue;
+            }
+            let matched_by_outgoing = outgoing_targets
+                .iter()
+                .any(|tgt| fact_matches_node(fact, subject, tgt));
+            let points_into_frontier = fact.record.as_ref().is_some_and(|rec| {
+                rec.connections.iter().any(|conn| {
+                    frontier.contains(&conn.target)
+                        || all_candidates.iter().any(|(f, s, _, _)| {
+                            frontier.iter().any(|id| fact_matches_node(f, s, id))
+                                && fact_matches_node(f, s, &conn.target)
+                        })
+                })
+            });
+            if matched_by_outgoing || points_into_frontier {
+                activated.insert(fact.claim_id.clone());
+                next_frontier.insert(fact.claim_id.0.clone());
+                next_frontier.insert(fact.predicate.clone());
+                next_frontier.insert(subject.clone());
+            }
+        }
+        frontier = next_frontier;
+    }
+    Some(activated)
+}
+
+fn filter_project_candidates(
+    all_candidates: Vec<(ProjectFact, String, i64, String)>,
+    input: &ProjectQuery,
+    activated_ids: &Option<HashSet<ClaimId>>,
+) -> Vec<(ProjectFact, String, i64, String)> {
+    let record_type_filter = input.record_type.as_deref();
+    let relation_filter = input.relation.as_deref();
+    let target_filter = input.target.as_deref();
+
+    let mut filtered = Vec::new();
+    for (fact, subject, recorded_from, quote) in all_candidates {
+        if let Some(active) = activated_ids
+            && !active.contains(&fact.claim_id)
+        {
+            continue;
+        }
+        if let Some(proj) = &input.project
+            && &fact.project != proj
+        {
+            continue;
+        }
+        if !input.projects.is_empty() && !input.projects.iter().any(|p| p == &fact.project) {
+            continue;
+        }
+        if let Some(cat) = &input.category
+            && !fact.categories.iter().any(|c| c == cat)
+        {
+            continue;
+        }
+        if !input.categories.is_empty()
+            && !input
+                .categories
+                .iter()
+                .any(|c| fact.categories.iter().any(|fc| fc == c))
+        {
+            continue;
+        }
+        if !input.all_categories.is_empty()
+            && !input
+                .all_categories
+                .iter()
+                .all(|c| fact.categories.iter().any(|fc| fc == c))
+        {
+            continue;
+        }
+        if let Some(pred) = &input.predicate
+            && &fact.predicate != pred
+        {
+            continue;
+        }
+        if record_type_filter.is_some() || relation_filter.is_some() || target_filter.is_some() {
+            let Some(rec) = &fact.record else {
+                continue;
+            };
+            if let Some(rt) = record_type_filter
+                && rec.record_type != rt
+            {
+                continue;
+            }
+            let matches_connection = match (relation_filter, target_filter) {
+                (Some(rel), Some(tgt)) => rec
+                    .connections
+                    .iter()
+                    .any(|conn| conn.relation == rel && conn.target == tgt),
+                (Some(rel), None) => rec.connections.iter().any(|conn| conn.relation == rel),
+                (None, Some(tgt)) => rec.connections.iter().any(|conn| conn.target == tgt),
+                (None, None) => true,
+            };
+            if !matches_connection {
+                continue;
+            }
+        }
+        if !input.where_fields.is_empty() {
+            let Some(rec) = &fact.record else {
+                continue;
+            };
+            if !input
+                .where_fields
+                .iter()
+                .all(|(k, v)| rec.fields.get(k) == Some(v))
+            {
+                continue;
+            }
+        }
+        filtered.push((fact, subject, recorded_from, quote));
+    }
+    filtered
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2317,151 +2465,4 @@ mod tests {
         assert_eq!(pack.contradictions, vec![btree_claim_id]);
         assert_eq!(pack.stale_summary_ids, vec![napped.summary_id]);
     }
-}
-
-fn project_graph_activation(
-    all_candidates: &[(ProjectFact, String, i64, String)],
-    connected_to: Option<&String>,
-    max_hops: Option<u32>,
-) -> Option<HashSet<ClaimId>> {
-    let seed = connected_to?;
-    let hops = max_hops.unwrap_or(1);
-    let mut frontier = HashSet::from([seed.clone()]);
-    for (fact, subject, _, _) in all_candidates {
-        if fact_matches_node(fact, subject, seed) {
-            frontier.insert(fact.claim_id.0.clone());
-            frontier.insert(fact.predicate.clone());
-            frontier.insert(subject.clone());
-        }
-    }
-    let mut activated = HashSet::new();
-    for _ in 0..hops {
-        let mut next_frontier = frontier.clone();
-        let mut outgoing_targets = HashSet::new();
-        for (fact, subject, _, _) in all_candidates {
-            let is_in_frontier = frontier
-                .iter()
-                .any(|id| fact_matches_node(fact, subject, id));
-            if is_in_frontier && let Some(rec) = &fact.record {
-                for conn in &rec.connections {
-                    outgoing_targets.insert(conn.target.clone());
-                    next_frontier.insert(conn.target.clone());
-                }
-            }
-        }
-        for (fact, subject, _, _) in all_candidates {
-            if fact_matches_node(fact, subject, seed) {
-                continue;
-            }
-            let matched_by_outgoing = outgoing_targets
-                .iter()
-                .any(|tgt| fact_matches_node(fact, subject, tgt));
-            let points_into_frontier = fact.record.as_ref().is_some_and(|rec| {
-                rec.connections.iter().any(|conn| {
-                    frontier.contains(&conn.target)
-                        || all_candidates.iter().any(|(f, s, _, _)| {
-                            frontier.iter().any(|id| fact_matches_node(f, s, id))
-                                && fact_matches_node(f, s, &conn.target)
-                        })
-                })
-            });
-            if matched_by_outgoing || points_into_frontier {
-                activated.insert(fact.claim_id.clone());
-                next_frontier.insert(fact.claim_id.0.clone());
-                next_frontier.insert(fact.predicate.clone());
-                next_frontier.insert(subject.clone());
-            }
-        }
-        frontier = next_frontier;
-    }
-    Some(activated)
-}
-
-fn filter_project_candidates(
-    all_candidates: Vec<(ProjectFact, String, i64, String)>,
-    input: &ProjectQuery,
-    activated_ids: &Option<HashSet<ClaimId>>,
-) -> Vec<(ProjectFact, String, i64, String)> {
-    let record_type_filter = input.record_type.as_deref();
-    let relation_filter = input.relation.as_deref();
-    let target_filter = input.target.as_deref();
-
-    let mut filtered = Vec::new();
-    for (fact, subject, recorded_from, quote) in all_candidates {
-        if let Some(active) = activated_ids
-            && !active.contains(&fact.claim_id)
-        {
-            continue;
-        }
-        if let Some(proj) = &input.project
-            && &fact.project != proj
-        {
-            continue;
-        }
-        if !input.projects.is_empty() && !input.projects.iter().any(|p| p == &fact.project) {
-            continue;
-        }
-        if let Some(cat) = &input.category
-            && !fact.categories.iter().any(|c| c == cat)
-        {
-            continue;
-        }
-        if !input.categories.is_empty()
-            && !input
-                .categories
-                .iter()
-                .any(|c| fact.categories.iter().any(|fc| fc == c))
-        {
-            continue;
-        }
-        if !input.all_categories.is_empty()
-            && !input
-                .all_categories
-                .iter()
-                .all(|c| fact.categories.iter().any(|fc| fc == c))
-        {
-            continue;
-        }
-        if let Some(pred) = &input.predicate
-            && &fact.predicate != pred
-        {
-            continue;
-        }
-        if record_type_filter.is_some() || relation_filter.is_some() || target_filter.is_some() {
-            let Some(rec) = &fact.record else {
-                continue;
-            };
-            if let Some(rt) = record_type_filter
-                && rec.record_type != rt
-            {
-                continue;
-            }
-            let matches_connection = match (relation_filter, target_filter) {
-                (Some(rel), Some(tgt)) => rec
-                    .connections
-                    .iter()
-                    .any(|conn| conn.relation == rel && conn.target == tgt),
-                (Some(rel), None) => rec.connections.iter().any(|conn| conn.relation == rel),
-                (None, Some(tgt)) => rec.connections.iter().any(|conn| conn.target == tgt),
-                (None, None) => true,
-            };
-            if !matches_connection {
-                continue;
-            }
-        }
-        if !input.where_fields.is_empty() {
-            let Some(rec) = &fact.record else {
-                continue;
-            };
-            if !input
-                .where_fields
-                .iter()
-                .all(|(k, v)| rec.fields.get(k) == Some(v))
-            {
-                continue;
-            }
-        }
-        filtered.push((fact, subject, recorded_from, quote));
-    }
-    filtered
 }
