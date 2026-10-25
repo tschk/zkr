@@ -1586,6 +1586,57 @@ mod tests {
     }
 
     #[test]
+    fn remember_project_record_merges_categories_and_requires_claim() {
+        let mut db = MemoryDb::open(":memory:").unwrap();
+
+        // 1. Missing claim
+        let mut missing_claim = memory("Tofu", "work", "me", "bad");
+        missing_claim.memory.claim = None;
+        let input = ProjectRecordInput {
+            record: serde_json::from_value(serde_json::json!({
+                "record_type": "meeting",
+                "categories": ["extra_category"],
+                "fields": {},
+                "connections": []
+            }))
+            .unwrap(),
+            memory: missing_claim,
+        };
+
+        let err = db.remember_project_record(input).unwrap_err();
+        assert!(
+            matches!(err, Error::Invalid(msg) if msg == "project record requires a cited claim")
+        );
+
+        // 2. Merging categories
+        let mut mem = memory("Tofu", "work", "me", "good");
+        mem.categories = vec!["existing_category".to_string()];
+
+        let input = ProjectRecordInput {
+            record: serde_json::from_value(serde_json::json!({
+                "record_type": "meeting",
+                "categories": ["extra_category", "existing_category", "work"],
+                "fields": {},
+                "connections": []
+            }))
+            .unwrap(),
+            memory: mem,
+        };
+
+        db.remember_project_record(input).unwrap();
+
+        let facts = db
+            .project_memories(query("me", Some("Tofu"), None))
+            .unwrap();
+        assert_eq!(facts.len(), 1);
+        let fact = &facts[0];
+
+        assert!(fact.categories.contains(&"work".to_string()));
+        assert!(fact.categories.contains(&"existing_category".to_string()));
+        assert!(fact.categories.contains(&"extra_category".to_string()));
+    }
+
+    #[test]
     fn projects_and_categories_are_exact_scoped_and_cited() {
         let mut db = MemoryDb::open(":memory:").unwrap();
         let remembered = db
