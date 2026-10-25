@@ -1259,7 +1259,76 @@ mod tests {
         (tmp, personality)
     }
 
+    fn test_voice_card(scope: &str) -> VoiceCard {
+        VoiceCard {
+            scope: scope.into(),
+            version: 1,
+            register: "professional".into(),
+            humor: "subtle".into(),
+            lexicon: vec![],
+            banned_phrases: vec![],
+            roles: vec![],
+            taboos: vec![],
+            in_jokes: vec![],
+            group_norms: vec![],
+            confidence_basis_points: 8000,
+            supporting_event_epochs: vec![],
+            valid_from: 0,
+            valid_until: None,
+        }
+    }
+
     // --- Validation tests --------------------------------------------------
+
+    #[test]
+    fn test_with_rules() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let p = Personality::new(db, tenant_id, person_id);
+
+        let initial_rules = p.rules.clone();
+        assert!(initial_rules.mention_triggers_reply);
+
+        let new_rules = RouterRules {
+            mention_triggers_reply: false,
+            command_triggers_reply: false,
+            min_reply_interval: 10,
+            max_consecutive_turns: 5,
+        };
+
+        let p_updated = p.with_rules(new_rules);
+
+        assert!(!p_updated.rules.mention_triggers_reply);
+        assert!(!p_updated.rules.command_triggers_reply);
+        assert_eq!(p_updated.rules.min_reply_interval, 10);
+        assert_eq!(p_updated.rules.max_consecutive_turns, 5);
+    }
+
+    #[test]
+    fn test_set_rules() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut p = Personality::new(db, tenant_id, person_id);
+
+        let initial_rules = p.rules.clone();
+        assert!(initial_rules.mention_triggers_reply);
+
+        let new_rules = RouterRules {
+            mention_triggers_reply: false,
+            command_triggers_reply: false,
+            min_reply_interval: 10,
+            max_consecutive_turns: 5,
+        };
+
+        p.set_rules(new_rules.clone());
+
+        assert!(!p.rules.mention_triggers_reply);
+        assert!(!p.rules.command_triggers_reply);
+        assert_eq!(p.rules.min_reply_interval, 10);
+        assert_eq!(p.rules.max_consecutive_turns, 5);
+    }
 
     #[test]
     fn test_validate_persona_valid() {
@@ -1679,20 +1748,9 @@ mod tests {
         // Store a voice card first.
         personality
             .store_voice_card(&VoiceCard {
-                scope: "general".into(),
-                version: 1,
-                register: "professional".into(),
-                humor: "subtle".into(),
-                lexicon: vec![],
-                banned_phrases: vec![],
-                roles: vec![],
-                taboos: vec![],
-                in_jokes: vec![],
                 group_norms: vec!["be concise".into()],
-                confidence_basis_points: 8000,
                 supporting_event_epochs: vec![1],
-                valid_from: 0,
-                valid_until: None,
+                ..test_voice_card("general")
             })
             .unwrap();
 
@@ -2412,8 +2470,6 @@ mod tests {
 
         personality
             .store_voice_card(&VoiceCard {
-                scope: "room-42".into(),
-                version: 1,
                 register: "casual".into(),
                 humor: "dry".into(),
                 lexicon: vec!["ship".into(), "deploy".into()],
@@ -2424,8 +2480,7 @@ mod tests {
                 group_norms: vec!["cite sources".into()],
                 confidence_basis_points: 7200,
                 supporting_event_epochs: vec![1, 2],
-                valid_from: 0,
-                valid_until: None,
+                ..test_voice_card("room-42")
             })
             .unwrap();
 
@@ -2444,7 +2499,6 @@ mod tests {
 
         personality
             .store_voice_card(&VoiceCard {
-                scope: "engineering".into(),
                 version: 2,
                 register: "formal".into(),
                 humor: "none".into(),
@@ -2452,12 +2506,10 @@ mod tests {
                 banned_phrases: vec!["hack".into()],
                 roles: vec!["reviewer".into()],
                 taboos: vec!["politics".into()],
-                in_jokes: vec![],
                 group_norms: vec!["write tests".into()],
                 confidence_basis_points: 9000,
                 supporting_event_epochs: vec![3, 4],
-                valid_from: 0,
-                valid_until: None,
+                ..test_voice_card("engineering")
             })
             .unwrap();
 
@@ -2504,20 +2556,11 @@ mod tests {
         let mut personality = Personality::new(db, TenantId("".into()), person_id);
 
         let result = personality.store_voice_card(&VoiceCard {
-            scope: "engineering".into(),
-            version: 1,
             register: "formal".into(),
             humor: "none".into(),
-            lexicon: vec![],
-            banned_phrases: vec![],
-            roles: vec![],
-            taboos: vec![],
-            in_jokes: vec![],
-            group_norms: vec![],
             confidence_basis_points: 9000,
             supporting_event_epochs: vec![3, 4],
-            valid_from: 0,
-            valid_until: None,
+            ..test_voice_card("engineering")
         });
 
         assert!(matches!(result, Err(crate::store::Error::Invalid(_))));
@@ -2914,20 +2957,8 @@ mod tests {
 
         personality
             .store_voice_card(&VoiceCard {
-                scope: "general".into(),
-                version: 1,
-                register: "professional".into(),
-                humor: "subtle".into(),
-                lexicon: vec![],
-                banned_phrases: vec![],
-                roles: vec![],
-                taboos: vec![],
-                in_jokes: vec![],
                 group_norms: vec!["be concise".into()],
-                confidence_basis_points: 8000,
-                supporting_event_epochs: vec![],
-                valid_from: 0,
-                valid_until: None,
+                ..test_voice_card("general")
             })
             .unwrap();
 
@@ -3011,20 +3042,8 @@ mod tests {
 
         personality
             .store_voice_card(&VoiceCard {
-                scope: "general test".into(),
-                version: 1,
-                register: "professional".into(),
-                humor: "subtle".into(),
-                lexicon: vec![],
-                banned_phrases: vec![],
-                roles: vec![],
-                taboos: vec![],
-                in_jokes: vec![],
                 group_norms: vec!["be concise".into()],
-                confidence_basis_points: 8000,
-                supporting_event_epochs: vec![],
-                valid_from: 0,
-                valid_until: None,
+                ..test_voice_card("general test")
             })
             .unwrap();
 
@@ -3084,20 +3103,11 @@ mod tests {
 
         personality
             .store_voice_card(&VoiceCard {
-                scope: "dev-team".into(),
-                version: 1,
                 register: "technical".into(),
                 humor: "dry".into(),
                 lexicon: vec!["refactor".into()],
-                banned_phrases: vec![],
-                roles: vec![],
-                taboos: vec![],
-                in_jokes: vec![],
                 group_norms: vec!["code review".into()],
-                confidence_basis_points: 8000,
-                supporting_event_epochs: vec![],
-                valid_from: 0,
-                valid_until: None,
+                ..test_voice_card("dev-team")
             })
             .unwrap();
 
