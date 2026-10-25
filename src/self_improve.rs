@@ -245,4 +245,42 @@ mod tests {
         let result = improve.record("context", "action", "outcome", "lesson");
         assert!(result.is_err());
     }
+
+    #[test]
+    fn augment_propagates_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("memory.db")).unwrap();
+        let improve = SelfImprove::new(db, TenantId("".into()), PersonId("p1".into()));
+
+        let result = improve.augment("testing", "You are a helpful agent.");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn augment_formats_multiple_lessons() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("memory.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut improve = SelfImprove::new(db, tenant_id, person_id);
+
+        improve
+            .record("context 1", "action 1", "outcome 1", "first lesson")
+            .unwrap();
+        // A slight sleep to ensure timestamps differ and avoid hash collisions, following AGENTS.md memory for Sequential Insertions
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        improve
+            .record("context 2", "action 2", "outcome 2", "second lesson")
+            .unwrap();
+
+        let augmented = improve
+            .augment("lesson", "Base prompt.")
+            .unwrap();
+
+        assert!(augmented.starts_with("Base prompt.\n\n<lessons_learned>\n"));
+        assert!(augmented.contains("1. "));
+        assert!(augmented.contains("2. "));
+        assert!(augmented.contains("first lesson"));
+        assert!(augmented.contains("second lesson"));
+        assert!(augmented.ends_with("</lessons_learned>"));
+    }
 }
