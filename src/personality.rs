@@ -2787,12 +2787,7 @@ mod tests {
 
         // Store it twice
         personality.store_persona(&blueprint).unwrap();
-        match personality.store_persona(&blueprint) {
-            Ok(_) => {}
-            Err(crate::Error::Invalid(msg))
-                if msg == "ingestion_key conflicts with different memory payload" => {}
-            Err(e) => panic!("Unexpected error: {:?}", e),
-        }
+        personality.store_persona(&blueprint).unwrap();
 
         let context = personality.persona_context("idempotent-bot", 5).unwrap();
         assert_eq!(context.len(), 1);
