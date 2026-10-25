@@ -2230,8 +2230,7 @@ mod tests {
         assert_eq!(rev_facts.len(), 2);
     }
 
-    #[test]
-    fn inline_and_automatic_vectorization_power_queries_centroids_and_dream_synthesis() {
+    fn seeded_dream_db() -> MemoryDb {
         let mut db = MemoryDb::open(":memory:").unwrap();
 
         // Store two memories in category "database" with inline embeddings near [1.0, 0.0]
@@ -2305,6 +2304,13 @@ mod tests {
         )
         .unwrap();
 
+        db
+    }
+
+    #[test]
+    fn vector_queries_match_inline_embeddings() {
+        let db = seeded_dream_db();
+
         // Vector query using `query_embedding`
         let mut vq = query("me", Some("Tofu"), None);
         vq.query_embedding = Some(DenseQuery {
@@ -2315,6 +2321,11 @@ mod tests {
         let ranked = db.project_memories(vq).unwrap();
         assert_eq!(ranked[0].predicate, "service:analytics");
         assert_eq!(ranked[0].similarity_basis_points, Some(10_000));
+    }
+
+    #[test]
+    fn automatic_vectorization_powers_semantic_search() {
+        let db = seeded_dream_db();
 
         // Automatic `vector_query` using built-in `auto_vectorize`
         let mut auto_q = query("me", Some("Tofu"), None);
@@ -2322,6 +2333,19 @@ mod tests {
         let auto_ranked = db.project_memories(auto_q).unwrap();
         assert_eq!(auto_ranked[0].predicate, "note:pg_wal");
         assert!(auto_ranked[0].similarity_basis_points.unwrap() > 3_000);
+    }
+
+    #[test]
+    fn dream_synthesizes_categories_schemas_and_associations() {
+        let mut db = seeded_dream_db();
+
+        let mut vq = query("me", Some("Tofu"), None);
+        vq.query_embedding = Some(DenseQuery {
+            vector: vec![0.0, 1.0],
+            model: "brain-vec".into(),
+            version: "v1".into(),
+        });
+        let ranked = db.project_memories(vq).unwrap();
 
         // Attach a contradicting evidence link to `note:btree` and a stale summary node
         let btree_claim_id = ranked
