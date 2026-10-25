@@ -3327,6 +3327,7 @@ mod tests {
             .unwrap();
 
         std::thread::sleep(std::time::Duration::from_millis(10));
+
         personality.advance_epoch();
 
         personality
@@ -3337,6 +3338,8 @@ mod tests {
                 content: "how are you?".into(),
             })
             .unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
 
         personality
             .record_event(&ConversationEvent {
