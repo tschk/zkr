@@ -1533,6 +1533,37 @@ impl MemoryDb {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn auto_vectorize_produces_normalized_deterministic_vectors_and_handles_empty_inputs() {
+        // Test determinism
+        let v1 = auto_vectorize("The quick brown fox jumps over the lazy dog!");
+        let v2 = auto_vectorize("the quick brown fox jumps over the lazy dog");
+        assert_eq!(v1, v2);
+
+        // Test dimension and normalization
+        assert_eq!(v1.len(), AUTO_EMBEDDING_DIM);
+        let norm_v1 = v1.iter().map(|v| v * v).sum::<f32>().sqrt();
+        assert!((norm_v1 - 1.0).abs() < 1e-5);
+
+        // Test differentiability
+        let v3 = auto_vectorize("A fast orange fox leaps over a sleepy hound.");
+        assert_ne!(v1, v3);
+        let norm_v3 = v3.iter().map(|v| v * v).sum::<f32>().sqrt();
+        assert!((norm_v3 - 1.0).abs() < 1e-5);
+
+        // Test edge cases (fallback vector)
+        let empty_vec = auto_vectorize("");
+        assert_eq!(empty_vec.len(), AUTO_EMBEDDING_DIM);
+        assert_eq!(empty_vec[0], 1.0);
+        assert!(empty_vec[1..].iter().all(|&v| v == 0.0));
+
+        let spaces_vec = auto_vectorize("     ");
+        assert_eq!(spaces_vec, empty_vec);
+
+        let stopwords_vec = auto_vectorize("the and for with into from that this are was");
+        assert_eq!(stopwords_vec, empty_vec);
+    }
+
     use serde_json::json;
 
     fn memory(project: &str, category: &str, person: &str, value: &str) -> ProjectMemoryInput {
