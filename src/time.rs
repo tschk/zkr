@@ -45,7 +45,7 @@ pub(crate) fn parse_relative_time(s: &str) -> Option<i64> {
         "h" | "hr" | "hrs" | "hour" | "hours" => 3600,
         "d" | "day" | "days" => 86400,
         "w" | "wk" | "wks" | "week" | "weeks" => 604800,
-        "mo" | "mon" | "month" | "months" => 2592000,
+        "mo" | "M" | "month" | "months" => 2592000,
         "y" | "yr" | "yrs" | "year" | "years" => 31536000,
         _ => return None,
     };
@@ -92,7 +92,7 @@ mod tests {
 
     #[test]
     fn test_parse_relative_time_months_and_years() {
-        assert_eq!(parse_relative_time("1mo"), Some(2592000));
+        assert_eq!(parse_relative_time("1M"), Some(2592000));
         assert_eq!(parse_relative_time("1y"), Some(31536000));
     }
 
