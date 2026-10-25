@@ -1586,6 +1586,35 @@ mod tests {
     }
 
     #[test]
+    fn test_auto_vectorize_properties() {
+        // 1. Length is exactly AUTO_EMBEDDING_DIM
+        let vec1 = auto_vectorize("hello world of rust and semantics");
+        assert_eq!(vec1.len(), super::AUTO_EMBEDDING_DIM);
+
+        // 2. L2-normalized (magnitude is 1.0)
+        let norm: f32 = vec1.iter().map(|v| v * v).sum::<f32>().sqrt();
+        assert!((norm - 1.0).abs() < 1e-6);
+
+        // 3. Deterministic
+        let vec2 = auto_vectorize("hello world of rust and semantics");
+        assert_eq!(vec1, vec2);
+
+        // 4. Different text gives different vector
+        let vec3 = auto_vectorize("something completely different");
+        assert_ne!(vec1, vec3);
+
+        // 5. Empty string or only stopwords/short words gives fallback
+        let fallback = auto_vectorize("the a and"); // "the", "and" are stopwords, "a" is too short
+        let mut expected_fallback = vec![0.0_f32; super::AUTO_EMBEDDING_DIM];
+        expected_fallback[0] = 1.0;
+        assert_eq!(fallback, expected_fallback);
+
+        // 6. Test 1-character token fallback ("a") which tests s.len() >= 2 boundary
+        let fallback_short = auto_vectorize("a");
+        assert_eq!(fallback_short, expected_fallback);
+    }
+
+    #[test]
     fn remember_project_record_merges_categories_and_requires_claim() {
         let mut db = MemoryDb::open(":memory:").unwrap();
 
