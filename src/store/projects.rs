@@ -2447,4 +2447,65 @@ mod tests {
         assert_eq!(pack.contradictions, vec![btree_claim_id]);
         assert_eq!(pack.stale_summary_ids, vec![napped.summary_id]);
     }
+
+    #[test]
+    fn project_query_rejects_empty_parameters_and_invalid_hops() {
+        let db = MemoryDb::open(":memory:").unwrap();
+
+        let mut q = query("me", None, None);
+        q.project = Some("  ".into());
+        assert!(db.project_memories(q).is_err());
+
+        let mut q = query("me", None, None);
+        q.projects = vec!["valid".into(), " ".into()];
+        assert!(db.project_memories(q).is_err());
+
+        let mut q = query("me", None, None);
+        q.category = Some("".into());
+        assert!(db.project_memories(q).is_err());
+
+        let mut q = query("me", None, None);
+        q.categories = vec!["".into()];
+        assert!(db.project_memories(q).is_err());
+
+        let mut q = query("me", None, None);
+        q.all_categories = vec!["".into()];
+        assert!(db.project_memories(q).is_err());
+
+        let mut q = query("me", None, None);
+        q.predicate = Some("".into());
+        assert!(db.project_memories(q).is_err());
+
+        let mut q = query("me", None, None);
+        q.record_type = Some("".into());
+        assert!(db.project_memories(q).is_err());
+
+        let mut q = query("me", None, None);
+        q.relation = Some("".into());
+        assert!(db.project_memories(q).is_err());
+
+        let mut q = query("me", None, None);
+        q.target = Some("".into());
+        assert!(db.project_memories(q).is_err());
+
+        let mut q = query("me", None, None);
+        q.where_fields.insert("".into(), serde_json::json!("value"));
+        assert!(db.project_memories(q).is_err());
+
+        let mut q = query("me", None, None);
+        q.connected_to = Some("".into());
+        assert!(db.project_memories(q).is_err());
+
+        let mut q = query("me", None, None);
+        q.vector_query = Some("".into());
+        assert!(db.project_memories(q).is_err());
+
+        let mut q = query("me", None, None);
+        q.max_hops = Some(0);
+        assert!(db.project_memories(q).is_err());
+
+        let mut q = query("me", None, None);
+        q.max_hops = Some(5);
+        assert!(db.project_memories(q).is_err());
+    }
 }
