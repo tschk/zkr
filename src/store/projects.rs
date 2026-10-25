@@ -1535,6 +1535,38 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    #[test]
+    fn test_auto_vectorize() {
+        // 1. Empty string returns fallback vector
+        let empty_vec = auto_vectorize("");
+        assert_eq!(empty_vec.len(), AUTO_EMBEDDING_DIM);
+        assert_eq!(empty_vec[0], 1.0);
+        assert!(empty_vec[1..].iter().all(|&x| x == 0.0));
+
+        // 2. Stopwords only string returns fallback vector
+        let stop_vec = auto_vectorize("the and for with");
+        assert_eq!(stop_vec.len(), AUTO_EMBEDDING_DIM);
+        assert_eq!(stop_vec[0], 1.0);
+        assert!(stop_vec[1..].iter().all(|&x| x == 0.0));
+
+        // 3. Regular text string returns L2-normalized deterministic vector
+        let text1 = "Postgres WAL tuning and indexing";
+        let text2 = "Postgres WAL tuning and indexing";
+        let vec1 = auto_vectorize(text1);
+        let vec2 = auto_vectorize(text2);
+
+        assert_eq!(vec1.len(), AUTO_EMBEDDING_DIM);
+        assert_eq!(vec1, vec2); // Deterministic
+
+        // Check L2 norm is ~1.0
+        let norm: f32 = vec1.iter().map(|&x| x * x).sum::<f32>().sqrt();
+        assert!((norm - 1.0).abs() < 1e-6);
+
+        // Not fallback
+        assert!(vec1[0] != 1.0 || vec1[1..].iter().any(|&x| x != 0.0));
+    }
+
+
     fn memory(project: &str, category: &str, person: &str, value: &str) -> ProjectMemoryInput {
         serde_json::from_value(json!({
             "project":project,"category":category,"tenant_id":"local","person_id":person,
