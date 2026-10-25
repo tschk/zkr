@@ -916,6 +916,75 @@ impl MemoryDb {
         let min_similarity = input.min_similarity_basis_points.clamp(0, 10_000);
         let limit = bounded_limit(input.limit) as usize;
 
+        let claims = self.dream_fetch_claims(&input)?;
+
+        let mut known_identifiers = HashSet::new();
+        for claim in &claims {
+            known_identifiers.insert(claim.id.0.clone());
+            known_identifiers.insert(claim.subject.clone());
+            known_identifiers.insert(claim.predicate.clone());
+            if let Some((proj, cats)) = &claim.project_categories {
+                known_identifiers.insert(proj.clone());
+                for cat in cats {
+                    known_identifiers.insert(cat.clone());
+                    known_identifiers.insert(format!("{proj}:{cat}"));
+                    known_identifiers.insert(format!("zkr:project:[\"{proj}\",\"{cat}\"]"));
+                }
+            }
+        }
+
+        let mut paired_claims = HashSet::new();
+        let (claim_vectors, active_distance, reason) =
+            self.dream_resolve_vectors(&input, &claims, requested_lane)?;
+        let associations = self.dream_compute_associations(
+            &claims,
+            &claim_vectors,
+            &active_distance,
+            min_similarity,
+            &reason,
+            &mut paired_claims,
+            limit,
+        )?;
+
+        let (categories, category_suggestions) = self.dream_compute_categories(
+            &claims,
+            &claim_vectors,
+            &active_distance,
+            min_similarity,
+            limit,
+        )?;
+        let schemas = self.dream_compute_schemas(&claims, limit);
+        let hubs = self.dream_compute_hubs(&claims, limit);
+
+        let unresolved_targets =
+            self.dream_find_unresolved_targets(&claims, &known_identifiers, limit);
+        let contradictions = self.dream_find_contradictions(&input, limit)?;
+
+        let short_term_claims = claims
+            .iter()
+            .filter(|c| c.tier == "short_term")
+            .take(limit)
+            .map(|c| c.id.clone())
+            .collect();
+
+        let unsummarized_evidence_ids = self.dream_find_unsummarized_evidence(&input, limit)?;
+        let stale_summary_ids = self.dream_find_stale_summaries(&input, limit)?;
+
+        Ok(DreamPack {
+            categories,
+            category_suggestions,
+            schemas,
+            hubs,
+            associations,
+            unresolved_targets,
+            contradictions,
+            short_term_claims,
+            unsummarized_evidence_ids,
+            stale_summary_ids,
+        })
+    }
+
+    fn dream_fetch_claims(&self, input: &DreamInput) -> Result<Vec<LiveDreamClaim>> {
         let mut claim_stmt = self.connection.prepare(
             "SELECT c.id, c.subject, c.predicate, c.value, c.recorded_from, c.tier, min(e.id)
              FROM claims c
@@ -956,25 +1025,15 @@ impl MemoryDb {
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(claims)
+    }
 
-        let mut known_identifiers = HashSet::new();
-        for claim in &claims {
-            known_identifiers.insert(claim.id.0.clone());
-            known_identifiers.insert(claim.subject.clone());
-            known_identifiers.insert(claim.predicate.clone());
-            if let Some((proj, cats)) = &claim.project_categories {
-                known_identifiers.insert(proj.clone());
-                for cat in cats {
-                    known_identifiers.insert(cat.clone());
-                    known_identifiers.insert(format!("{proj}:{cat}"));
-                    known_identifiers.insert(format!("zkr:project:[\"{proj}\",\"{cat}\"]"));
-                }
-            }
-        }
-
-        let mut associations = Vec::new();
-        let mut paired_claims = HashSet::<(ClaimId, ClaimId)>::new();
-
+    fn dream_resolve_vectors(
+        &self,
+        input: &DreamInput,
+        claims: &[LiveDreamClaim],
+        requested_lane: Option<(String, String)>,
+    ) -> Result<(HashMap<ClaimId, Vec<f32>>, VectorDistance, String)> {
         let active_model_version = match requested_lane {
             Some(pair) => Some(pair),
             None => self
@@ -999,7 +1058,9 @@ impl MemoryDb {
         let mut claim_vectors = HashMap::<ClaimId, Vec<f32>>::new();
         let mut active_distance = VectorDistance::Cosine;
 
+        let mut reason = "vector_similarity".to_owned();
         if let Some((model, version)) = active_model_version {
+            reason = format!("vector_similarity:{model}:{version}");
             let is_auto = model == AUTO_EMBEDDING_MODEL && version == AUTO_EMBEDDING_VERSION;
             let lane_opt = current_embedding_lane(
                 &self.connection,
@@ -1066,7 +1127,7 @@ impl MemoryDb {
                 }
 
                 if is_auto && expected_dim == AUTO_EMBEDDING_DIM {
-                    for claim in &claims {
+                    for claim in claims {
                         claim_vectors.entry(claim.id.clone()).or_insert_with(|| {
                             let text =
                                 format!("{} {} {}", claim.subject, claim.predicate, claim.value);
@@ -1074,44 +1135,60 @@ impl MemoryDb {
                         });
                     }
                 }
+            }
+        }
+        Ok((claim_vectors, active_distance, reason))
+    }
 
-                let reason = format!("vector_similarity:{model}:{version}");
-                for i in 0..claims.len() {
-                    let left = &claims[i];
-                    let Some(vec_left) = claim_vectors.get(&left.id) else {
+    #[allow(clippy::too_many_arguments)]
+    fn dream_compute_associations(
+        &self,
+        claims: &[LiveDreamClaim],
+        claim_vectors: &HashMap<ClaimId, Vec<f32>>,
+        active_distance: &VectorDistance,
+        min_similarity: i64,
+        reason: &str,
+        paired_claims: &mut HashSet<(ClaimId, ClaimId)>,
+        limit: usize,
+    ) -> Result<Vec<DreamAssociation>> {
+        let mut associations = Vec::new();
+
+        if !claim_vectors.is_empty() {
+            for i in 0..claims.len() {
+                let left = &claims[i];
+                let Some(vec_left) = claim_vectors.get(&left.id) else {
+                    continue;
+                };
+                for right in &claims[(i + 1)..] {
+                    if left.subject == right.subject && left.predicate == right.predicate {
+                        continue;
+                    }
+                    if claims_explicitly_connected(left, right) {
+                        continue;
+                    }
+                    let Some(vec_right) = claim_vectors.get(&right.id) else {
                         continue;
                     };
-                    for right in &claims[(i + 1)..] {
-                        if left.subject == right.subject && left.predicate == right.predicate {
-                            continue;
-                        }
-                        if claims_explicitly_connected(left, right) {
-                            continue;
-                        }
-                        let Some(vec_right) = claim_vectors.get(&right.id) else {
-                            continue;
+                    let score = vector_score(vec_left, vec_right, active_distance)?;
+                    let basis_points = (f64::from(score) * 10_000.0).round() as i64;
+                    if basis_points >= min_similarity {
+                        paired_claims.insert((left.id.clone(), right.id.clone()));
+                        let evidence_ids = if left.evidence_id == right.evidence_id {
+                            vec![left.evidence_id.clone()]
+                        } else {
+                            vec![left.evidence_id.clone(), right.evidence_id.clone()]
                         };
-                        let score = vector_score(vec_left, vec_right, &expected_dist)?;
-                        let basis_points = (f64::from(score) * 10_000.0).round() as i64;
-                        if basis_points >= min_similarity {
-                            paired_claims.insert((left.id.clone(), right.id.clone()));
-                            let evidence_ids = if left.evidence_id == right.evidence_id {
-                                vec![left.evidence_id.clone()]
-                            } else {
-                                vec![left.evidence_id.clone(), right.evidence_id.clone()]
-                            };
-                            associations.push(DreamAssociation {
-                                left_claim_id: left.id.clone(),
-                                left_subject: left.subject.clone(),
-                                left_predicate: left.predicate.clone(),
-                                right_claim_id: right.id.clone(),
-                                right_subject: right.subject.clone(),
-                                right_predicate: right.predicate.clone(),
-                                similarity_basis_points: basis_points,
-                                reason: reason.clone(),
-                                evidence_ids,
-                            });
-                        }
+                        associations.push(DreamAssociation {
+                            left_claim_id: left.id.clone(),
+                            left_subject: left.subject.clone(),
+                            left_predicate: left.predicate.clone(),
+                            right_claim_id: right.id.clone(),
+                            right_subject: right.subject.clone(),
+                            right_predicate: right.predicate.clone(),
+                            similarity_basis_points: basis_points,
+                            reason: reason.to_owned(),
+                            evidence_ids,
+                        });
                     }
                 }
             }
@@ -1212,8 +1289,17 @@ impl MemoryDb {
                 .then_with(|| a.right_claim_id.cmp(&b.right_claim_id))
         });
         associations.truncate(limit);
+        Ok(associations)
+    }
 
-        // Aggregate category summaries and compute prototype centroids
+    fn dream_compute_categories(
+        &self,
+        claims: &[LiveDreamClaim],
+        claim_vectors: &HashMap<ClaimId, Vec<f32>>,
+        active_distance: &VectorDistance,
+        min_similarity: i64,
+        limit: usize,
+    ) -> Result<(Vec<CategorySummary>, Vec<CategorySuggestion>)> {
         #[derive(Default)]
         struct CatAccum {
             count: u32,
@@ -1222,7 +1308,7 @@ impl MemoryDb {
             vectors: Vec<Vec<f32>>,
         }
         let mut cat_map = BTreeMap::<(String, String), CatAccum>::new();
-        for claim in &claims {
+        for claim in claims {
             if let Some((proj, cats)) = &claim.project_categories {
                 for cat in cats {
                     let entry = cat_map.entry((proj.clone(), cat.clone())).or_default();
@@ -1279,9 +1365,8 @@ impl MemoryDb {
                 .then_with(|| a.category.cmp(&b.category))
         });
 
-        // Vectorized auto-categorization suggestions against category centroids
         let mut category_suggestions = Vec::new();
-        for claim in &claims {
+        for claim in claims {
             let Some(claim_vec) = claim_vectors.get(&claim.id) else {
                 continue;
             };
@@ -1299,7 +1384,7 @@ impl MemoryDb {
                 if claim_vec.len() != centroid.len() {
                     continue;
                 }
-                let score = vector_score(claim_vec, centroid, &active_distance)?;
+                let score = vector_score(claim_vec, centroid, active_distance)?;
                 let bps = (f64::from(score) * 10_000.0).round() as i64;
                 if bps >= min_similarity {
                     category_suggestions.push(CategorySuggestion {
@@ -1322,7 +1407,14 @@ impl MemoryDb {
         category_suggestions.truncate(limit);
         categories.truncate(limit);
 
-        // Aggregate struct schema summaries
+        Ok((categories, category_suggestions))
+    }
+
+    fn dream_compute_schemas(
+        &self,
+        claims: &[LiveDreamClaim],
+        limit: usize,
+    ) -> Vec<StructSchemaSummary> {
         #[derive(Default)]
         struct SchemaAccum {
             count: u32,
@@ -1331,7 +1423,7 @@ impl MemoryDb {
             categories: BTreeSet<String>,
         }
         let mut schema_map = BTreeMap::<String, SchemaAccum>::new();
-        for claim in &claims {
+        for claim in claims {
             if let Some(rec) = &claim.record {
                 let entry = schema_map.entry(rec.record_type.clone()).or_default();
                 entry.count += 1;
@@ -1364,8 +1456,10 @@ impl MemoryDb {
                 .then_with(|| a.record_type.cmp(&b.record_type))
         });
         schemas.truncate(limit);
+        schemas
+    }
 
-        // Aggregate graph hubs (inbound & outbound connection degree)
+    fn dream_compute_hubs(&self, claims: &[LiveDreamClaim], limit: usize) -> Vec<MemoryHub> {
         #[derive(Default)]
         struct HubAccum {
             inbound: u32,
@@ -1373,7 +1467,7 @@ impl MemoryDb {
             categories: BTreeSet<String>,
         }
         let mut hub_map = BTreeMap::<String, HubAccum>::new();
-        for claim in &claims {
+        for claim in claims {
             if let Some(rec) = &claim.record
                 && !rec.connections.is_empty()
             {
@@ -1390,7 +1484,7 @@ impl MemoryDb {
                 }
             }
         }
-        for claim in &claims {
+        for claim in claims {
             if let Some((_, cats)) = &claim.project_categories {
                 if let Some(entry) = hub_map.get_mut(&claim.predicate) {
                     for cat in cats {
@@ -1421,9 +1515,17 @@ impl MemoryDb {
                 .then_with(|| a.identifier.cmp(&b.identifier))
         });
         hubs.truncate(limit);
+        hubs
+    }
 
+    fn dream_find_unresolved_targets(
+        &self,
+        claims: &[LiveDreamClaim],
+        known_identifiers: &HashSet<String>,
+        limit: usize,
+    ) -> Vec<UnresolvedTarget> {
         let mut unresolved_targets = Vec::new();
-        'outer: for claim in &claims {
+        'outer: for claim in claims {
             if let Some(rec) = &claim.record {
                 for conn in &rec.connections {
                     if !known_identifiers.contains(&conn.target) {
@@ -1441,7 +1543,10 @@ impl MemoryDb {
                 }
             }
         }
+        unresolved_targets
+    }
 
+    fn dream_find_contradictions(&self, input: &DreamInput, limit: usize) -> Result<Vec<ClaimId>> {
         let mut contradiction_stmt = self.connection.prepare(
             "SELECT c.id
              FROM claims c
@@ -1463,14 +1568,14 @@ impl MemoryDb {
                 |row| row.get::<_, String>(0).map(ClaimId),
             )?
             .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(contradictions)
+    }
 
-        let short_term_claims = claims
-            .iter()
-            .filter(|c| c.tier == "short_term")
-            .take(limit)
-            .map(|c| c.id.clone())
-            .collect();
-
+    fn dream_find_unsummarized_evidence(
+        &self,
+        input: &DreamInput,
+        limit: usize,
+    ) -> Result<Vec<EvidenceId>> {
         let mut unsummarized_stmt = self.connection.prepare(
             "SELECT e.id
              FROM evidence e
@@ -1491,7 +1596,14 @@ impl MemoryDb {
                 |row| row.get::<_, String>(0).map(EvidenceId),
             )?
             .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(unsummarized_evidence_ids)
+    }
 
+    fn dream_find_stale_summaries(
+        &self,
+        input: &DreamInput,
+        limit: usize,
+    ) -> Result<Vec<SummaryId>> {
         let mut stale_summary_stmt = self.connection.prepare(
             "SELECT sn.id
              FROM summary_nodes sn
@@ -1514,19 +1626,7 @@ impl MemoryDb {
                 |row| row.get::<_, String>(0).map(SummaryId),
             )?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-
-        Ok(DreamPack {
-            categories,
-            category_suggestions,
-            schemas,
-            hubs,
-            associations,
-            unresolved_targets,
-            contradictions,
-            short_term_claims,
-            unsummarized_evidence_ids,
-            stale_summary_ids,
-        })
+        Ok(stale_summary_ids)
     }
 }
 
