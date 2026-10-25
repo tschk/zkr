@@ -601,3 +601,21 @@ fn projection_and_lifecycle_events_cover_links_profiles_reviews_and_deletions() 
     assert!(records.iter().any(|record| matches!(record, ExportRecord::Deletion(value) if matches!(value.target, MemoryRef::ProfileEntry(_)))));
     assert!(records.iter().any(|record| matches!(record, ExportRecord::Deletion(value) if matches!(value.target, MemoryRef::DailyReview(_)))));
 }
+#[test]
+fn export_rejects_unknown_format_payload() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    db.remember(remember_raw("a", "sam", "capture")).unwrap();
+    db.connection
+        .execute(
+            "UPDATE memory_export_events SET payload = '{ \"invalid\": \"format\" }' WHERE event_index = 0",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        db.export(input(0, -1, None, 100)),
+        Err(Error::Json(_))
+    ));
+}
