@@ -104,6 +104,30 @@ impl SelfImprove {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lessons_truncates_to_limit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("memory.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut improve = SelfImprove::new(db, tenant_id, person_id);
+
+        for i in 0..10 {
+            improve
+                .record(
+                    "coding",
+                    &format!("refactor loop {}", i),
+                    "success",
+                    &format!("prefer iterator adapters {}", i),
+                )
+                .unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(10)); // Ensure unique ingestion keys
+        }
+
+        let lessons = improve.lessons("refactor", 5).unwrap();
+        assert_eq!(lessons.len(), 5);
+    }
+
     use std::collections::HashSet;
 
     fn test_ids() -> (TenantId, PersonId) {
