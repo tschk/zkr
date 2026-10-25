@@ -557,337 +557,15 @@ impl MemoryDb {
     /// Current, processed project facts and tasks, optionally filtered by exact category/project,
     /// multi-category sets, custom struct fields, multi-hop graph connections, and vector similarity.
     pub fn project_memories(&self, input: ProjectQuery) -> Result<Vec<ProjectFact>> {
-        require_scope(&input.tenant_id, &input.person_id)?;
-        if let Some(project) = &input.project {
-            require_text("project", project)?;
-        }
-        for project in &input.projects {
-            require_text("project", project)?;
-        }
-        if let Some(category) = &input.category {
-            require_text("category", category)?;
-        }
-        for category in &input.categories {
-            require_text("category", category)?;
-        }
-        for category in &input.all_categories {
-            require_text("category", category)?;
-        }
-        if let Some(predicate) = &input.predicate {
-            require_text("predicate", predicate)?;
-        }
-        if let Some(record_type) = &input.record_type {
-            require_text("record_type", record_type)?;
-        }
-        if let Some(relation) = &input.relation {
-            require_text("relation", relation)?;
-        }
-        if let Some(target) = &input.target {
-            require_text("target", target)?;
-        }
-        for key in input.where_fields.keys() {
-            require_text("where_fields key", key)?;
-        }
-        if let Some(connected_to) = &input.connected_to {
-            require_text("connected_to", connected_to)?;
-        }
-        if let Some(hops) = input.max_hops
-            && !(1..=4).contains(&hops)
-        {
-            return Err(Error::Invalid("max_hops must be between 1 and 4".into()));
-        }
-        if let Some(dq) = &input.query_embedding {
-            validate_dense_query(dq)?;
-        }
-        if let Some(vq) = &input.vector_query {
-            require_text("vector_query", vq)?;
-        }
-
-        let mut statement = self.connection.prepare(
-            "SELECT c.subject,c.id,c.kind,c.predicate,c.value,min(e.id),c.recorded_from,min(e.quote) FROM claims c
-             JOIN claim_evidence ce ON ce.claim_id=c.id AND ce.tenant_id=c.tenant_id AND ce.person_id=c.person_id
-             JOIN evidence e ON e.id=ce.evidence_id AND e.tenant_id=ce.tenant_id AND e.person_id=ce.person_id
-             JOIN sources s ON s.id=e.source_id AND s.tenant_id=e.tenant_id AND s.person_id=e.person_id
-             WHERE c.tenant_id=?1 AND c.person_id=?2 AND substr(c.subject,1,12)='zkr:project:'
-             AND c.status='accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL
-             AND c.tier IN ('short_term','long_term') AND c.processing_state='processed'
-             AND ce.relation='\"supports\"' AND e.deleted_at IS NULL AND s.deleted_at IS NULL
-             AND s.feature_flag IS NULL
-             GROUP BY c.id ORDER BY c.recorded_from DESC,c.id",
-        )?;
-        let rows = statement.query_map(params![input.tenant_id.0, input.person_id.0], |row| {
-            let subject: String = row.get(0)?;
-            let Some((project, mut categories)) = parse_project_subject(&subject) else {
-                return Ok(None);
-            };
-            let kind: String = row.get(2)?;
-            let predicate: String = row.get(3)?;
-            let value: String = row.get(4)?;
-            let record = parse_valid_record(&value);
-            if let Some(rec) = &record {
-                for cat in &rec.categories {
-                    if !categories.contains(cat) {
-                        categories.push(cat.clone());
-                    }
-                }
-            }
-            let category = categories[0].clone();
-            let recorded_from: i64 = row.get(6)?;
-            let quote: String = row.get(7)?;
-            Ok(Some((
-                ProjectFact {
-                    project,
-                    category,
-                    categories,
-                    claim_id: ClaimId(row.get(1)?),
-                    kind: serde_json::from_value(serde_json::Value::String(kind))
-                        .map_err(sql_json_error)?,
-                    predicate,
-                    value,
-                    record,
-                    similarity_basis_points: None,
-                    evidence_ids: vec![EvidenceId(row.get(5)?)],
-                },
-                subject,
-                recorded_from,
-                quote,
-            )))
-        })?;
-
-        let mut all_candidates = Vec::new();
-        for row in rows {
-            if let Some(item) = row? {
-                all_candidates.push(item);
-            }
-        }
-
-        let activated_ids: Option<HashSet<ClaimId>> = if let Some(seed) = &input.connected_to {
-            let hops = input.max_hops.unwrap_or(1);
-            let mut frontier = HashSet::from([seed.clone()]);
-            for (fact, subject, _, _) in &all_candidates {
-                if fact_matches_node(fact, subject, seed) {
-                    frontier.insert(fact.claim_id.0.clone());
-                    frontier.insert(fact.predicate.clone());
-                    frontier.insert(subject.clone());
-                }
-            }
-            let mut activated = HashSet::new();
-            for _ in 0..hops {
-                let mut next_frontier = frontier.clone();
-                let mut outgoing_targets = HashSet::new();
-                for (fact, subject, _, _) in &all_candidates {
-                    let is_in_frontier = frontier
-                        .iter()
-                        .any(|id| fact_matches_node(fact, subject, id));
-                    if is_in_frontier && let Some(rec) = &fact.record {
-                        for conn in &rec.connections {
-                            outgoing_targets.insert(conn.target.clone());
-                            next_frontier.insert(conn.target.clone());
-                        }
-                    }
-                }
-                for (fact, subject, _, _) in &all_candidates {
-                    if fact_matches_node(fact, subject, seed) {
-                        continue;
-                    }
-                    let matched_by_outgoing = outgoing_targets
-                        .iter()
-                        .any(|tgt| fact_matches_node(fact, subject, tgt));
-                    let points_into_frontier = fact.record.as_ref().is_some_and(|rec| {
-                        rec.connections.iter().any(|conn| {
-                            frontier.contains(&conn.target)
-                                || all_candidates.iter().any(|(f, s, _, _)| {
-                                    frontier.iter().any(|id| fact_matches_node(f, s, id))
-                                        && fact_matches_node(f, s, &conn.target)
-                                })
-                        })
-                    });
-                    if matched_by_outgoing || points_into_frontier {
-                        activated.insert(fact.claim_id.clone());
-                        next_frontier.insert(fact.claim_id.0.clone());
-                        next_frontier.insert(fact.predicate.clone());
-                        next_frontier.insert(subject.clone());
-                    }
-                }
-                frontier = next_frontier;
-            }
-            Some(activated)
-        } else {
-            None
-        };
-
-        let record_type_filter = input.record_type.as_deref();
-        let relation_filter = input.relation.as_deref();
-        let target_filter = input.target.as_deref();
-
-        let mut filtered = Vec::new();
-        for (fact, subject, recorded_from, quote) in all_candidates {
-            if let Some(active) = &activated_ids
-                && !active.contains(&fact.claim_id)
-            {
-                continue;
-            }
-            if let Some(proj) = &input.project
-                && &fact.project != proj
-            {
-                continue;
-            }
-            if !input.projects.is_empty() && !input.projects.iter().any(|p| p == &fact.project) {
-                continue;
-            }
-            if let Some(cat) = &input.category
-                && !fact.categories.iter().any(|c| c == cat)
-            {
-                continue;
-            }
-            if !input.categories.is_empty()
-                && !input
-                    .categories
-                    .iter()
-                    .any(|c| fact.categories.iter().any(|fc| fc == c))
-            {
-                continue;
-            }
-            if !input.all_categories.is_empty()
-                && !input
-                    .all_categories
-                    .iter()
-                    .all(|c| fact.categories.iter().any(|fc| fc == c))
-            {
-                continue;
-            }
-            if let Some(pred) = &input.predicate
-                && &fact.predicate != pred
-            {
-                continue;
-            }
-            if record_type_filter.is_some() || relation_filter.is_some() || target_filter.is_some()
-            {
-                let Some(rec) = &fact.record else {
-                    continue;
-                };
-                if let Some(rt) = record_type_filter
-                    && rec.record_type != rt
-                {
-                    continue;
-                }
-                let matches_connection = match (relation_filter, target_filter) {
-                    (Some(rel), Some(tgt)) => rec
-                        .connections
-                        .iter()
-                        .any(|conn| conn.relation == rel && conn.target == tgt),
-                    (Some(rel), None) => rec.connections.iter().any(|conn| conn.relation == rel),
-                    (None, Some(tgt)) => rec.connections.iter().any(|conn| conn.target == tgt),
-                    (None, None) => true,
-                };
-                if !matches_connection {
-                    continue;
-                }
-            }
-            if !input.where_fields.is_empty() {
-                let Some(rec) = &fact.record else {
-                    continue;
-                };
-                if !input
-                    .where_fields
-                    .iter()
-                    .all(|(k, v)| rec.fields.get(k) == Some(v))
-                {
-                    continue;
-                }
-            }
-            filtered.push((fact, subject, recorded_from, quote));
-        }
-
-        if let Some(dq) = &input.query_embedding {
-            let lane = current_embedding_lane(
-                &self.connection,
-                &input.tenant_id,
-                &input.person_id,
-                &dq.model,
-                &dq.version,
-                None,
-            )?;
-            let mut emb_stmt = self.connection.prepare(
-                "SELECT target_id, dimension, normalization, distance, vector, target_revision, input_hash
-                 FROM embeddings
-                 WHERE tenant_id = ?1 AND person_id = ?2 AND target_kind = 'claim' AND model = ?3 AND version = ?4",
-            )?;
-            let emb_rows = emb_stmt.query_map(
-                params![input.tenant_id.0, input.person_id.0, &dq.model, &dq.version],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, usize>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, String>(3)?,
-                        row.get::<_, String>(4)?,
-                        row.get::<_, i64>(5)?,
-                        row.get::<_, String>(6)?,
-                    ))
-                },
-            )?;
-            let mut stored_map = HashMap::new();
-            for row in emb_rows {
-                let (id, dim, norm_str, dist_str, vec_str, rev, hash) = row?;
-                if !stored_embedding_is_valid(dim, &norm_str, &dist_str, &vec_str) {
-                    continue;
-                }
-                let norm: VectorNormalization = serde_json::from_str(&norm_str)?;
-                let dist: VectorDistance = serde_json::from_str(&dist_str)?;
-                let vec: Vec<f32> = serde_json::from_str(&vec_str)?;
-                if lane
-                    .as_ref()
-                    .is_some_and(|l| l != &(dim, norm.clone(), dist.clone()))
-                {
-                    continue;
-                }
-                stored_map.insert(id, (dim, dist, vec, rev, hash));
-            }
-            let mut scored = Vec::new();
-            for (mut fact, subject, recorded_from, quote) in filtered {
-                let Some((dim, dist, vec, rev, hash)) = stored_map.get(&fact.claim_id.0) else {
-                    continue;
-                };
-                let expected_text = format!("{subject} {} {}", fact.predicate, fact.value);
-                if *rev != recorded_from || *hash != input_hash(&expected_text) {
-                    continue;
-                }
-                if *dim != dq.vector.len() {
-                    return Err(Error::Invalid(format!(
-                        "query embedding dimension {} does not match stored dimension {dim}",
-                        dq.vector.len()
-                    )));
-                }
-                let score = vector_score(&dq.vector, vec, dist)?;
-                fact.similarity_basis_points = Some((f64::from(score) * 10_000.0).round() as i64);
-                scored.push((fact, subject, recorded_from, quote));
-            }
-            scored.sort_by(|a, b| {
-                b.0.similarity_basis_points
-                    .cmp(&a.0.similarity_basis_points)
-                    .then_with(|| b.2.cmp(&a.2))
-                    .then_with(|| a.0.claim_id.cmp(&b.0.claim_id))
-            });
-            filtered = scored;
-        } else if let Some(vq) = &input.vector_query {
-            let query_vec = auto_vectorize(vq);
-            for (fact, subject, _, quote) in &mut filtered {
-                let text = format!("{subject} {} {} {quote}", fact.predicate, fact.value);
-                let claim_vec = auto_vectorize(&text);
-                let score = vector_score(&query_vec, &claim_vec, &VectorDistance::Cosine)?;
-                fact.similarity_basis_points = Some((f64::from(score) * 10_000.0).round() as i64);
-            }
-            filtered.sort_by(|a, b| {
-                b.0.similarity_basis_points
-                    .cmp(&a.0.similarity_basis_points)
-                    .then_with(|| b.2.cmp(&a.2))
-                    .then_with(|| a.0.claim_id.cmp(&b.0.claim_id))
-            });
-        }
+        validate_project_query(&input)?;
+        let all_candidates =
+            fetch_project_candidates(&self.connection, &input.tenant_id, &input.person_id)?;
+        let activated_ids = compute_activated_ids(&input, &all_candidates);
+        let filtered = filter_project_candidates(&input, all_candidates, activated_ids);
+        let scored = score_project_candidates(&self.connection, &input, filtered)?;
 
         collect_json_page(
-            filtered
+            scored
                 .into_iter()
                 .map(|(fact, _, _, _)| Ok(fact))
                 .take(bounded_limit(input.limit) as usize),
@@ -1528,6 +1206,368 @@ impl MemoryDb {
             stale_summary_ids,
         })
     }
+}
+
+type ProjectCandidate = (ProjectFact, String, i64, String);
+
+fn validate_project_query(input: &ProjectQuery) -> Result<()> {
+    require_scope(&input.tenant_id, &input.person_id)?;
+    if let Some(project) = &input.project {
+        require_text("project", project)?;
+    }
+    for project in &input.projects {
+        require_text("project", project)?;
+    }
+    if let Some(category) = &input.category {
+        require_text("category", category)?;
+    }
+    for category in &input.categories {
+        require_text("category", category)?;
+    }
+    for category in &input.all_categories {
+        require_text("category", category)?;
+    }
+    if let Some(predicate) = &input.predicate {
+        require_text("predicate", predicate)?;
+    }
+    if let Some(record_type) = &input.record_type {
+        require_text("record_type", record_type)?;
+    }
+    if let Some(relation) = &input.relation {
+        require_text("relation", relation)?;
+    }
+    if let Some(target) = &input.target {
+        require_text("target", target)?;
+    }
+    for key in input.where_fields.keys() {
+        require_text("where_fields key", key)?;
+    }
+    if let Some(connected_to) = &input.connected_to {
+        require_text("connected_to", connected_to)?;
+    }
+    if let Some(hops) = input.max_hops
+        && !(1..=4).contains(&hops)
+    {
+        return Err(Error::Invalid("max_hops must be between 1 and 4".into()));
+    }
+    if let Some(dq) = &input.query_embedding {
+        crate::store::embeddings::validate_dense_query(dq)?;
+    }
+    if let Some(vq) = &input.vector_query {
+        require_text("vector_query", vq)?;
+    }
+    Ok(())
+}
+
+fn fetch_project_candidates(
+    conn: &rusqlite::Connection,
+    tenant_id: &TenantId,
+    person_id: &PersonId,
+) -> Result<Vec<ProjectCandidate>> {
+    let mut statement = conn.prepare(
+        "SELECT c.subject,c.id,c.kind,c.predicate,c.value,min(e.id),c.recorded_from,min(e.quote) FROM claims c
+         JOIN claim_evidence ce ON ce.claim_id=c.id AND ce.tenant_id=c.tenant_id AND ce.person_id=c.person_id
+         JOIN evidence e ON e.id=ce.evidence_id AND e.tenant_id=ce.tenant_id AND e.person_id=ce.person_id
+         JOIN sources s ON s.id=e.source_id AND s.tenant_id=e.tenant_id AND s.person_id=e.person_id
+         WHERE c.tenant_id=?1 AND c.person_id=?2 AND substr(c.subject,1,12)='zkr:project:'
+         AND c.status='accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL
+         AND c.tier IN ('short_term','long_term') AND c.processing_state='processed'
+         AND ce.relation='\"supports\"' AND e.deleted_at IS NULL AND s.deleted_at IS NULL
+         AND s.feature_flag IS NULL
+         GROUP BY c.id ORDER BY c.recorded_from DESC,c.id",
+    )?;
+    let rows = statement.query_map(rusqlite::params![tenant_id.0, person_id.0], |row| {
+        let subject: String = row.get(0)?;
+        let Some((project, mut categories)) = parse_project_subject(&subject) else {
+            return Ok(None);
+        };
+        let kind: String = row.get(2)?;
+        let predicate: String = row.get(3)?;
+        let value: String = row.get(4)?;
+        let record = parse_valid_record(&value);
+        if let Some(rec) = &record {
+            for cat in &rec.categories {
+                if !categories.contains(cat) {
+                    categories.push(cat.clone());
+                }
+            }
+        }
+        let category = categories[0].clone();
+        let recorded_from: i64 = row.get(6)?;
+        let quote: String = row.get(7)?;
+        Ok(Some((
+            ProjectFact {
+                project,
+                category,
+                categories,
+                claim_id: ClaimId(row.get(1)?),
+                kind: serde_json::from_value(serde_json::Value::String(kind))
+                    .map_err(sql_json_error)?,
+                predicate,
+                value,
+                record,
+                similarity_basis_points: None,
+                evidence_ids: vec![EvidenceId(row.get(5)?)],
+            },
+            subject,
+            recorded_from,
+            quote,
+        )))
+    })?;
+
+    let mut all_candidates = Vec::new();
+    for row in rows {
+        if let Some(item) = row? {
+            all_candidates.push(item);
+        }
+    }
+    Ok(all_candidates)
+}
+
+fn compute_activated_ids(
+    input: &ProjectQuery,
+    all_candidates: &[ProjectCandidate],
+) -> Option<HashSet<ClaimId>> {
+    if let Some(seed) = &input.connected_to {
+        let hops = input.max_hops.unwrap_or(1);
+        let mut frontier = HashSet::from([seed.clone()]);
+        for (fact, subject, _, _) in all_candidates {
+            if fact_matches_node(fact, subject, seed) {
+                frontier.insert(fact.claim_id.0.clone());
+                frontier.insert(fact.predicate.clone());
+                frontier.insert(subject.clone());
+            }
+        }
+        let mut activated = HashSet::new();
+        for _ in 0..hops {
+            let mut next_frontier = frontier.clone();
+            let mut outgoing_targets = HashSet::new();
+            for (fact, subject, _, _) in all_candidates {
+                let is_in_frontier = frontier
+                    .iter()
+                    .any(|id| fact_matches_node(fact, subject, id));
+                if is_in_frontier && let Some(rec) = &fact.record {
+                    for conn in &rec.connections {
+                        outgoing_targets.insert(conn.target.clone());
+                        next_frontier.insert(conn.target.clone());
+                    }
+                }
+            }
+            for (fact, subject, _, _) in all_candidates {
+                if fact_matches_node(fact, subject, seed) {
+                    continue;
+                }
+                let matched_by_outgoing = outgoing_targets
+                    .iter()
+                    .any(|tgt| fact_matches_node(fact, subject, tgt));
+                let points_into_frontier = fact.record.as_ref().is_some_and(|rec| {
+                    rec.connections.iter().any(|conn| {
+                        frontier.contains(&conn.target)
+                            || all_candidates.iter().any(|(f, s, _, _)| {
+                                frontier.iter().any(|id| fact_matches_node(f, s, id))
+                                    && fact_matches_node(f, s, &conn.target)
+                            })
+                    })
+                });
+                if matched_by_outgoing || points_into_frontier {
+                    activated.insert(fact.claim_id.clone());
+                    next_frontier.insert(fact.claim_id.0.clone());
+                    next_frontier.insert(fact.predicate.clone());
+                    next_frontier.insert(subject.clone());
+                }
+            }
+            frontier = next_frontier;
+        }
+        Some(activated)
+    } else {
+        None
+    }
+}
+
+fn filter_project_candidates(
+    input: &ProjectQuery,
+    all_candidates: Vec<ProjectCandidate>,
+    activated_ids: Option<HashSet<ClaimId>>,
+) -> Vec<ProjectCandidate> {
+    let record_type_filter = input.record_type.as_deref();
+    let relation_filter = input.relation.as_deref();
+    let target_filter = input.target.as_deref();
+
+    let mut filtered = Vec::new();
+    for (fact, subject, recorded_from, quote) in all_candidates {
+        if let Some(active) = &activated_ids
+            && !active.contains(&fact.claim_id)
+        {
+            continue;
+        }
+        if let Some(proj) = &input.project
+            && &fact.project != proj
+        {
+            continue;
+        }
+        if !input.projects.is_empty() && !input.projects.iter().any(|p| p == &fact.project) {
+            continue;
+        }
+        if let Some(cat) = &input.category
+            && !fact.categories.iter().any(|c| c == cat)
+        {
+            continue;
+        }
+        if !input.categories.is_empty()
+            && !input
+                .categories
+                .iter()
+                .any(|c| fact.categories.iter().any(|fc| fc == c))
+        {
+            continue;
+        }
+        if !input.all_categories.is_empty()
+            && !input
+                .all_categories
+                .iter()
+                .all(|c| fact.categories.iter().any(|fc| fc == c))
+        {
+            continue;
+        }
+        if let Some(pred) = &input.predicate
+            && &fact.predicate != pred
+        {
+            continue;
+        }
+        if record_type_filter.is_some() || relation_filter.is_some() || target_filter.is_some() {
+            let Some(rec) = &fact.record else {
+                continue;
+            };
+            if let Some(rt) = record_type_filter
+                && rec.record_type != rt
+            {
+                continue;
+            }
+            let matches_connection = match (relation_filter, target_filter) {
+                (Some(rel), Some(tgt)) => rec
+                    .connections
+                    .iter()
+                    .any(|conn| conn.relation == rel && conn.target == tgt),
+                (Some(rel), None) => rec.connections.iter().any(|conn| conn.relation == rel),
+                (None, Some(tgt)) => rec.connections.iter().any(|conn| conn.target == tgt),
+                (None, None) => true,
+            };
+            if !matches_connection {
+                continue;
+            }
+        }
+        if !input.where_fields.is_empty() {
+            let Some(rec) = &fact.record else {
+                continue;
+            };
+            if !input
+                .where_fields
+                .iter()
+                .all(|(k, v)| rec.fields.get(k) == Some(v))
+            {
+                continue;
+            }
+        }
+        filtered.push((fact, subject, recorded_from, quote));
+    }
+    filtered
+}
+
+fn score_project_candidates(
+    conn: &rusqlite::Connection,
+    input: &ProjectQuery,
+    mut filtered: Vec<ProjectCandidate>,
+) -> Result<Vec<ProjectCandidate>> {
+    if let Some(dq) = &input.query_embedding {
+        let lane = current_embedding_lane(
+            conn,
+            &input.tenant_id,
+            &input.person_id,
+            &dq.model,
+            &dq.version,
+            None,
+        )?;
+        let mut emb_stmt = conn.prepare(
+            "SELECT target_id, dimension, normalization, distance, vector, target_revision, input_hash
+             FROM embeddings
+             WHERE tenant_id = ?1 AND person_id = ?2 AND target_kind = 'claim' AND model = ?3 AND version = ?4",
+        )?;
+        let emb_rows = emb_stmt.query_map(
+            rusqlite::params![input.tenant_id.0, input.person_id.0, &dq.model, &dq.version],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, usize>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, String>(6)?,
+                ))
+            },
+        )?;
+        let mut stored_map = HashMap::new();
+        for row in emb_rows {
+            let (id, dim, norm_str, dist_str, vec_str, rev, hash) = row?;
+            if !crate::store::embeddings::stored_embedding_is_valid(
+                dim, &norm_str, &dist_str, &vec_str,
+            ) {
+                continue;
+            }
+            let norm: VectorNormalization = serde_json::from_str(&norm_str)?;
+            let dist: VectorDistance = serde_json::from_str(&dist_str)?;
+            let vec: Vec<f32> = serde_json::from_str(&vec_str)?;
+            if lane
+                .as_ref()
+                .is_some_and(|l| l != &(dim, norm.clone(), dist.clone()))
+            {
+                continue;
+            }
+            stored_map.insert(id, (dim, dist, vec, rev, hash));
+        }
+        let mut scored = Vec::new();
+        for (mut fact, subject, recorded_from, quote) in filtered {
+            let Some((dim, dist, vec, rev, hash)) = stored_map.get(&fact.claim_id.0) else {
+                continue;
+            };
+            let expected_text = format!("{subject} {} {}", fact.predicate, fact.value);
+            if *rev != recorded_from || *hash != input_hash(&expected_text) {
+                continue;
+            }
+            if *dim != dq.vector.len() {
+                return Err(Error::Invalid(format!(
+                    "query embedding dimension {} does not match stored dimension {dim}",
+                    dq.vector.len()
+                )));
+            }
+            let score = vector_score(&dq.vector, vec, dist)?;
+            fact.similarity_basis_points = Some((f64::from(score) * 10_000.0).round() as i64);
+            scored.push((fact, subject, recorded_from, quote));
+        }
+        scored.sort_by(|a, b| {
+            b.0.similarity_basis_points
+                .cmp(&a.0.similarity_basis_points)
+                .then_with(|| b.2.cmp(&a.2))
+                .then_with(|| a.0.claim_id.cmp(&b.0.claim_id))
+        });
+        filtered = scored;
+    } else if let Some(vq) = &input.vector_query {
+        let query_vec = auto_vectorize(vq);
+        for (fact, subject, _, quote) in &mut filtered {
+            let text = format!("{subject} {} {} {quote}", fact.predicate, fact.value);
+            let claim_vec = auto_vectorize(&text);
+            let score = vector_score(&query_vec, &claim_vec, &VectorDistance::Cosine)?;
+            fact.similarity_basis_points = Some((f64::from(score) * 10_000.0).round() as i64);
+        }
+        filtered.sort_by(|a, b| {
+            b.0.similarity_basis_points
+                .cmp(&a.0.similarity_basis_points)
+                .then_with(|| b.2.cmp(&a.2))
+                .then_with(|| a.0.claim_id.cmp(&b.0.claim_id))
+        });
+    }
+
+    Ok(filtered)
 }
 
 #[cfg(test)]
