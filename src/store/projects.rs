@@ -1554,7 +1554,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn test_auto_vectorize_properties() {
         // 1. Length is exactly AUTO_EMBEDDING_DIM
