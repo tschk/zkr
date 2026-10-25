@@ -245,4 +245,29 @@ mod tests {
         let result = improve.record("context", "action", "outcome", "lesson");
         assert!(result.is_err());
     }
+
+    #[test]
+    fn augment_formats_multiple_lessons_correctly() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("memory.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut improve = SelfImprove::new(db, tenant_id, person_id);
+
+        improve
+            .record("context1", "action1", "outcome1", "lesson one")
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        improve
+            .record("context2", "action2", "outcome2", "lesson two")
+            .unwrap();
+
+        let augmented = improve.augment("lesson", "Base prompt").unwrap();
+
+        assert!(augmented.starts_with("Base prompt\n\n<lessons_learned>\n"));
+        assert!(augmented.contains("1. "));
+        assert!(augmented.contains("2. "));
+        assert!(augmented.contains("lesson one"));
+        assert!(augmented.contains("lesson two"));
+        assert!(augmented.ends_with("</lessons_learned>"));
+    }
 }
