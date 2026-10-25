@@ -165,7 +165,7 @@ impl MemoryDb {
             for result in children_results {
                 children.push(result?);
             }
-            if children.len() != stale.child_ids.len() {
+            if children.is_empty() && !stale.child_ids.is_empty() {
                 return Err(Error::NotFound);
             }
             let children = children
