@@ -1594,20 +1594,23 @@ mod tests {
         );
     }
 
-
-
     #[test]
     fn project_memories_core_functionality_and_filters() {
         let mut db = MemoryDb::open(":memory:").unwrap();
 
         // Seed database
-        db.remember_project(memory("CoreProject", "backend", "me", "active")).unwrap();
-        db.remember_project(memory("CoreProject", "frontend", "me", "planned")).unwrap();
-        db.remember_project(memory("OtherProject", "backend", "me", "done")).unwrap();
+        db.remember_project(memory("CoreProject", "backend", "me", "active"))
+            .unwrap();
+        db.remember_project(memory("CoreProject", "frontend", "me", "planned"))
+            .unwrap();
+        db.remember_project(memory("OtherProject", "backend", "me", "done"))
+            .unwrap();
 
         // Test basic retrieval by project
         let mut q = query("me", Some("CoreProject"), None);
-        let facts = db.project_memories(query("me", Some("CoreProject"), None)).unwrap();
+        let facts = db
+            .project_memories(query("me", Some("CoreProject"), None))
+            .unwrap();
         assert_eq!(facts.len(), 2, "Should retrieve all facts for CoreProject");
 
         // Test limit
@@ -1624,7 +1627,10 @@ mod tests {
         // Test filtering by non-existent project
         let q_none = query("me", Some("NonExistent"), None);
         let facts_none = db.project_memories(q_none).unwrap();
-        assert!(facts_none.is_empty(), "Should return empty for non-existent project");
+        assert!(
+            facts_none.is_empty(),
+            "Should return empty for non-existent project"
+        );
     }
 
     #[test]
@@ -1635,7 +1641,10 @@ mod tests {
         unauth_input.tenant_id = TenantId("".into());
         unauth_input.limit = 0;
 
-        assert!(db.project_memories(unauth_input).is_err(), "Authorization check should fail before limit=0 early return");
+        assert!(
+            db.project_memories(unauth_input).is_err(),
+            "Authorization check should fail before limit=0 early return"
+        );
 
         let mut auth_input = query("me", None, None);
         auth_input.limit = 0;
