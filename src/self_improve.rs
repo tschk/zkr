@@ -236,11 +236,17 @@ mod tests {
         let (tenant_id, person_id) = test_ids();
         let mut improve = SelfImprove::new(db, tenant_id, person_id);
 
-        improve.record("context 1", "action 1", "outcome 1", "lesson 1").unwrap();
+        improve
+            .record("context 1", "action 1", "outcome 1", "lesson 1")
+            .unwrap();
         std::thread::sleep(std::time::Duration::from_millis(10));
-        improve.record("context 2", "action 2", "outcome 2", "lesson 2").unwrap();
+        improve
+            .record("context 2", "action 2", "outcome 2", "lesson 2")
+            .unwrap();
         std::thread::sleep(std::time::Duration::from_millis(10));
-        improve.record("context 3", "action 3", "outcome 3", "lesson 3").unwrap();
+        improve
+            .record("context 3", "action 3", "outcome 3", "lesson 3")
+            .unwrap();
 
         let lessons = improve.lessons("lesson", 2).unwrap();
         assert_eq!(lessons.len(), 2);
