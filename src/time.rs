@@ -22,12 +22,20 @@ mod tests {
     fn test_now_seconds() {
         let ts = now_seconds();
         // Ensure the timestamp is reasonably recent (e.g., > 1.7 billion, which is roughly late 2023).
-        assert!(ts > 1_700_000_000, "Timestamp should be recent, got: {}", ts);
+        assert!(
+            ts > 1_700_000_000,
+            "Timestamp should be recent, got: {}",
+            ts
+        );
     }
 
     #[test]
     fn test_nanos() {
         let ts = nanos();
-        assert!(ts > 1_700_000_000_000_000_000, "Timestamp should be recent, got: {}", ts);
+        assert!(
+            ts > 1_700_000_000_000_000_000,
+            "Timestamp should be recent, got: {}",
+            ts
+        );
     }
 }
