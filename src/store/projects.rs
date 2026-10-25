@@ -1577,6 +1577,10 @@ mod tests {
         let mut expected_fallback = vec![0.0_f32; super::AUTO_EMBEDDING_DIM];
         expected_fallback[0] = 1.0;
         assert_eq!(fallback, expected_fallback);
+
+        // 6. Test 1-character token fallback ("a") which tests s.len() >= 2 boundary
+        let fallback_short = auto_vectorize("a");
+        assert_eq!(fallback_short, expected_fallback);
     }
 
     #[test]
