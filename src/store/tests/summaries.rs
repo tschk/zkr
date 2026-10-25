@@ -21,13 +21,19 @@ fn wake(db: &MemoryDb) -> WakePack {
     .unwrap()
 }
 
-#[test]
-fn summary_tree_wakes_zooms_stales_and_rebuilds() {
-    let mut db = MemoryDb {
-        connection: Connection::open_in_memory().unwrap(),
-    };
-    db.migrate().unwrap();
-    let (tenant_id, person_id) = scope();
+struct SummaryTree {
+    leaves: Vec<SummaryId>,
+    first_half: SummaryId,
+    second_half: SummaryId,
+    root: SummaryId,
+    source_ids: Vec<SourceId>,
+}
+
+fn build_summary_tree(
+    db: &mut MemoryDb,
+    tenant_id: &TenantId,
+    person_id: &PersonId,
+) -> SummaryTree {
     let remembered = (0..4)
         .map(|index| {
             let mut input = remember_raw("a", "sam", &format!("rollout item {index}"));
@@ -36,6 +42,7 @@ fn summary_tree_wakes_zooms_stales_and_rebuilds() {
             db.remember(input).unwrap()
         })
         .collect::<Vec<_>>();
+    let source_ids = remembered.iter().map(|m| m.source_id.clone()).collect();
     let leaves = remembered
         .iter()
         .enumerate()
@@ -81,41 +88,61 @@ fn summary_tree_wakes_zooms_stales_and_rebuilds() {
         })
         .unwrap()
         .summary_id;
-    assert_eq!(
-        wake(&db).summaries,
-        vec![
-            db.zoom(ZoomInput {
-                tenant_id: tenant_id.clone(),
-                person_id: person_id.clone(),
-                summary_id: root.clone()
-            })
-            .unwrap()
-            .summary
-        ]
-    );
+
+    SummaryTree {
+        leaves,
+        first_half,
+        second_half,
+        root,
+        source_ids,
+    }
+}
+
+#[test]
+fn test_summary_tree_zooms_into_children() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let (tenant_id, person_id) = scope();
+    let tree = build_summary_tree(&mut db, &tenant_id, &person_id);
+
     let zoom = db
         .zoom(ZoomInput {
-            tenant_id: tenant_id.clone(),
-            person_id: person_id.clone(),
-            summary_id: root.clone(),
+            tenant_id,
+            person_id,
+            summary_id: tree.root,
         })
         .unwrap();
     assert_eq!(zoom.children.len(), 2);
+}
+
+#[test]
+fn test_deleting_source_stales_dependent_summaries() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let (tenant_id, person_id) = scope();
+    let tree = build_summary_tree(&mut db, &tenant_id, &person_id);
+
     db.delete_source(DeleteInput {
         tenant_id: tenant_id.clone(),
         person_id: person_id.clone(),
-        source_id: remembered[0].source_id.clone(),
+        source_id: tree.source_ids[0].clone(),
         deleted_at: 100,
     })
     .unwrap();
+
     assert!(matches!(
         db.zoom(ZoomInput {
             tenant_id: tenant_id.clone(),
             person_id: person_id.clone(),
-            summary_id: root.clone(),
+            summary_id: tree.root.clone(),
         }),
         Err(Error::NotFound)
     ));
+
     assert_eq!(
         db.repair_projections(RepairInput {
             tenant_id: tenant_id.clone(),
@@ -126,45 +153,91 @@ fn summary_tree_wakes_zooms_stales_and_rebuilds() {
         .summaries_stale,
         3
     );
+}
+
+#[test]
+fn test_rebuilding_staled_summaries_restores_them() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let (tenant_id, person_id) = scope();
+    let tree = build_summary_tree(&mut db, &tenant_id, &person_id);
+
+    db.delete_source(DeleteInput {
+        tenant_id: tenant_id.clone(),
+        person_id: person_id.clone(),
+        source_id: tree.source_ids[0].clone(),
+        deleted_at: 100,
+    })
+    .unwrap();
+
     let replacement = db
         .remember(remember_raw("a", "sam", "rollout replacement"))
         .unwrap();
+
     let first_leaf = db
         .rebuild(RebuildInput {
             tenant_id: tenant_id.clone(),
             person_id: person_id.clone(),
-            summary_id: leaves[0].clone(),
+            summary_id: tree.leaves[0].clone(),
             summary: "item 0 corrected".into(),
             evidence_ids: vec![replacement.evidence_id],
             recorded_at: 101,
         })
         .unwrap()
         .summary_id;
+
     let rebuilt_half = db
         .rebuild(RebuildInput {
             tenant_id: tenant_id.clone(),
             person_id: person_id.clone(),
-            summary_id: first_half,
+            summary_id: tree.first_half,
             summary: "first half corrected".into(),
             evidence_ids: Vec::new(),
             recorded_at: 102,
         })
         .unwrap()
         .summary_id;
-    assert_ne!(first_leaf, leaves[0]);
+    assert_ne!(first_leaf, tree.leaves[0]);
+
     let rebuilt_root = db
         .rebuild(RebuildInput {
             tenant_id: tenant_id.clone(),
             person_id: person_id.clone(),
-            summary_id: root,
+            summary_id: tree.root,
             summary: "all fixed".into(),
             evidence_ids: Vec::new(),
             recorded_at: 103,
         })
         .unwrap()
         .summary_id;
-    assert_ne!(rebuilt_half, second_half);
+
+    assert_ne!(rebuilt_half, tree.second_half);
     assert_eq!(wake(&db).summaries[0].id, rebuilt_root);
+}
+
+#[test]
+fn test_summary_tree_wakes_top_level() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let (tenant_id, person_id) = scope();
+    let tree = build_summary_tree(&mut db, &tenant_id, &person_id);
+
+    assert_eq!(
+        wake(&db).summaries,
+        vec![
+            db.zoom(ZoomInput {
+                tenant_id: tenant_id.clone(),
+                person_id: person_id.clone(),
+                summary_id: tree.root.clone()
+            })
+            .unwrap()
+            .summary
+        ]
+    );
 }
 
 #[test]
@@ -457,11 +530,16 @@ fn zoom_missing_child_returns_error() {
     ));
 }
 
-#[test]
-fn wake_budget_expands_summary_tree_and_reports_gaps() {
-    let mut db = MemoryDb {
-        connection: Connection::open_in_memory().unwrap(),
-    };
+fn setup_wake_budget_tree(
+    db: &mut MemoryDb,
+) -> (
+    TenantId,
+    PersonId,
+    SummaryId,
+    SummaryId,
+    SummaryId,
+    Vec<SummaryId>,
+) {
     db.migrate().unwrap();
     let (tenant_id, person_id) = scope();
 
@@ -522,29 +600,38 @@ fn wake_budget_expands_summary_tree_and_reports_gaps() {
         .unwrap()
         .summary_id;
 
-    let wake_with_budget = |max_bytes: u32| -> WakePack {
-        db.wake(WakeInput {
-            search: SearchInput {
-                tenant_id: tenant_id.clone(),
-                person_id: person_id.clone(),
-                query: "test".into(),
-                limit: 10,
-                query_embedding: None,
-                as_of: None,
-                enabled_features: Vec::new(),
-            },
-            max_bytes,
-        })
-        .unwrap()
+    (tenant_id, person_id, root, first_half, second_half, leaves)
+}
+
+fn wake_with_budget(
+    db: &MemoryDb,
+    tenant_id: &TenantId,
+    person_id: &PersonId,
+    max_bytes: u32,
+) -> WakePack {
+    db.wake(WakeInput {
+        search: SearchInput {
+            tenant_id: tenant_id.clone(),
+            person_id: person_id.clone(),
+            query: "test".into(),
+            limit: 10,
+            query_embedding: None,
+            as_of: None,
+            enabled_features: Vec::new(),
+        },
+        max_bytes,
+    })
+    .unwrap()
+}
+
+#[test]
+fn wake_budget_too_small_returns_gaps() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
     };
+    let (tenant_id, person_id, _, _, _, _) = setup_wake_budget_tree(&mut db);
 
-    // "all" = 3 bytes
-    // "first" + "second" = 5 + 6 = 11 bytes
-    // "first" + "item 2" + "item 3" = 5 + 6 + 6 = 17 bytes
-    // "item 0" + "item 1" + "item 2" + "item 3" = 6 + 6 + 6 + 6 = 24 bytes
-
-    // Budget 2: too small for even the root node.
-    let w = wake_with_budget(2);
+    let w = wake_with_budget(&db, &tenant_id, &person_id, 2);
     assert!(w.summaries.is_empty());
     assert_eq!(w.used_bytes, 0);
     assert!(
@@ -552,9 +639,16 @@ fn wake_budget_expands_summary_tree_and_reports_gaps() {
             .gaps
             .contains(&"no live summary matched the wake budget".to_owned())
     );
+}
 
-    // Budget 10: enough for root, but not to expand it (cost 11).
-    let w = wake_with_budget(10);
+#[test]
+fn wake_budget_enough_for_root_only() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    let (tenant_id, person_id, root, _, _, _) = setup_wake_budget_tree(&mut db);
+
+    let w = wake_with_budget(&db, &tenant_id, &person_id, 10);
     assert_eq!(w.summaries.len(), 1);
     assert_eq!(w.summaries[0].id, root);
     assert_eq!(w.used_bytes, 3);
@@ -563,39 +657,74 @@ fn wake_budget_expands_summary_tree_and_reports_gaps() {
             .gaps
             .contains(&"no live summary matched the wake budget".to_owned())
     );
+}
 
-    // Budget 11: exactly enough to expand root into first_half and second_half.
-    let w = wake_with_budget(11);
+#[test]
+fn wake_budget_expands_root() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    let (tenant_id, person_id, _, first_half, second_half, _) = setup_wake_budget_tree(&mut db);
+
+    let w = wake_with_budget(&db, &tenant_id, &person_id, 11);
     assert_eq!(w.summaries.len(), 2);
     assert_eq!(w.summaries[0].id, first_half);
     assert_eq!(w.summaries[1].id, second_half);
     assert_eq!(w.used_bytes, 11);
+}
 
-    // Budget 16: enough to expand root, but not enough to expand second_half (needs 17).
-    let w = wake_with_budget(16);
+#[test]
+fn wake_budget_insufficient_to_expand_second_half() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    let (tenant_id, person_id, _, first_half, second_half, _) = setup_wake_budget_tree(&mut db);
+
+    let w = wake_with_budget(&db, &tenant_id, &person_id, 16);
     assert_eq!(w.summaries.len(), 2);
     assert_eq!(w.summaries[0].id, first_half);
     assert_eq!(w.summaries[1].id, second_half);
     assert_eq!(w.used_bytes, 11);
+}
 
-    // Budget 17: exactly enough to expand second_half.
-    let w = wake_with_budget(17);
+#[test]
+fn wake_budget_expands_second_half() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    let (tenant_id, person_id, _, first_half, _, leaves) = setup_wake_budget_tree(&mut db);
+
+    let w = wake_with_budget(&db, &tenant_id, &person_id, 17);
     assert_eq!(w.summaries.len(), 3);
     assert_eq!(w.summaries[0].id, first_half);
     assert_eq!(w.summaries[1].id, leaves[2]);
     assert_eq!(w.summaries[2].id, leaves[3]);
     assert_eq!(w.used_bytes, 17);
+}
 
-    // Budget 23: enough to expand second_half, but not first_half (needs 24).
-    let w = wake_with_budget(23);
+#[test]
+fn wake_budget_insufficient_to_expand_first_half() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    let (tenant_id, person_id, _, first_half, _, leaves) = setup_wake_budget_tree(&mut db);
+
+    let w = wake_with_budget(&db, &tenant_id, &person_id, 23);
     assert_eq!(w.summaries.len(), 3);
     assert_eq!(w.summaries[0].id, first_half);
     assert_eq!(w.summaries[1].id, leaves[2]);
     assert_eq!(w.summaries[2].id, leaves[3]);
     assert_eq!(w.used_bytes, 17);
+}
 
-    // Budget 24: exactly enough to expand all nodes to leaves.
-    let w = wake_with_budget(24);
+#[test]
+fn wake_budget_expands_all() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    let (tenant_id, person_id, _, _, _, leaves) = setup_wake_budget_tree(&mut db);
+
+    let w = wake_with_budget(&db, &tenant_id, &person_id, 24);
     assert_eq!(w.summaries.len(), 4);
     assert_eq!(w.summaries[0].id, leaves[0]);
     assert_eq!(w.summaries[1].id, leaves[1]);
