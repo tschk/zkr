@@ -618,3 +618,44 @@ fn export_rejects_unsupported_format() {
         Err(Error::Invalid(message)) if message.contains("unsupported export_format")
     ));
 }
+
+#[test]
+fn daily_review_markdown_export_size_error() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+
+    // Seed DB with enough evidence to exceed MAX_EXPORT_RECORD_BYTES when collected in a DailyReview
+    let transaction = db.connection.transaction().unwrap();
+
+    transaction.execute("INSERT INTO sources(id, tenant_id, person_id, revision, kind, content, captured_at, recorded_at) VALUES('source', 'a', 'sam', 1, 'kind', 'content', 10, 10)", []).unwrap();
+    let mut evidence_ids = Vec::new();
+
+    for i in 0..30_000 {
+        let ev_id = format!("{:032x}", i);
+        transaction.execute(
+            "INSERT INTO evidence(id, tenant_id, person_id, source_id, source_revision, quote, recorded_at) VALUES(?1, 'a', 'sam', 'source', 1, 'foo', 10)",
+            rusqlite::params![ev_id],
+        ).unwrap();
+        evidence_ids.push(EvidenceId(ev_id));
+    }
+    transaction.commit().unwrap();
+
+    let result = db.store_review(crate::store::ReviewInput {
+        tenant_id: TenantId("a".into()),
+        person_id: PersonId("sam".into()),
+        day: "2026-07-21".into(),
+        summary: "Markdown export size limit trigger".into(),
+        evidence_ids,
+        recorded_at: 20,
+    });
+
+    assert!(matches!(result, Err(Error::Invalid(message)) if message.contains("export record")));
+
+    let count: i64 = db
+        .connection
+        .query_row("SELECT COUNT(*) FROM memory_commits", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 0);
+}
