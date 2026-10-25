@@ -1957,7 +1957,12 @@ mod tests {
         assert!(db.project_memories(bad).is_err());
     }
 
-    fn setup_dream_test_state() -> (MemoryDb, crate::store::Remembered, crate::store::Remembered, crate::store::Remembered) {
+    fn setup_dream_test_state() -> (
+        MemoryDb,
+        crate::store::Remembered,
+        crate::store::Remembered,
+        crate::store::Remembered,
+    ) {
         let mut db = MemoryDb::open(":memory:").unwrap();
 
         // Claim 1: short-term structured claim in project Tofu with a shared target and an unresolved target
