@@ -162,7 +162,6 @@ pub struct ProjectQuery {
     pub limit: u32,
 }
 
-
 impl ProjectQuery {
     pub fn validate(&self) -> Result<()> {
         require_scope(&self.tenant_id, &self.person_id)?;
@@ -606,8 +605,11 @@ impl MemoryDb {
         Ok(remembered)
     }
 
-
-    fn fetch_project_candidates(&self, tenant_id: &TenantId, person_id: &PersonId) -> Result<Vec<(ProjectFact, String, i64, String)>> {
+    fn fetch_project_candidates(
+        &self,
+        tenant_id: &TenantId,
+        person_id: &PersonId,
+    ) -> Result<Vec<(ProjectFact, String, i64, String)>> {
         let mut statement = self.connection.prepare(
             "SELECT c.subject,c.id,c.kind,c.predicate,c.value,min(e.id),c.recorded_from,min(e.quote) FROM claims c
              JOIN claim_evidence ce ON ce.claim_id=c.id AND ce.tenant_id=c.tenant_id AND ce.person_id=c.person_id
@@ -667,7 +669,6 @@ impl MemoryDb {
         }
         Ok(all_candidates)
     }
-
 
     fn score_project_candidates(
         &self,
@@ -773,12 +774,18 @@ impl MemoryDb {
 
         let all_candidates = self.fetch_project_candidates(&input.tenant_id, &input.person_id)?;
 
-
-        let activated_ids = project_graph_activation(&all_candidates, input.connected_to.as_ref(), input.max_hops);
+        let activated_ids =
+            project_graph_activation(&all_candidates, input.connected_to.as_ref(), input.max_hops);
 
         let filtered = filter_project_candidates(all_candidates, &input, &activated_ids);
 
-        let scored = self.score_project_candidates(&input.tenant_id, &input.person_id, filtered, input.query_embedding.as_ref(), input.vector_query.as_deref())?;
+        let scored = self.score_project_candidates(
+            &input.tenant_id,
+            &input.person_id,
+            filtered,
+            input.query_embedding.as_ref(),
+            input.vector_query.as_deref(),
+        )?;
 
         collect_json_page(
             scored
@@ -2312,7 +2319,6 @@ mod tests {
     }
 }
 
-
 fn project_graph_activation(
     all_candidates: &[(ProjectFact, String, i64, String)],
     connected_to: Option<&String>,
@@ -2371,7 +2377,6 @@ fn project_graph_activation(
     Some(activated)
 }
 
-
 fn filter_project_candidates(
     all_candidates: Vec<(ProjectFact, String, i64, String)>,
     input: &ProjectQuery,
@@ -2422,8 +2427,7 @@ fn filter_project_candidates(
         {
             continue;
         }
-        if record_type_filter.is_some() || relation_filter.is_some() || target_filter.is_some()
-        {
+        if record_type_filter.is_some() || relation_filter.is_some() || target_filter.is_some() {
             let Some(rec) = &fact.record else {
                 continue;
             };
