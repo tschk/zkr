@@ -35,6 +35,10 @@ fn migrate_creates_schema_tables() {
     ];
 
     for expected in expected_tables {
-        assert!(tables.contains(&expected.to_string()), "Table {} should exist", expected);
+        assert!(
+            tables.contains(&expected.to_string()),
+            "Table {} should exist",
+            expected
+        );
     }
 }
