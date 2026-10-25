@@ -1188,5 +1188,8 @@ fn get_rejects_unsupported_embedding_target() {
         &PersonId("sam".into()),
         &[("unsupported".to_owned(), "id".to_owned())],
     );
-    assert!(matches!(result, Err(Error::Invalid(msg)) if msg.contains("stored embedding target is invalid")));
+    assert!(matches!(
+        result,
+        Err(Error::Invalid(msg)) if msg.contains("stored embedding target is invalid")
+    ));
 }
