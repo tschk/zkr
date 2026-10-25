@@ -1,4 +1,5 @@
 use super::*;
+use crate::store::schema::is_valid_identifier;
 use rusqlite::Connection;
 use std::collections::HashSet;
 
@@ -54,4 +55,18 @@ fn migrate_fails_if_newer_version() {
     } else {
         panic!("Expected Error::Invalid");
     }
+}
+#[test]
+fn is_valid_identifier_accepts_valid_strings() {
+    assert!(is_valid_identifier("valid_table_name"));
+    assert!(is_valid_identifier("table123"));
+    assert!(is_valid_identifier("A_b_3"));
+}
+
+#[test]
+fn is_valid_identifier_rejects_invalid_strings() {
+    assert!(!is_valid_identifier(""));
+    assert!(!is_valid_identifier("table name"));
+    assert!(!is_valid_identifier("table;DROP"));
+    assert!(!is_valid_identifier("table-name"));
 }
