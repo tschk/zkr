@@ -1555,6 +1555,63 @@ mod tests {
     }
 
     #[test]
+    fn remember_project_validates_inputs_and_embeds() {
+        let mut db = MemoryDb::open(":memory:").unwrap();
+
+        // 1. Missing claim
+        let mut missing_claim = memory("Tofu", "work", "me", "active");
+        missing_claim.memory.claim = None;
+        assert!(db.remember_project(missing_claim).is_err());
+
+        // 2. No category
+        let mut no_cat = memory("Tofu", "work", "me", "active");
+        no_cat.category = None;
+        no_cat.categories = vec![];
+        assert!(db.remember_project(no_cat).is_err());
+
+        // 3. Category > 256 bytes
+        let mut long_cat = memory("Tofu", "work", "me", "active");
+        long_cat.category = Some("a".repeat(257));
+        assert!(db.remember_project(long_cat).is_err());
+
+        // 4. Categories > 32
+        let mut too_many_cats = memory("Tofu", "work", "me", "active");
+        too_many_cats.category = None;
+        too_many_cats.categories = (0..33).map(|i| format!("cat{}", i)).collect();
+        assert!(db.remember_project(too_many_cats).is_err());
+
+        // 5. Successful remember project with inline embeddings
+        let mut with_emb = memory("Tofu", "work", "me", "active");
+        with_emb.embedding = Some(InlineEmbedding {
+            vector: vec![1.0, 0.0, 0.0],
+            model: "test-model".into(),
+            version: "v1".into(),
+            normalization: VectorNormalization::L2,
+            distance: VectorDistance::Cosine,
+        });
+        let rem = db.remember_project(with_emb).unwrap();
+
+        // Assert embeddings were created.
+        let claim_id = rem.claim_id.unwrap();
+        let target_kind = "claim";
+        let target_id = claim_id.0;
+
+        let auto: usize = db.connection.query_row(
+            "SELECT count(*) FROM embeddings WHERE target_kind = ? AND target_id = ? AND model = ?",
+            [target_kind, target_id.as_str(), AUTO_EMBEDDING_MODEL],
+            |row| row.get(0)
+        ).unwrap();
+        assert_eq!(auto, 1);
+
+        let inline: usize = db.connection.query_row(
+            "SELECT count(*) FROM embeddings WHERE target_kind = ? AND target_id = ? AND model = ?",
+            [target_kind, target_id.as_str(), "test-model"],
+            |row| row.get(0)
+        ).unwrap();
+        assert_eq!(inline, 1);
+    }
+
+    #[test]
     fn projects_and_categories_are_exact_scoped_and_cited() {
         let mut db = MemoryDb::open(":memory:").unwrap();
         let remembered = db
