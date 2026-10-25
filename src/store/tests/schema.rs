@@ -1,6 +1,61 @@
+use super::*;
 use crate::store::schema::is_valid_identifier;
 use rusqlite::Connection;
+use std::collections::HashSet;
 
+#[test]
+fn setup_creates_expected_tables() {
+    let mut connection = Connection::open_in_memory().unwrap();
+    crate::store::schema::migrate(&mut connection).unwrap();
+
+    let mut stmt = connection
+        .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+        .unwrap();
+
+    let table_iter = stmt.query_map([], |row| row.get::<_, String>(0)).unwrap();
+
+    let tables: HashSet<String> = table_iter.map(|r| r.unwrap()).collect();
+
+    let expected_tables = vec![
+        "sources",
+        "evidence",
+        "claims",
+        "claim_evidence",
+        "daily_reviews",
+        "embeddings",
+        "evidence_locators",
+        "profile_entries",
+        "corrections",
+        "memory_commits",
+        "memory_export_events",
+        "memory_repair_outbox",
+        "memory_operations",
+        "memory_applied_records",
+        "summary_nodes",
+        "retrieval_stats",
+    ];
+
+    for table in expected_tables {
+        assert!(tables.contains(table), "Missing expected table: {}", table);
+    }
+}
+
+#[test]
+fn migrate_fails_if_newer_version() {
+    let mut connection = Connection::open_in_memory().unwrap();
+    let version = crate::store::schema::SCHEMA_VERSION + 1;
+    connection
+        .execute(&format!("PRAGMA user_version = {};", version), [])
+        .unwrap();
+
+    let result = crate::store::schema::migrate(&mut connection);
+    assert!(result.is_err());
+    if let Err(Error::Invalid(msg)) = result {
+        assert!(msg.contains("is newer than supported version"));
+    } else {
+        panic!("Expected Error::Invalid");
+    }
+}
 #[test]
 fn is_valid_identifier_accepts_valid_strings() {
     assert!(is_valid_identifier("valid_table_name"));
@@ -14,32 +69,4 @@ fn is_valid_identifier_rejects_invalid_strings() {
     assert!(!is_valid_identifier("table name"));
     assert!(!is_valid_identifier("table;DROP"));
     assert!(!is_valid_identifier("table-name"));
-}
-
-#[test]
-fn schema_setup_and_basic_queries() {
-    let mut connection = Connection::open_in_memory().unwrap();
-    crate::store::schema::migrate(&mut connection).unwrap();
-
-    // Verify basic tables exist
-    let tables: Vec<String> = connection
-        .prepare("SELECT name FROM sqlite_master WHERE type='table'")
-        .unwrap()
-        .query_map([], |row| row.get::<_, String>(0))
-        .unwrap()
-        .map(|name| name.unwrap())
-        .collect();
-
-    assert!(tables.contains(&"sources".to_string()));
-    assert!(tables.contains(&"evidence".to_string()));
-    assert!(tables.contains(&"claims".to_string()));
-    assert!(tables.contains(&"claim_evidence".to_string()));
-    assert!(tables.contains(&"daily_reviews".to_string()));
-    assert!(tables.contains(&"embeddings".to_string()));
-
-    // Verify the user version is updated to SCHEMA_VERSION
-    let version: i64 = connection
-        .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
-        .unwrap();
-    assert_eq!(version, crate::store::schema::SCHEMA_VERSION);
 }
