@@ -46,14 +46,28 @@ fn test_db_help_argument() {
 
 #[test]
 fn test_invalid_arguments_error() {
-    let output = Command::new(get_binary_path())
-        .args(["foo", "bar"])
-        .output()
-        .expect("Failed to execute command");
+    let invalid_args = vec![
+        vec!["foo", "bar"],
+        vec!["--db"],
+        vec!["--db", "mock.db"],
+        vec!["--database", "mock.db", "search"],
+        vec!["--db", "mock.db", "search", "extra"],
+    ];
 
-    assert!(!output.status.success());
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains(r#"{"error":"usage: zkr --db PATH COMMAND (use --help)"}"#));
+    for args in invalid_args {
+        let output = Command::new(get_binary_path())
+            .args(&args)
+            .output()
+            .expect("Failed to execute command");
+
+        assert!(!output.status.success());
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(
+            stderr.contains(r#"{"error":"usage: zkr --db PATH COMMAND (use --help)"}"#),
+            "Failed on args: {:?}",
+            args
+        );
+    }
 }
 
 #[test]
