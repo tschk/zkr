@@ -636,6 +636,9 @@ fn daily_review_markdown_export_size_error() {
 
     assert!(matches!(result, Err(Error::Invalid(message)) if message.contains("export record")));
 
-    let count: i64 = db.connection.query_row("SELECT COUNT(*) FROM memory_commits", [], |row| row.get(0)).unwrap();
+    let count: i64 = db
+        .connection
+        .query_row("SELECT COUNT(*) FROM memory_commits", [], |row| row.get(0))
+        .unwrap();
     assert_eq!(count, 0);
 }
