@@ -944,7 +944,7 @@ fn search_and_wake_recall_claims_by_subject_predicate_and_value_without_source_o
 }
 
 #[test]
-fn claim_lexical_fallback_enforces_scope_deletion_supersession_as_of_and_features() {
+fn claim_lexical_fallback_enforces_scope() {
     let mut db = MemoryDb {
         connection: Connection::open_in_memory().unwrap(),
     };
@@ -1008,6 +1008,14 @@ fn claim_lexical_fallback_enforces_scope_deletion_supersession_as_of_and_feature
         .items
         .is_empty()
     );
+}
+
+#[test]
+fn claim_lexical_fallback_enforces_features() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
 
     // 2. Feature flag gating on claim fallback
     let gated = db
@@ -1064,6 +1072,14 @@ fn claim_lexical_fallback_enforces_scope_deletion_supersession_as_of_and_feature
         gated_found.items[0].memory,
         MemoryRef::Claim(gated.claim_id.unwrap())
     );
+}
+
+#[test]
+fn claim_lexical_fallback_enforces_supersession_and_as_of() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
 
     // 3. Supersession / correction and bitemporal as_of
     let v1 = db
@@ -1151,6 +1167,52 @@ fn claim_lexical_fallback_enforces_scope_deletion_supersession_as_of_and_feature
         .unwrap();
     assert_eq!(as_of_15.items.len(), 1);
     assert_eq!(as_of_15.items[0].memory, MemoryRef::Claim(v1_claim_id));
+}
+
+#[test]
+fn claim_lexical_fallback_enforces_deletion() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+
+    // We need to set up the superseded claim v2 first as in the previous test
+    // to test deletion.
+    let v1 = db
+        .remember(RememberInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            ingestion_key: None,
+            kind: SourceKind::Conversation,
+            text: "Initial observation note".into(),
+            captured_at: 10,
+            recorded_at: 10,
+            claim: Some(ClaimInput {
+                subject: r#"zkr:project:["Tofu","Architecture"]"#.into(),
+                predicate: "component:storage_engine".into(),
+                value: r#"{"record_type":"decision","fields":{"engine":"legacy_btree"}}"#.into(),
+                kind: ClaimKind::Fact,
+                valid_from: 10,
+                tier: MemoryTier::LongTerm,
+                processing_state: MemoryProcessingState::Processed,
+            }),
+            feature_flag: None,
+            aliases: Vec::new(),
+        })
+        .unwrap();
+    let v1_claim_id = v1.claim_id.unwrap();
+
+    let v2 = db
+        .correct(CorrectInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            claim_id: v1_claim_id.clone(),
+            text: "Updated observation note".into(),
+            value: r#"{"record_type":"decision","fields":{"engine":"append_only_lsm"}}"#.into(),
+            valid_at: 20,
+            recorded_at: 20,
+        })
+        .unwrap();
 
     // 4. Source deletion removes the claim from claim-text lexical fallback
     db.delete_source(DeleteInput {
