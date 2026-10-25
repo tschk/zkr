@@ -602,8 +602,6 @@ fn projection_and_lifecycle_events_cover_links_profiles_reviews_and_deletions() 
     assert!(records.iter().any(|record| matches!(record, ExportRecord::Deletion(value) if matches!(value.target, MemoryRef::DailyReview(_)))));
 }
 
-
-
 #[test]
 fn export_rejects_oversized_record() {
     let mut db = MemoryDb {
@@ -615,13 +613,8 @@ fn export_rejects_oversized_record() {
     let person_id = crate::model::PersonId("sam".into());
 
     let transaction = db.connection.transaction().unwrap();
-    let commit = crate::store::export::begin_commit(
-        &transaction,
-        &tenant_id,
-        &person_id,
-        10,
-    )
-    .unwrap();
+    let commit =
+        crate::store::export::begin_commit(&transaction, &tenant_id, &person_id, 10).unwrap();
 
     let mut profile = crate::model::ProfileEntry {
         id: crate::model::ProfileEntryId("profile".into()),
