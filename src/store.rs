@@ -567,6 +567,13 @@ impl MemoryDb {
         Ok(database)
     }
 
+    pub fn open_in_memory() -> Result<Self> {
+        let connection = Connection::open_in_memory()?;
+        let mut database = Self { connection };
+        database.migrate()?;
+        Ok(database)
+    }
+
     fn migrate(&mut self) -> Result<()> {
         schema::migrate(&mut self.connection)
     }
