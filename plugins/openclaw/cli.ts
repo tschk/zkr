@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 
 export type ZkrCommand =
   | "remember"
@@ -26,9 +26,17 @@ export function resolveZkrExecutable(command: string | undefined): string {
   if (typeof executable !== "string" || executable.includes("\0")) {
     throw new Error(ZKR_COMMAND_FAILED);
   }
-  if (/[\r\n;&|`$"'<>]/.test(executable)) {
+
+  if (
+    executable !== "zkr" &&
+    executable !== "zkr.exe" &&
+    !isAbsolute(executable) &&
+    !executable.startsWith("./") &&
+    !executable.startsWith("../")
+  ) {
     throw new Error(ZKR_COMMAND_FAILED);
   }
+
   const name = basename(executable);
   const candidate = process.platform === "win32" ? name.toLowerCase() : name;
   if (candidate !== "zkr" && candidate !== "zkr.exe") {
