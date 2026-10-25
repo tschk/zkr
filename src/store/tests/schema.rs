@@ -11,9 +11,7 @@ fn setup_creates_expected_tables() {
         .prepare("SELECT name FROM sqlite_master WHERE type='table'")
         .unwrap();
 
-    let table_iter = stmt
-        .query_map([], |row| row.get::<_, String>(0))
-        .unwrap();
+    let table_iter = stmt.query_map([], |row| row.get::<_, String>(0)).unwrap();
 
     let tables: HashSet<String> = table_iter.map(|r| r.unwrap()).collect();
 
