@@ -1,6 +1,5 @@
 use super::*;
 
-
 #[test]
 fn test_remember_project_missing_claim() {
     let mut db = MemoryDb {
@@ -39,7 +38,9 @@ fn test_remember_project_no_categories() {
     };
 
     let result = db.remember_project(input);
-    assert!(matches!(result, Err(Error::Invalid(msg)) if msg.contains("category must not be empty")));
+    assert!(
+        matches!(result, Err(Error::Invalid(msg)) if msg.contains("category must not be empty"))
+    );
 }
 
 #[test]
@@ -141,11 +142,14 @@ fn test_remember_project_basic() {
 
     // Check if the claim subject was modified as expected
     let claim_id = result.claim_id.unwrap();
-    let claim_subject: String = db.connection.query_row(
-        "SELECT subject FROM claims WHERE id = ?1",
-        [claim_id.0.as_str()],
-        |row| row.get(0)
-    ).unwrap();
+    let claim_subject: String = db
+        .connection
+        .query_row(
+            "SELECT subject FROM claims WHERE id = ?1",
+            [claim_id.0.as_str()],
+            |row| row.get(0),
+        )
+        .unwrap();
 
     assert!(claim_subject.starts_with("zkr:project:"));
     assert!(claim_subject.contains("alpha"));
@@ -170,11 +174,14 @@ fn test_remember_project_default_project_name() {
     let result = db.remember_project(input).unwrap();
 
     let claim_id = result.claim_id.unwrap();
-    let claim_subject: String = db.connection.query_row(
-        "SELECT subject FROM claims WHERE id = ?1",
-        [claim_id.0.as_str()],
-        |row| row.get(0)
-    ).unwrap();
+    let claim_subject: String = db
+        .connection
+        .query_row(
+            "SELECT subject FROM claims WHERE id = ?1",
+            [claim_id.0.as_str()],
+            |row| row.get(0),
+        )
+        .unwrap();
 
     assert!(claim_subject.contains("general"));
 }
@@ -197,11 +204,14 @@ fn test_remember_project_multiple_categories() {
     let result = db.remember_project(input).unwrap();
 
     let claim_id = result.claim_id.unwrap();
-    let claim_subject: String = db.connection.query_row(
-        "SELECT subject FROM claims WHERE id = ?1",
-        [claim_id.0.as_str()],
-        |row| row.get(0)
-    ).unwrap();
+    let claim_subject: String = db
+        .connection
+        .query_row(
+            "SELECT subject FROM claims WHERE id = ?1",
+            [claim_id.0.as_str()],
+            |row| row.get(0),
+        )
+        .unwrap();
 
     assert!(claim_subject.contains("alpha"));
     assert!(claim_subject.contains("main_cat"));
@@ -211,6 +221,9 @@ fn test_remember_project_multiple_categories() {
     // Check that "main_cat" only appears once in the serialized parts
     // It will be serialized with quotes inside the json string like "main_cat"
     // Since subject is like zkr:project:["alpha","main_cat","sub_cat1","sub_cat2"]
-    let expected = format!("zkr:project:{}", serde_json::to_string(&vec!["alpha", "main_cat", "sub_cat1", "sub_cat2"]).unwrap());
+    let expected = format!(
+        "zkr:project:{}",
+        serde_json::to_string(&vec!["alpha", "main_cat", "sub_cat1", "sub_cat2"]).unwrap()
+    );
     assert_eq!(claim_subject, expected);
 }
