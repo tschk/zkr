@@ -601,3 +601,20 @@ fn projection_and_lifecycle_events_cover_links_profiles_reviews_and_deletions() 
     assert!(records.iter().any(|record| matches!(record, ExportRecord::Deletion(value) if matches!(value.target, MemoryRef::ProfileEntry(_)))));
     assert!(records.iter().any(|record| matches!(record, ExportRecord::Deletion(value) if matches!(value.target, MemoryRef::DailyReview(_)))));
 }
+
+#[test]
+fn export_rejects_unsupported_format() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+
+    let mut invalid_input = input(0, -1, None, 100);
+    invalid_input.export_format = EXPORT_FORMAT_VERSION + 1;
+
+    let result = db.export(invalid_input);
+    assert!(matches!(
+        result,
+        Err(Error::Invalid(message)) if message.contains("unsupported export_format")
+    ));
+}

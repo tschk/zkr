@@ -141,71 +141,109 @@ fn migration_preserves_unknown_legacy_superseded_claim_validity() {
     assert_eq!(valid_until, None);
 }
 
+fn setup_legacy_schema(connection: &Connection, version: i32) {
+    if version == 0 {
+        connection
+            .execute_batch("PRAGMA user_version = 0;")
+            .unwrap();
+    } else {
+        let claim_kind = if version >= 5 {
+            "kind TEXT NOT NULL DEFAULT 'fact',"
+        } else {
+            ""
+        };
+        connection
+                .execute_batch(&format!(
+                    "CREATE TABLE sources(id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, ingestion_key TEXT, revision INTEGER NOT NULL, kind TEXT NOT NULL, content TEXT NOT NULL, captured_at INTEGER NOT NULL, recorded_at INTEGER NOT NULL, deleted_at INTEGER);
+                     CREATE VIRTUAL TABLE source_fts USING fts5(source_id UNINDEXED, tenant_id UNINDEXED, person_id UNINDEXED, content, tokenize='unicode61');
+                     CREATE TABLE evidence(id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, source_id TEXT NOT NULL REFERENCES sources(id), source_revision INTEGER NOT NULL, quote TEXT NOT NULL, recorded_at INTEGER NOT NULL, deleted_at INTEGER);
+                     CREATE TABLE claims(id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, subject TEXT NOT NULL, predicate TEXT NOT NULL, value TEXT NOT NULL, {claim_kind} valid_from INTEGER NOT NULL, valid_until INTEGER, recorded_from INTEGER NOT NULL, recorded_until INTEGER, status TEXT NOT NULL);
+                     CREATE TABLE claim_evidence(tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, claim_id TEXT NOT NULL REFERENCES claims(id), evidence_id TEXT NOT NULL REFERENCES evidence(id), relation TEXT NOT NULL, confidence_basis_points INTEGER NOT NULL, PRIMARY KEY(tenant_id, person_id, claim_id, evidence_id));
+                     CREATE TABLE daily_reviews(id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, day TEXT NOT NULL, summary TEXT NOT NULL, evidence_ids TEXT NOT NULL, recorded_at INTEGER NOT NULL);
+                     CREATE TABLE embeddings(tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, target_kind TEXT NOT NULL, target_id TEXT NOT NULL, model TEXT NOT NULL, version TEXT NOT NULL, dimension INTEGER NOT NULL, input_hash TEXT NOT NULL, target_revision INTEGER NOT NULL, created_at INTEGER NOT NULL, normalization TEXT NOT NULL, distance TEXT NOT NULL, vector TEXT NOT NULL, PRIMARY KEY(tenant_id, person_id, target_kind, target_id, model, version));
+                     INSERT INTO sources VALUES('source', 'a', 'sam', 'turn', 1, '\"conversation\"', 'Sam works at Acme', 10, 11, NULL);
+                     INSERT INTO source_fts VALUES('source', 'a', 'sam', 'Sam works at Acme');
+                     INSERT INTO evidence VALUES('evidence', 'a', 'sam', 'source', 1, 'Sam works at Acme', 11, NULL);
+                     INSERT INTO claims(id, tenant_id, person_id, subject, predicate, value, valid_from, recorded_from, status) VALUES('claim', 'a', 'sam', 'Sam', 'employer', 'Acme', 10, 11, 'accepted');
+                     INSERT INTO claim_evidence VALUES('a', 'sam', 'claim', 'evidence', '\"supports\"', 10000);
+                     INSERT INTO daily_reviews VALUES('review', 'a', 'sam', '2026-07-21', 'Sam works at Acme', '[\"evidence\"]', 12);
+                     INSERT INTO embeddings VALUES('a', 'sam', 'claim', 'claim', 'model', '1', 1, 'sha256:legacy', 11, 12, '\"l2\"', '\"cosine\"', '[1.0]');
+                     PRAGMA user_version = {version};"
+                ))
+                .unwrap();
+        if version >= 2 {
+            connection
+                    .execute_batch(
+                        "CREATE TABLE evidence_locators(tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, evidence_id TEXT NOT NULL REFERENCES evidence(id), device_id TEXT NOT NULL, provider TEXT NOT NULL, stream_id TEXT NOT NULL, segment_id TEXT NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, PRIMARY KEY(tenant_id, person_id, evidence_id));
+                         INSERT INTO evidence_locators VALUES('a', 'sam', 'evidence', 'device', 'provider', 'stream', 'segment', 1, 1);",
+                    )
+                    .unwrap();
+        }
+        if version >= 5 {
+            let (key, value) = if version == 5 {
+                ("company", "ACME Corp")
+            } else {
+                ("employer", "Acme")
+            };
+            connection
+                .execute_batch(&format!(
+                    "CREATE TABLE profile_entries(id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, stability TEXT NOT NULL, claim_id TEXT NOT NULL REFERENCES claims(id), recorded_at INTEGER NOT NULL);
+                     UPDATE claims SET kind = 'profile_fact' WHERE id = 'claim';
+                     INSERT INTO profile_entries VALUES('profile', 'a', 'sam', '{key}', '{value}', '\"current\"', 'claim', 12);",
+                ))
+                .unwrap();
+        }
+        if version >= 6 {
+            connection
+                .execute_batch(
+                    "ALTER TABLE sources ADD COLUMN origin_evidence_id TEXT;
+                     ALTER TABLE sources ADD COLUMN origin_claim_id TEXT;
+                     UPDATE sources SET origin_evidence_id = 'evidence', origin_claim_id = 'claim' WHERE id = 'source';",
+                )
+                .unwrap();
+        }
+    }
+}
+
+fn assert_migrated_legacy_schema(db: &MemoryDb, version: i32) {
+    if version > 0 {
+        let preserved = db
+            .connection
+            .query_row(
+                "SELECT origin_evidence_id, origin_claim_id FROM sources WHERE id = 'source'",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .unwrap();
+        assert_eq!(preserved, ("evidence".into(), "claim".into()));
+        assert_eq!(
+            db.connection
+                .query_row("SELECT kind FROM claims WHERE id = 'claim'", [], |row| {
+                    row.get::<_, String>(0)
+                })
+                .unwrap(),
+            if version >= 5 { "profile_fact" } else { "fact" }
+        );
+        if version >= 5 {
+            assert_eq!(
+                db.connection
+                    .query_row(
+                        "SELECT key, value FROM profile_entries WHERE id = 'profile'",
+                        [],
+                        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                    )
+                    .unwrap(),
+                ("employer".into(), "Acme".into())
+            );
+        }
+    }
+}
+
 #[test]
 fn migration_is_idempotent_for_supported_schema_versions() {
     for version in 0..=6 {
         let connection = Connection::open_in_memory().unwrap();
-        if version == 0 {
-            connection
-                .execute_batch("PRAGMA user_version = 0;")
-                .unwrap();
-        } else {
-            let claim_kind = if version >= 5 {
-                "kind TEXT NOT NULL DEFAULT 'fact',"
-            } else {
-                ""
-            };
-            connection
-                    .execute_batch(&format!(
-                        "CREATE TABLE sources(id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, ingestion_key TEXT, revision INTEGER NOT NULL, kind TEXT NOT NULL, content TEXT NOT NULL, captured_at INTEGER NOT NULL, recorded_at INTEGER NOT NULL, deleted_at INTEGER);
-                         CREATE VIRTUAL TABLE source_fts USING fts5(source_id UNINDEXED, tenant_id UNINDEXED, person_id UNINDEXED, content, tokenize='unicode61');
-                         CREATE TABLE evidence(id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, source_id TEXT NOT NULL REFERENCES sources(id), source_revision INTEGER NOT NULL, quote TEXT NOT NULL, recorded_at INTEGER NOT NULL, deleted_at INTEGER);
-                         CREATE TABLE claims(id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, subject TEXT NOT NULL, predicate TEXT NOT NULL, value TEXT NOT NULL, {claim_kind} valid_from INTEGER NOT NULL, valid_until INTEGER, recorded_from INTEGER NOT NULL, recorded_until INTEGER, status TEXT NOT NULL);
-                         CREATE TABLE claim_evidence(tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, claim_id TEXT NOT NULL REFERENCES claims(id), evidence_id TEXT NOT NULL REFERENCES evidence(id), relation TEXT NOT NULL, confidence_basis_points INTEGER NOT NULL, PRIMARY KEY(tenant_id, person_id, claim_id, evidence_id));
-                         CREATE TABLE daily_reviews(id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, day TEXT NOT NULL, summary TEXT NOT NULL, evidence_ids TEXT NOT NULL, recorded_at INTEGER NOT NULL);
-                         CREATE TABLE embeddings(tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, target_kind TEXT NOT NULL, target_id TEXT NOT NULL, model TEXT NOT NULL, version TEXT NOT NULL, dimension INTEGER NOT NULL, input_hash TEXT NOT NULL, target_revision INTEGER NOT NULL, created_at INTEGER NOT NULL, normalization TEXT NOT NULL, distance TEXT NOT NULL, vector TEXT NOT NULL, PRIMARY KEY(tenant_id, person_id, target_kind, target_id, model, version));
-                         INSERT INTO sources VALUES('source', 'a', 'sam', 'turn', 1, '\"conversation\"', 'Sam works at Acme', 10, 11, NULL);
-                         INSERT INTO source_fts VALUES('source', 'a', 'sam', 'Sam works at Acme');
-                         INSERT INTO evidence VALUES('evidence', 'a', 'sam', 'source', 1, 'Sam works at Acme', 11, NULL);
-                         INSERT INTO claims(id, tenant_id, person_id, subject, predicate, value, valid_from, recorded_from, status) VALUES('claim', 'a', 'sam', 'Sam', 'employer', 'Acme', 10, 11, 'accepted');
-                         INSERT INTO claim_evidence VALUES('a', 'sam', 'claim', 'evidence', '\"supports\"', 10000);
-                         INSERT INTO daily_reviews VALUES('review', 'a', 'sam', '2026-07-21', 'Sam works at Acme', '[\"evidence\"]', 12);
-                         INSERT INTO embeddings VALUES('a', 'sam', 'claim', 'claim', 'model', '1', 1, 'sha256:legacy', 11, 12, '\"l2\"', '\"cosine\"', '[1.0]');
-                         PRAGMA user_version = {version};"
-                    ))
-                    .unwrap();
-            if version >= 2 {
-                connection
-                        .execute_batch(
-                            "CREATE TABLE evidence_locators(tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, evidence_id TEXT NOT NULL REFERENCES evidence(id), device_id TEXT NOT NULL, provider TEXT NOT NULL, stream_id TEXT NOT NULL, segment_id TEXT NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, PRIMARY KEY(tenant_id, person_id, evidence_id));
-                             INSERT INTO evidence_locators VALUES('a', 'sam', 'evidence', 'device', 'provider', 'stream', 'segment', 1, 1);",
-                        )
-                        .unwrap();
-            }
-            if version >= 5 {
-                let (key, value) = if version == 5 {
-                    ("company", "ACME Corp")
-                } else {
-                    ("employer", "Acme")
-                };
-                connection
-                    .execute_batch(&format!(
-                        "CREATE TABLE profile_entries(id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, person_id TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, stability TEXT NOT NULL, claim_id TEXT NOT NULL REFERENCES claims(id), recorded_at INTEGER NOT NULL);
-                         UPDATE claims SET kind = 'profile_fact' WHERE id = 'claim';
-                         INSERT INTO profile_entries VALUES('profile', 'a', 'sam', '{key}', '{value}', '\"current\"', 'claim', 12);",
-                    ))
-                    .unwrap();
-            }
-            if version >= 6 {
-                connection
-                    .execute_batch(
-                        "ALTER TABLE sources ADD COLUMN origin_evidence_id TEXT;
-                         ALTER TABLE sources ADD COLUMN origin_claim_id TEXT;
-                         UPDATE sources SET origin_evidence_id = 'evidence', origin_claim_id = 'claim' WHERE id = 'source';",
-                    )
-                    .unwrap();
-            }
-        }
+        setup_legacy_schema(&connection, version);
         let mut db = MemoryDb { connection };
         db.migrate().unwrap();
         db.migrate().unwrap();
@@ -214,37 +252,7 @@ fn migration_is_idempotent_for_supported_schema_versions() {
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap();
         assert_eq!(actual, 13);
-        if version > 0 {
-            let preserved = db
-                .connection
-                .query_row(
-                    "SELECT origin_evidence_id, origin_claim_id FROM sources WHERE id = 'source'",
-                    [],
-                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-                )
-                .unwrap();
-            assert_eq!(preserved, ("evidence".into(), "claim".into()));
-            assert_eq!(
-                db.connection
-                    .query_row("SELECT kind FROM claims WHERE id = 'claim'", [], |row| {
-                        row.get::<_, String>(0)
-                    })
-                    .unwrap(),
-                if version >= 5 { "profile_fact" } else { "fact" }
-            );
-            if version >= 5 {
-                assert_eq!(
-                    db.connection
-                        .query_row(
-                            "SELECT key, value FROM profile_entries WHERE id = 'profile'",
-                            [],
-                            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-                        )
-                        .unwrap(),
-                    ("employer".into(), "Acme".into())
-                );
-            }
-        }
+        assert_migrated_legacy_schema(&db, version);
     }
 }
 
