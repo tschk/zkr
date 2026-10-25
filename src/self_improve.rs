@@ -135,6 +135,18 @@ mod tests {
     }
 
     #[test]
+    fn new_initializes_fields() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("memory.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+
+        let improve = SelfImprove::new(db, tenant_id.clone(), person_id.clone());
+
+        assert_eq!(improve.tenant_id, tenant_id);
+        assert_eq!(improve.person_id, person_id);
+    }
+
+    #[test]
     fn records_a_lesson_successfully() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("memory.db")).unwrap();
