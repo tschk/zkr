@@ -75,15 +75,20 @@ fn remember_project_record_requires_cited_claim_and_updates_categories() {
     assert_eq!(parsed["record_type"], "work_item");
     assert_eq!(parsed["categories"][0], "AI-defined/connectors");
 
-    let facts = db.project_memories(ProjectQuery {
-        tenant_id: TenantId("a".into()),
-        person_id: PersonId("sam".into()),
-        project: Some("Tofu".into()),
-        category: Some("AI-defined/connectors".into()),
-        ..ProjectQuery::default()
-    }).unwrap();
+    let facts = db
+        .project_memories(ProjectQuery {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            project: Some("Tofu".into()),
+            category: Some("AI-defined/connectors".into()),
+            ..ProjectQuery::default()
+        })
+        .unwrap();
 
     assert_eq!(facts.len(), 1);
     assert_eq!(facts[0].value, row);
-    assert_eq!(facts[0].categories, vec!["launch".to_string(), "AI-defined/connectors".to_string()]);
+    assert_eq!(
+        facts[0].categories,
+        vec!["launch".to_string(), "AI-defined/connectors".to_string()]
+    );
 }
