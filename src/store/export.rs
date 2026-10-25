@@ -216,7 +216,7 @@ pub(super) fn evidence_records(
     for chunk in evidence_ids.chunks(900) {
         let ids_json = serde_json::to_string(&chunk).map_err(super::sql_json_error)?;
         let mut stmt = transaction.prepare_cached(
-            "SELECT e.id, e.source_id, e.source_revision, e.quote, e.recorded_at, e.deleted_at, l.device_id, l.provider, l.stream_id, l.segment_id, l.start_ms, l.end_ms FROM evidence e JOIN json_each(?1) j ON e.id = j.value LEFT JOIN evidence_locators l ON l.evidence_id = e.id AND l.tenant_id = e.tenant_id AND l.person_id = e.person_id WHERE e.tenant_id = ?2 AND e.person_id = ?3"
+            "SELECT e.id, e.source_id, e.source_revision, e.quote, e.recorded_at, e.deleted_at, l.device_id, l.provider, l.stream_id, l.segment_id, l.start_ms, l.end_ms FROM json_each(?1) j JOIN evidence e ON e.id = j.value AND e.tenant_id = ?2 AND e.person_id = ?3 LEFT JOIN evidence_locators l ON l.evidence_id = e.id AND l.tenant_id = e.tenant_id AND l.person_id = e.person_id"
         )?;
         let rows = stmt.query_map(params![ids_json, tenant_id.0, person_id.0], |row| {
             let device_id = row.get::<_, Option<String>>(6)?;
