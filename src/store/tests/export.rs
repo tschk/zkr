@@ -659,3 +659,24 @@ fn daily_review_markdown_export_size_error() {
         .unwrap();
     assert_eq!(count, 0);
 }
+
+#[test]
+fn export_rejects_unknown_record_format() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    db.remember(remember_raw("a", "sam", "capture")).unwrap();
+
+    db.connection
+        .execute(
+            "UPDATE memory_export_events SET payload = '{\"UnknownFormat\": {}}' WHERE event_index = 0",
+            [],
+        )
+        .unwrap();
+
+    assert!(matches!(
+        db.export(input(0, -1, None, 100)),
+        Err(Error::Json(_))
+    ));
+}
