@@ -1957,8 +1957,7 @@ mod tests {
         assert!(db.project_memories(bad).is_err());
     }
 
-    #[test]
-    fn dream_consolidates_associations_unresolved_targets_short_term_and_unsummarized() {
+    fn setup_dream_test_state() -> (MemoryDb, crate::store::Remembered, crate::store::Remembered, crate::store::Remembered) {
         let mut db = MemoryDb::open(":memory:").unwrap();
 
         // Claim 1: short-term structured claim in project Tofu with a shared target and an unresolved target
@@ -2052,6 +2051,13 @@ mod tests {
         })
         .unwrap();
 
+        (db, c1, c2, c3)
+    }
+
+    #[test]
+    fn dream_returns_associations() {
+        let (db, _c1, _c2, _c3) = setup_dream_test_state();
+
         let pack = db
             .dream(DreamInput {
                 tenant_id: TenantId("local".into()),
@@ -2063,7 +2069,6 @@ mod tests {
             })
             .unwrap();
 
-        // 1. Vector similarity association (c3 <-> c1, 10000 bps) and shared target association (c2 <-> c1, 8500 bps)
         assert_eq!(pack.associations.len(), 2);
         assert_eq!(pack.associations[0].similarity_basis_points, 10_000);
         assert_eq!(
@@ -2075,9 +2080,23 @@ mod tests {
             pack.associations[1].reason,
             "shared_target:shared:db_migration"
         );
+    }
 
-        // 2. Unresolved targets: `shared:db_migration` (on c2 and c1) and `team:missing_squad` (on c1),
-        // while `Tofu:work` is resolved because `zkr:project:["Tofu","work"]` is live!
+    #[test]
+    fn dream_resolves_and_identifies_unresolved_targets() {
+        let (db, _c1, _c2, _c3) = setup_dream_test_state();
+
+        let pack = db
+            .dream(DreamInput {
+                tenant_id: TenantId("local".into()),
+                person_id: PersonId("me".into()),
+                model: None,
+                version: None,
+                min_similarity_basis_points: 5_000,
+                limit: 10,
+            })
+            .unwrap();
+
         assert!(
             pack.unresolved_targets
                 .iter()
@@ -2089,17 +2108,51 @@ mod tests {
                 .iter()
                 .any(|u| u.target == "Tofu:work")
         );
+    }
 
-        // 3. Short-term claims: only c1 is short_term
+    #[test]
+    fn dream_identifies_short_term_claims() {
+        let (db, c1, _c2, _c3) = setup_dream_test_state();
+
+        let pack = db
+            .dream(DreamInput {
+                tenant_id: TenantId("local".into()),
+                person_id: PersonId("me".into()),
+                model: None,
+                version: None,
+                min_similarity_basis_points: 5_000,
+                limit: 10,
+            })
+            .unwrap();
+
         assert_eq!(pack.short_term_claims, vec![c1.claim_id.unwrap()]);
+    }
 
-        // 4. Unsummarized evidence: c3 and c2 (c1 was summarized by nap)
+    #[test]
+    fn dream_returns_unsummarized_evidence() {
+        let (db, _c1, c2, c3) = setup_dream_test_state();
+
+        let pack = db
+            .dream(DreamInput {
+                tenant_id: TenantId("local".into()),
+                person_id: PersonId("me".into()),
+                model: None,
+                version: None,
+                min_similarity_basis_points: 5_000,
+                limit: 10,
+            })
+            .unwrap();
+
         assert_eq!(
             pack.unsummarized_evidence_ids,
             vec![c3.evidence_id, c2.evidence_id]
         );
+    }
 
-        // Model without version is rejected
+    #[test]
+    fn dream_requires_model_version() {
+        let (db, _c1, _c2, _c3) = setup_dream_test_state();
+
         assert!(
             db.dream(DreamInput {
                 tenant_id: TenantId("local".into()),
