@@ -1957,8 +1957,14 @@ mod tests {
         assert!(db.project_memories(bad).is_err());
     }
 
-    #[test]
-    fn dream_consolidates_associations_unresolved_targets_short_term_and_unsummarized() {
+    struct DreamTestState {
+        db: MemoryDb,
+        c1: crate::store::Remembered,
+        c2: crate::store::Remembered,
+        c3: crate::store::Remembered,
+    }
+
+    fn setup_dream_test_state() -> DreamTestState {
         let mut db = MemoryDb::open(":memory:").unwrap();
 
         // Claim 1: short-term structured claim in project Tofu with a shared target and an unresolved target
@@ -2052,7 +2058,14 @@ mod tests {
         })
         .unwrap();
 
-        let pack = db
+        DreamTestState { db, c1, c2, c3 }
+    }
+
+    #[test]
+    fn dream_consolidates_associations() {
+        let state = setup_dream_test_state();
+        let pack = state
+            .db
             .dream(DreamInput {
                 tenant_id: TenantId("local".into()),
                 person_id: PersonId("me".into()),
@@ -2075,6 +2088,22 @@ mod tests {
             pack.associations[1].reason,
             "shared_target:shared:db_migration"
         );
+    }
+
+    #[test]
+    fn dream_identifies_unresolved_targets() {
+        let state = setup_dream_test_state();
+        let pack = state
+            .db
+            .dream(DreamInput {
+                tenant_id: TenantId("local".into()),
+                person_id: PersonId("me".into()),
+                model: None,
+                version: None,
+                min_similarity_basis_points: 5_000,
+                limit: 10,
+            })
+            .unwrap();
 
         // 2. Unresolved targets: `shared:db_migration` (on c2 and c1) and `team:missing_squad` (on c1),
         // while `Tofu:work` is resolved because `zkr:project:["Tofu","work"]` is live!
@@ -2089,27 +2118,65 @@ mod tests {
                 .iter()
                 .any(|u| u.target == "Tofu:work")
         );
+    }
 
-        // 3. Short-term claims: only c1 is short_term
-        assert_eq!(pack.short_term_claims, vec![c1.claim_id.unwrap()]);
-
-        // 4. Unsummarized evidence: c3 and c2 (c1 was summarized by nap)
-        assert_eq!(
-            pack.unsummarized_evidence_ids,
-            vec![c3.evidence_id, c2.evidence_id]
-        );
-
-        // Model without version is rejected
-        assert!(
-            db.dream(DreamInput {
+    #[test]
+    fn dream_identifies_short_term_claims() {
+        let state = setup_dream_test_state();
+        let pack = state
+            .db
+            .dream(DreamInput {
                 tenant_id: TenantId("local".into()),
                 person_id: PersonId("me".into()),
-                model: Some("test-model".into()),
+                model: None,
                 version: None,
                 min_similarity_basis_points: 5_000,
                 limit: 10,
             })
-            .is_err()
+            .unwrap();
+
+        // 3. Short-term claims: only c1 is short_term
+        assert_eq!(pack.short_term_claims, vec![state.c1.claim_id.unwrap()]);
+    }
+
+    #[test]
+    fn dream_identifies_unsummarized_evidence() {
+        let state = setup_dream_test_state();
+        let pack = state
+            .db
+            .dream(DreamInput {
+                tenant_id: TenantId("local".into()),
+                person_id: PersonId("me".into()),
+                model: None,
+                version: None,
+                min_similarity_basis_points: 5_000,
+                limit: 10,
+            })
+            .unwrap();
+
+        // 4. Unsummarized evidence: c3 and c2 (c1 was summarized by nap)
+        assert_eq!(
+            pack.unsummarized_evidence_ids,
+            vec![state.c3.evidence_id, state.c2.evidence_id]
+        );
+    }
+
+    #[test]
+    fn dream_rejects_model_without_version() {
+        let state = setup_dream_test_state();
+        // Model without version is rejected
+        assert!(
+            state
+                .db
+                .dream(DreamInput {
+                    tenant_id: TenantId("local".into()),
+                    person_id: PersonId("me".into()),
+                    model: Some("test-model".into()),
+                    version: None,
+                    min_similarity_basis_points: 5_000,
+                    limit: 10,
+                })
+                .is_err()
         );
     }
 
