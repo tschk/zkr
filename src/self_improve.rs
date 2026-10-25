@@ -245,4 +245,38 @@ mod tests {
         let result = improve.record("context", "action", "outcome", "lesson");
         assert!(result.is_err());
     }
+
+    #[test]
+    fn record_fails_with_empty_context() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("memory.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut improve = SelfImprove::new(db, tenant_id, person_id);
+
+        let result = improve.record("   ", "action", "outcome", "lesson");
+        assert!(result.is_err());
+    }
+
+
+    #[test]
+    fn record_fails_with_empty_lesson() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("memory.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut improve = SelfImprove::new(db, tenant_id, person_id);
+
+        let result = improve.record("context", "action", "outcome", "   ");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn record_succeeds_with_valid_inputs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = MemoryDb::open(tmp.path().join("memory.db")).unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut improve = SelfImprove::new(db, tenant_id, person_id);
+
+        let result = improve.record("valid context", "valid action", "valid outcome", "valid lesson");
+        assert!(result.is_ok());
+    }
 }
