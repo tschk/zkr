@@ -4,6 +4,11 @@ on:
   push:
   pull_request:
 
+concurrency:
+  # main pushes get a unique group so they are never cancelled or replaced while pending.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || (github.ref == 'refs/heads/main' && github.run_id) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 

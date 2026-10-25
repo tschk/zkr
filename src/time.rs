@@ -13,3 +13,30 @@ pub(crate) fn nanos() -> u128 {
         .unwrap_or_default()
         .as_nanos()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_now_seconds() {
+        let before = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let now = now_seconds();
+
+        let after = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        // Ensure `now_seconds` returns a value between before and after
+        assert!(now >= before);
+        assert!(now <= after);
+
+        // Ensure it's a reasonably recent timestamp (e.g., > Jan 1, 2024)
+        assert!(now > 1_704_067_200);
+    }
+}
