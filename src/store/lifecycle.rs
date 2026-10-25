@@ -1312,11 +1312,15 @@ fn build_deletion_records(
     ];
 
     let ev_records = evidence_records(transaction, tenant_id, person_id, evidence_ids)?;
-    for ev_record in ev_records {
-        records.push(ExportRecord::Evidence(ev_record));
-    }
+    let mut ev_map: std::collections::HashMap<EvidenceId, EvidenceRecord> = ev_records
+        .into_iter()
+        .map(|r| (r.evidence.id.clone(), r))
+        .collect();
 
     for evidence_id in evidence_ids {
+        if let Some(ev_record) = ev_map.remove(evidence_id) {
+            records.push(ExportRecord::Evidence(ev_record));
+        }
         records.push(ExportRecord::Deletion(DeletionRecord {
             tenant_id: tenant_id.clone(),
             person_id: person_id.clone(),
