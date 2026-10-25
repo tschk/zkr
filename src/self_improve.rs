@@ -200,12 +200,22 @@ mod tests {
         let mut improve = SelfImprove::new(db, tenant_id, person_id);
 
         improve
-            .record("testing", "add unit tests", "success", "isolate IO in tests")
+            .record(
+                "testing",
+                "add unit tests",
+                "success",
+                "isolate IO in tests",
+            )
             .unwrap();
         std::thread::sleep(std::time::Duration::from_millis(10));
 
         improve
-            .record("testing", "mock db", "success", "use in-memory db for tests")
+            .record(
+                "testing",
+                "mock db",
+                "success",
+                "use in-memory db for tests",
+            )
             .unwrap();
         std::thread::sleep(std::time::Duration::from_millis(10));
 
