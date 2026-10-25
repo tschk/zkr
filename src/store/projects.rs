@@ -2230,8 +2230,7 @@ mod tests {
         assert_eq!(rev_facts.len(), 2);
     }
 
-    #[test]
-    fn inline_and_automatic_vectorization_power_queries_centroids_and_dream_synthesis() {
+    fn setup_dream_test_db() -> MemoryDb {
         let mut db = MemoryDb::open(":memory:").unwrap();
 
         // Store two memories in category "database" with inline embeddings near [1.0, 0.0]
@@ -2305,7 +2304,13 @@ mod tests {
         )
         .unwrap();
 
-        // Vector query using `query_embedding`
+        db
+    }
+
+    #[test]
+    fn test_project_memories_vector_query() {
+        let db = setup_dream_test_db();
+
         let mut vq = query("me", Some("Tofu"), None);
         vq.query_embedding = Some(DenseQuery {
             vector: vec![0.0, 1.0],
@@ -2315,51 +2320,23 @@ mod tests {
         let ranked = db.project_memories(vq).unwrap();
         assert_eq!(ranked[0].predicate, "service:analytics");
         assert_eq!(ranked[0].similarity_basis_points, Some(10_000));
+    }
 
-        // Automatic `vector_query` using built-in `auto_vectorize`
+    #[test]
+    fn test_project_memories_auto_vectorize() {
+        let db = setup_dream_test_db();
+
         let mut auto_q = query("me", Some("Tofu"), None);
         auto_q.vector_query = Some("Postgres WAL tuning".into());
         let auto_ranked = db.project_memories(auto_q).unwrap();
         assert_eq!(auto_ranked[0].predicate, "note:pg_wal");
         assert!(auto_ranked[0].similarity_basis_points.unwrap() > 3_000);
+    }
 
-        // Attach a contradicting evidence link to `note:btree` and a stale summary node
-        let btree_claim_id = ranked
-            .iter()
-            .find(|f| f.predicate == "note:btree")
-            .unwrap()
-            .claim_id
-            .clone();
-        let btree_ev_id = ranked
-            .iter()
-            .find(|f| f.predicate == "note:btree")
-            .unwrap()
-            .evidence_ids[0]
-            .clone();
-        let other_ev_id = ranked[0].evidence_ids[0].clone();
-        db.connection
-            .execute(
-                "INSERT INTO claim_evidence (tenant_id, person_id, claim_id, evidence_id, relation, confidence_basis_points) VALUES ('local', 'me', ?1, ?2, '\"contradicts\"', 10000)",
-                params![btree_claim_id.0, other_ev_id.0],
-            )
-            .unwrap();
-        let napped = db
-            .nap(NapInput {
-                tenant_id: TenantId("local".into()),
-                person_id: PersonId("me".into()),
-                summary: "Temporary summary to mark stale".into(),
-                evidence_ids: vec![btree_ev_id],
-                recorded_at: 50,
-            })
-            .unwrap();
-        db.connection
-            .execute(
-                "UPDATE summary_nodes SET stale_at = 60 WHERE id = ?1",
-                params![napped.summary_id.0],
-            )
-            .unwrap();
+    #[test]
+    fn test_project_dream_categories_and_schemas() {
+        let db = setup_dream_test_db();
 
-        // Run dream and inspect categories (with centroids), category_suggestions, schemas, hubs, triadic_closure, contradictions, and stale_summary_ids
         let pack = db
             .dream(DreamInput {
                 tenant_id: TenantId("local".into()),
@@ -2397,6 +2374,22 @@ mod tests {
         assert_eq!(tuning_schema.record_count, 2);
         assert_eq!(tuning_schema.fields, vec!["cost_based", "engine"]);
         assert_eq!(tuning_schema.relations, vec!["feeds", "optimizes"]);
+    }
+
+    #[test]
+    fn test_project_dream_hubs_and_associations() {
+        let db = setup_dream_test_db();
+
+        let pack = db
+            .dream(DreamInput {
+                tenant_id: TenantId("local".into()),
+                person_id: PersonId("me".into()),
+                model: Some("brain-vec".into()),
+                version: Some("v1".into()),
+                min_similarity_basis_points: 7_000,
+                limit: 20,
+            })
+            .unwrap();
 
         // `hubs` includes `task:query_planner` with 1 inbound and 1 outbound connection
         let planner_hub = pack
@@ -2411,6 +2404,66 @@ mod tests {
         assert!(pack.associations.iter().any(|a| {
             a.reason == "triadic_closure:task:query_planner" && a.similarity_basis_points == 8_000
         }));
+    }
+
+    #[test]
+    fn test_project_dream_contradictions_and_stale_summaries() {
+        let mut db = setup_dream_test_db();
+
+        let mut vq = query("me", Some("Tofu"), None);
+        vq.query_embedding = Some(DenseQuery {
+            vector: vec![0.0, 1.0],
+            model: "brain-vec".into(),
+            version: "v1".into(),
+        });
+        let ranked = db.project_memories(vq).unwrap();
+
+        // Attach a contradicting evidence link to `note:btree` and a stale summary node
+        let btree_claim_id = ranked
+            .iter()
+            .find(|f| f.predicate == "note:btree")
+            .unwrap()
+            .claim_id
+            .clone();
+        let btree_ev_id = ranked
+            .iter()
+            .find(|f| f.predicate == "note:btree")
+            .unwrap()
+            .evidence_ids[0]
+            .clone();
+        let other_ev_id = ranked[0].evidence_ids[0].clone();
+        db.connection
+            .execute(
+                "INSERT INTO claim_evidence (tenant_id, person_id, claim_id, evidence_id, relation, confidence_basis_points) VALUES ('local', 'me', ?1, ?2, '\"contradicts\"', 10000)",
+                rusqlite::params![btree_claim_id.0, other_ev_id.0],
+            )
+            .unwrap();
+        let napped = db
+            .nap(NapInput {
+                tenant_id: TenantId("local".into()),
+                person_id: PersonId("me".into()),
+                summary: "Temporary summary to mark stale".into(),
+                evidence_ids: vec![btree_ev_id],
+                recorded_at: 50,
+            })
+            .unwrap();
+        db.connection
+            .execute(
+                "UPDATE summary_nodes SET stale_at = 60 WHERE id = ?1",
+                rusqlite::params![napped.summary_id.0],
+            )
+            .unwrap();
+
+        let pack = db
+            .dream(DreamInput {
+                tenant_id: TenantId("local".into()),
+                person_id: PersonId("me".into()),
+                model: Some("brain-vec".into()),
+                version: Some("v1".into()),
+                min_similarity_basis_points: 7_000,
+                limit: 20,
+            })
+            .unwrap();
 
         // Contradictions and stale summaries surfaced
         assert_eq!(pack.contradictions, vec![btree_claim_id]);
