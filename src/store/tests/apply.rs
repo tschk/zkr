@@ -356,14 +356,12 @@ fn apply_preserves_evidence_locators_exactly() {
     );
 
     let mut rewritten = commits;
-    for commit in &mut rewritten {
-        for record in &mut commit.records {
-            if let ExportRecord::Evidence(record) = record {
-                record.locator = Some(TranscriptLocator {
-                    start_ms: 11,
-                    ..locator()
-                });
-            }
+    for record in rewritten.iter_mut().flat_map(|c| &mut c.records) {
+        if let ExportRecord::Evidence(record) = record {
+            record.locator = Some(TranscriptLocator {
+                start_ms: 11,
+                ..locator()
+            });
         }
     }
     let error = replica.apply(apply_input(rewritten)).unwrap_err();
@@ -449,11 +447,9 @@ fn apply_rejects_contradictory_authored_content() {
     replica.apply(apply_input(commits.clone())).unwrap();
 
     let mut rewritten = commits;
-    for commit in &mut rewritten {
-        for record in &mut commit.records {
-            if let ExportRecord::Source(record) = record {
-                record.source.content.push_str(" (edited)");
-            }
+    for record in rewritten.iter_mut().flat_map(|c| &mut c.records) {
+        if let ExportRecord::Source(record) = record {
+            record.source.content.push_str(" (edited)");
         }
     }
     let error = replica.apply(apply_input(rewritten)).unwrap_err();
