@@ -601,3 +601,46 @@ fn projection_and_lifecycle_events_cover_links_profiles_reviews_and_deletions() 
     assert!(records.iter().any(|record| matches!(record, ExportRecord::Deletion(value) if matches!(value.target, MemoryRef::ProfileEntry(_)))));
     assert!(records.iter().any(|record| matches!(record, ExportRecord::Deletion(value) if matches!(value.target, MemoryRef::DailyReview(_)))));
 }
+
+
+
+#[test]
+fn export_rejects_oversized_record() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+
+    let tenant_id = crate::model::TenantId("a".into());
+    let person_id = crate::model::PersonId("sam".into());
+
+    let transaction = db.connection.transaction().unwrap();
+    let commit = crate::store::export::begin_commit(
+        &transaction,
+        &tenant_id,
+        &person_id,
+        10,
+    )
+    .unwrap();
+
+    let mut profile = crate::model::ProfileEntry {
+        id: crate::model::ProfileEntryId("profile".into()),
+        tenant_id: tenant_id.clone(),
+        person_id: person_id.clone(),
+        key: "employer".into(),
+        value: "Acme".into(),
+        stability: crate::model::ProfileStability::Current,
+        claim_id: crate::model::ClaimId("claim".into()),
+        recorded_at: 10,
+    };
+
+    profile.value = "x".repeat(crate::store::MAX_EXPORT_RECORD_BYTES);
+
+    let record = ExportRecord::Profile(profile);
+
+    let result = crate::store::export::append_records(&transaction, commit, [record]);
+    assert!(matches!(
+        result,
+        Err(Error::Invalid(message)) if message.contains("export record exceeds")
+    ));
+}
