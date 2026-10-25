@@ -26,7 +26,7 @@ export function resolveZkrExecutable(command: string | undefined): string {
   if (
     typeof executable !== "string" ||
     executable.includes("\0") ||
-    /[^a-zA-Z0-9_.\-\/\\:~]/.test(executable)
+    /[^a-zA-Z0-9_.\-\/\\:~ ]/.test(executable)
   ) {
     throw new Error(ZKR_COMMAND_FAILED);
   }

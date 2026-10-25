@@ -34,6 +34,9 @@ describe("zkr OpenClaw tools", () => {
       "./target/release/zkr",
     );
     expect(resolveZkrExecutable("~/my-dir/zkr")).toBe("~/my-dir/zkr");
+    expect(resolveZkrExecutable("/Users/John Doe/bin/zkr")).toBe(
+      "/Users/John Doe/bin/zkr",
+    );
   });
 
   test("rejects executables with spaces or shell metacharacters", () => {
