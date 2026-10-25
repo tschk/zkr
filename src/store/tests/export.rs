@@ -602,8 +602,6 @@ fn projection_and_lifecycle_events_cover_links_profiles_reviews_and_deletions() 
     assert!(records.iter().any(|record| matches!(record, ExportRecord::Deletion(value) if matches!(value.target, MemoryRef::DailyReview(_)))));
 }
 
-
-
 #[test]
 fn export_rejects_unknown_record_format() {
     let mut db = MemoryDb {
