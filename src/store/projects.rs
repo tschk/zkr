@@ -1533,6 +1533,37 @@ impl MemoryDb {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn auto_vectorize_produces_normalized_deterministic_vectors_and_handles_empty_inputs() {
+        // Test determinism
+        let v1 = auto_vectorize("The quick brown fox jumps over the lazy dog!");
+        let v2 = auto_vectorize("the quick brown fox jumps over the lazy dog");
+        assert_eq!(v1, v2);
+
+        // Test dimension and normalization
+        assert_eq!(v1.len(), AUTO_EMBEDDING_DIM);
+        let norm_v1 = v1.iter().map(|v| v * v).sum::<f32>().sqrt();
+        assert!((norm_v1 - 1.0).abs() < 1e-5);
+
+        // Test differentiability
+        let v3 = auto_vectorize("A fast orange fox leaps over a sleepy hound.");
+        assert_ne!(v1, v3);
+        let norm_v3 = v3.iter().map(|v| v * v).sum::<f32>().sqrt();
+        assert!((norm_v3 - 1.0).abs() < 1e-5);
+
+        // Test edge cases (fallback vector)
+        let empty_vec = auto_vectorize("");
+        assert_eq!(empty_vec.len(), AUTO_EMBEDDING_DIM);
+        assert_eq!(empty_vec[0], 1.0);
+        assert!(empty_vec[1..].iter().all(|&v| v == 0.0));
+
+        let spaces_vec = auto_vectorize("     ");
+        assert_eq!(spaces_vec, empty_vec);
+
+        let stopwords_vec = auto_vectorize("the and for with into from that this are was");
+        assert_eq!(stopwords_vec, empty_vec);
+    }
+
     use serde_json::json;
 
     fn memory(project: &str, category: &str, person: &str, value: &str) -> ProjectMemoryInput {
@@ -1581,6 +1612,57 @@ mod tests {
         // 6. Test 1-character token fallback ("a") which tests s.len() >= 2 boundary
         let fallback_short = auto_vectorize("a");
         assert_eq!(fallback_short, expected_fallback);
+    }
+
+    #[test]
+    fn remember_project_record_merges_categories_and_requires_claim() {
+        let mut db = MemoryDb::open(":memory:").unwrap();
+
+        // 1. Missing claim
+        let mut missing_claim = memory("Tofu", "work", "me", "bad");
+        missing_claim.memory.claim = None;
+        let input = ProjectRecordInput {
+            record: serde_json::from_value(serde_json::json!({
+                "record_type": "meeting",
+                "categories": ["extra_category"],
+                "fields": {},
+                "connections": []
+            }))
+            .unwrap(),
+            memory: missing_claim,
+        };
+
+        let err = db.remember_project_record(input).unwrap_err();
+        assert!(
+            matches!(err, Error::Invalid(msg) if msg == "project record requires a cited claim")
+        );
+
+        // 2. Merging categories
+        let mut mem = memory("Tofu", "work", "me", "good");
+        mem.categories = vec!["existing_category".to_string()];
+
+        let input = ProjectRecordInput {
+            record: serde_json::from_value(serde_json::json!({
+                "record_type": "meeting",
+                "categories": ["extra_category", "existing_category", "work"],
+                "fields": {},
+                "connections": []
+            }))
+            .unwrap(),
+            memory: mem,
+        };
+
+        db.remember_project_record(input).unwrap();
+
+        let facts = db
+            .project_memories(query("me", Some("Tofu"), None))
+            .unwrap();
+        assert_eq!(facts.len(), 1);
+        let fact = &facts[0];
+
+        assert!(fact.categories.contains(&"work".to_string()));
+        assert!(fact.categories.contains(&"existing_category".to_string()));
+        assert!(fact.categories.contains(&"extra_category".to_string()));
     }
 
     #[test]
@@ -1986,8 +2068,14 @@ mod tests {
         assert!(db.project_memories(bad).is_err());
     }
 
-    #[test]
-    fn dream_consolidates_associations_unresolved_targets_short_term_and_unsummarized() {
+    struct DreamTestState {
+        db: MemoryDb,
+        c1: crate::store::Remembered,
+        c2: crate::store::Remembered,
+        c3: crate::store::Remembered,
+    }
+
+    fn setup_dream_test_state() -> DreamTestState {
         let mut db = MemoryDb::open(":memory:").unwrap();
 
         // Claim 1: short-term structured claim in project Tofu with a shared target and an unresolved target
@@ -2081,7 +2169,14 @@ mod tests {
         })
         .unwrap();
 
-        let pack = db
+        DreamTestState { db, c1, c2, c3 }
+    }
+
+    #[test]
+    fn dream_consolidates_associations() {
+        let state = setup_dream_test_state();
+        let pack = state
+            .db
             .dream(DreamInput {
                 tenant_id: TenantId("local".into()),
                 person_id: PersonId("me".into()),
@@ -2104,6 +2199,22 @@ mod tests {
             pack.associations[1].reason,
             "shared_target:shared:db_migration"
         );
+    }
+
+    #[test]
+    fn dream_identifies_unresolved_targets() {
+        let state = setup_dream_test_state();
+        let pack = state
+            .db
+            .dream(DreamInput {
+                tenant_id: TenantId("local".into()),
+                person_id: PersonId("me".into()),
+                model: None,
+                version: None,
+                min_similarity_basis_points: 5_000,
+                limit: 10,
+            })
+            .unwrap();
 
         // 2. Unresolved targets: `shared:db_migration` (on c2 and c1) and `team:missing_squad` (on c1),
         // while `Tofu:work` is resolved because `zkr:project:["Tofu","work"]` is live!
@@ -2118,27 +2229,65 @@ mod tests {
                 .iter()
                 .any(|u| u.target == "Tofu:work")
         );
+    }
 
-        // 3. Short-term claims: only c1 is short_term
-        assert_eq!(pack.short_term_claims, vec![c1.claim_id.unwrap()]);
-
-        // 4. Unsummarized evidence: c3 and c2 (c1 was summarized by nap)
-        assert_eq!(
-            pack.unsummarized_evidence_ids,
-            vec![c3.evidence_id, c2.evidence_id]
-        );
-
-        // Model without version is rejected
-        assert!(
-            db.dream(DreamInput {
+    #[test]
+    fn dream_identifies_short_term_claims() {
+        let state = setup_dream_test_state();
+        let pack = state
+            .db
+            .dream(DreamInput {
                 tenant_id: TenantId("local".into()),
                 person_id: PersonId("me".into()),
-                model: Some("test-model".into()),
+                model: None,
                 version: None,
                 min_similarity_basis_points: 5_000,
                 limit: 10,
             })
-            .is_err()
+            .unwrap();
+
+        // 3. Short-term claims: only c1 is short_term
+        assert_eq!(pack.short_term_claims, vec![state.c1.claim_id.unwrap()]);
+    }
+
+    #[test]
+    fn dream_identifies_unsummarized_evidence() {
+        let state = setup_dream_test_state();
+        let pack = state
+            .db
+            .dream(DreamInput {
+                tenant_id: TenantId("local".into()),
+                person_id: PersonId("me".into()),
+                model: None,
+                version: None,
+                min_similarity_basis_points: 5_000,
+                limit: 10,
+            })
+            .unwrap();
+
+        // 4. Unsummarized evidence: c3 and c2 (c1 was summarized by nap)
+        assert_eq!(
+            pack.unsummarized_evidence_ids,
+            vec![state.c3.evidence_id, state.c2.evidence_id]
+        );
+    }
+
+    #[test]
+    fn dream_rejects_model_without_version() {
+        let state = setup_dream_test_state();
+        // Model without version is rejected
+        assert!(
+            state
+                .db
+                .dream(DreamInput {
+                    tenant_id: TenantId("local".into()),
+                    person_id: PersonId("me".into()),
+                    model: Some("test-model".into()),
+                    version: None,
+                    min_similarity_basis_points: 5_000,
+                    limit: 10,
+                })
+                .is_err()
         );
     }
 
@@ -2259,8 +2408,7 @@ mod tests {
         assert_eq!(rev_facts.len(), 2);
     }
 
-    #[test]
-    fn inline_and_automatic_vectorization_power_queries_centroids_and_dream_synthesis() {
+    fn seeded_dream_db() -> MemoryDb {
         let mut db = MemoryDb::open(":memory:").unwrap();
 
         // Store two memories in category "database" with inline embeddings near [1.0, 0.0]
@@ -2334,6 +2482,13 @@ mod tests {
         )
         .unwrap();
 
+        db
+    }
+
+    #[test]
+    fn vector_queries_match_inline_embeddings() {
+        let db = seeded_dream_db();
+
         // Vector query using `query_embedding`
         let mut vq = query("me", Some("Tofu"), None);
         vq.query_embedding = Some(DenseQuery {
@@ -2344,6 +2499,11 @@ mod tests {
         let ranked = db.project_memories(vq).unwrap();
         assert_eq!(ranked[0].predicate, "service:analytics");
         assert_eq!(ranked[0].similarity_basis_points, Some(10_000));
+    }
+
+    #[test]
+    fn automatic_vectorization_powers_semantic_search() {
+        let db = seeded_dream_db();
 
         // Automatic `vector_query` using built-in `auto_vectorize`
         let mut auto_q = query("me", Some("Tofu"), None);
@@ -2351,6 +2511,19 @@ mod tests {
         let auto_ranked = db.project_memories(auto_q).unwrap();
         assert_eq!(auto_ranked[0].predicate, "note:pg_wal");
         assert!(auto_ranked[0].similarity_basis_points.unwrap() > 3_000);
+    }
+
+    #[test]
+    fn dream_synthesizes_categories_schemas_and_associations() {
+        let mut db = seeded_dream_db();
+
+        let mut vq = query("me", Some("Tofu"), None);
+        vq.query_embedding = Some(DenseQuery {
+            vector: vec![0.0, 1.0],
+            model: "brain-vec".into(),
+            version: "v1".into(),
+        });
+        let ranked = db.project_memories(vq).unwrap();
 
         // Attach a contradicting evidence link to `note:btree` and a stale summary node
         let btree_claim_id = ranked
@@ -2444,5 +2617,66 @@ mod tests {
         // Contradictions and stale summaries surfaced
         assert_eq!(pack.contradictions, vec![btree_claim_id]);
         assert_eq!(pack.stale_summary_ids, vec![napped.summary_id]);
+    }
+
+    #[test]
+    fn project_query_rejects_empty_parameters_and_invalid_hops() {
+        let db = MemoryDb::open(":memory:").unwrap();
+
+        let mut q = query("me", None, None);
+        q.project = Some("  ".into());
+        assert!(db.project_memories(q).is_err());
+
+        let mut q = query("me", None, None);
+        q.projects = vec!["valid".into(), " ".into()];
+        assert!(db.project_memories(q).is_err());
+
+        let mut q = query("me", None, None);
+        q.category = Some("".into());
+        assert!(db.project_memories(q).is_err());
+
+        let mut q = query("me", None, None);
+        q.categories = vec!["".into()];
+        assert!(db.project_memories(q).is_err());
+
+        let mut q = query("me", None, None);
+        q.all_categories = vec!["".into()];
+        assert!(db.project_memories(q).is_err());
+
+        let mut q = query("me", None, None);
+        q.predicate = Some("".into());
+        assert!(db.project_memories(q).is_err());
+
+        let mut q = query("me", None, None);
+        q.record_type = Some("".into());
+        assert!(db.project_memories(q).is_err());
+
+        let mut q = query("me", None, None);
+        q.relation = Some("".into());
+        assert!(db.project_memories(q).is_err());
+
+        let mut q = query("me", None, None);
+        q.target = Some("".into());
+        assert!(db.project_memories(q).is_err());
+
+        let mut q = query("me", None, None);
+        q.where_fields.insert("".into(), serde_json::json!("value"));
+        assert!(db.project_memories(q).is_err());
+
+        let mut q = query("me", None, None);
+        q.connected_to = Some("".into());
+        assert!(db.project_memories(q).is_err());
+
+        let mut q = query("me", None, None);
+        q.vector_query = Some("".into());
+        assert!(db.project_memories(q).is_err());
+
+        let mut q = query("me", None, None);
+        q.max_hops = Some(0);
+        assert!(db.project_memories(q).is_err());
+
+        let mut q = query("me", None, None);
+        q.max_hops = Some(5);
+        assert!(db.project_memories(q).is_err());
     }
 }
