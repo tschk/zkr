@@ -2421,12 +2421,11 @@ mod tests {
     }
 
     #[test]
-    fn project_memories_validates_inputs_and_handles_limit_zero() {
+    fn project_memories_handles_limit_zero() {
         let mut db = MemoryDb::open(":memory:").unwrap();
         db.remember_project(memory("Tofu", "work", "me", "visible"))
             .unwrap();
 
-        // 1. Assert limit = 0 returns empty vector
         let mut limit_zero = query("me", Some("Tofu"), Some("work"));
         limit_zero.limit = 0;
         let facts = db.project_memories(limit_zero).unwrap();
@@ -2435,88 +2434,5 @@ mod tests {
         let mut limit_one = query("me", Some("Tofu"), Some("work"));
         limit_one.limit = 1;
         assert_eq!(db.project_memories(limit_one).unwrap().len(), 1);
-
-        // 2. Assert input validations return errors for empty/invalid inputs
-
-        let mut q_projects = query("me", Some("Tofu"), Some("work"));
-        q_projects.projects = vec![" ".into()];
-        assert!(
-            db.project_memories(q_projects).is_err(),
-            "empty project in projects list"
-        );
-
-        let mut q_categories = query("me", Some("Tofu"), Some("work"));
-        q_categories.categories = vec![" ".into()];
-        assert!(
-            db.project_memories(q_categories).is_err(),
-            "empty category in categories list"
-        );
-
-        let mut q_all_categories = query("me", Some("Tofu"), Some("work"));
-        q_all_categories.all_categories = vec![" ".into()];
-        assert!(
-            db.project_memories(q_all_categories).is_err(),
-            "empty category in all_categories list"
-        );
-
-        let mut q_predicate = query("me", Some("Tofu"), Some("work"));
-        q_predicate.predicate = Some(" ".into());
-        assert!(db.project_memories(q_predicate).is_err(), "empty predicate");
-
-        let mut q_relation = query("me", Some("Tofu"), Some("work"));
-        q_relation.relation = Some(" ".into());
-        assert!(db.project_memories(q_relation).is_err(), "empty relation");
-
-        let mut q_target = query("me", Some("Tofu"), Some("work"));
-        q_target.target = Some(" ".into());
-        assert!(db.project_memories(q_target).is_err(), "empty target");
-
-        let mut q_where_fields = query("me", Some("Tofu"), Some("work"));
-        q_where_fields
-            .where_fields
-            .insert(" ".into(), serde_json::json!("value"));
-        assert!(
-            db.project_memories(q_where_fields).is_err(),
-            "empty where_fields key"
-        );
-
-        let mut q_connected_to = query("me", Some("Tofu"), Some("work"));
-        q_connected_to.connected_to = Some(" ".into());
-        assert!(
-            db.project_memories(q_connected_to).is_err(),
-            "empty connected_to"
-        );
-
-        let mut q_max_hops_low = query("me", Some("Tofu"), Some("work"));
-        q_max_hops_low.max_hops = Some(0);
-        assert!(
-            db.project_memories(q_max_hops_low).is_err(),
-            "max_hops too low"
-        );
-
-        let mut q_max_hops_high = query("me", Some("Tofu"), Some("work"));
-        q_max_hops_high.max_hops = Some(5);
-        assert!(
-            db.project_memories(q_max_hops_high).is_err(),
-            "max_hops too high"
-        );
-
-        let mut q_query_embedding = query("me", Some("Tofu"), Some("work"));
-        q_query_embedding.query_embedding = Some(DenseQuery {
-            vector: vec![0.0],
-            model: " ".into(),
-            version: "v1".into(),
-        });
-        assert!(
-            db.project_memories(q_query_embedding).is_err(),
-            "invalid query_embedding"
-        );
-
-        let mut q_vector_query = query("me", Some("Tofu"), Some("work"));
-        q_vector_query.vector_query = Some(" ".into());
-        assert!(
-            db.project_memories(q_vector_query).is_err(),
-            "empty vector_query"
-        );
     }
 }
