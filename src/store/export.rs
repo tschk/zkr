@@ -211,7 +211,9 @@ pub(super) fn evidence_records(
 
     let records = records?;
     if records.len() != evidence_ids.len() {
-        return Err(Error::Invalid("One or more evidence records missing during export".into()));
+        return Err(Error::Invalid(
+            "One or more evidence records missing during export".into(),
+        ));
     }
     Ok(records)
 }
