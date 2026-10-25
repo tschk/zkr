@@ -272,9 +272,7 @@ mod tests {
             .record("context 2", "action 2", "outcome 2", "second lesson")
             .unwrap();
 
-        let augmented = improve
-            .augment("lesson", "Base prompt.")
-            .unwrap();
+        let augmented = improve.augment("lesson", "Base prompt.").unwrap();
 
         assert!(augmented.starts_with("Base prompt.\n\n<lessons_learned>\n"));
         assert!(augmented.contains("1. "));
