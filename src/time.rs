@@ -50,7 +50,7 @@ pub(crate) fn parse_relative_time(s: &str) -> Option<i64> {
         _ => return None,
     };
 
-    Some(value.checked_mul(multiplier)?)
+    value.checked_mul(multiplier)
 }
 
 #[cfg(test)]
