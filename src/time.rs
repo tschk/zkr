@@ -14,7 +14,6 @@ pub(crate) fn nanos() -> u128 {
         .as_nanos()
 }
 
-
 #[allow(dead_code)]
 pub(crate) fn parse_relative_time(s: &str) -> Option<i64> {
     if s.is_empty() {
