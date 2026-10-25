@@ -146,21 +146,28 @@ impl MemoryDb {
                     "parent rebuild derives citations from its children".to_owned(),
                 ));
             }
-            let children = stale
-                .child_ids
-                .iter()
-                .map(|child_id| {
-                    let child = summary_any(&transaction, &input.tenant_id, &input.person_id, child_id)?;
-                    transaction
-                        .query_row(
-                            "SELECT id FROM summary_nodes WHERE tenant_id = ?1 AND person_id = ?2 AND start_sequence = ?3 AND end_sequence = ?4 AND level = ?5 AND stale_at IS NULL",
-                            params![input.tenant_id.0, input.person_id.0, child.start_sequence, child.end_sequence, child.level],
-                            |row| row.get::<_, String>(0).map(SummaryId),
-                        )
-                        .optional()?
-                        .ok_or(Error::NotFound)
-                })
-                .collect::<Result<Vec<_>>>()?;
+            let child_ids_json = serde_json::to_string(&stale.child_ids).map_err(super::sql_json_error)?;
+            let mut stmt = transaction.prepare(
+                "SELECT live.id
+                 FROM json_each(?1) AS child_ids
+                 JOIN summary_nodes AS child ON child.id = child_ids.value AND child.tenant_id = ?2 AND child.person_id = ?3
+                 JOIN summary_nodes AS live ON live.tenant_id = child.tenant_id AND live.person_id = child.person_id
+                    AND live.start_sequence = child.start_sequence AND live.end_sequence = child.end_sequence
+                    AND live.level = child.level AND live.stale_at IS NULL
+                 ORDER BY CAST(child_ids.key AS INTEGER)"
+            )?;
+            let children_results = stmt
+                .query_map(
+                    params![child_ids_json, input.tenant_id.0, input.person_id.0],
+                    |row| row.get::<_, String>(0).map(SummaryId)
+                )?;
+            let mut children = Vec::new();
+            for result in children_results {
+                children.push(result?);
+            }
+            if children.len() != stale.child_ids.len() {
+                return Err(Error::NotFound);
+            }
             let children = children
                 .iter()
                 .map(|id| live_summary(&transaction, &input.tenant_id, &input.person_id, id))
@@ -462,14 +469,7 @@ fn stale_summary(
     }
 }
 
-fn summary_any(
-    transaction: &Transaction<'_>,
-    tenant_id: &TenantId,
-    person_id: &PersonId,
-    id: &SummaryId,
-) -> Result<MemorySummary> {
-    summary_row(transaction, tenant_id, person_id, id, false)
-}
+
 
 fn summary_row(
     connection: &Connection,
