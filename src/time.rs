@@ -39,4 +39,14 @@ mod tests {
         // Ensure it's a reasonably recent timestamp (e.g., > Jan 1, 2024)
         assert!(now > 1_704_067_200);
     }
+
+    #[test]
+    fn test_nanos() {
+        let ts = nanos();
+        assert!(
+            ts > 1_700_000_000_000_000_000,
+            "Timestamp should be recent, got: {}",
+            ts
+        );
+    }
 }
