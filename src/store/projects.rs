@@ -558,6 +558,9 @@ impl MemoryDb {
     /// multi-category sets, custom struct fields, multi-hop graph connections, and vector similarity.
     pub fn project_memories(&self, input: ProjectQuery) -> Result<Vec<ProjectFact>> {
         require_scope(&input.tenant_id, &input.person_id)?;
+        if input.limit == 0 {
+            return Ok(vec![]);
+        }
         if let Some(project) = &input.project {
             require_text("project", project)?;
         }
@@ -1589,6 +1592,56 @@ mod tests {
                 .len(),
             2
         );
+    }
+
+
+
+    #[test]
+    fn project_memories_core_functionality_and_filters() {
+        let mut db = MemoryDb::open(":memory:").unwrap();
+
+        // Seed database
+        db.remember_project(memory("CoreProject", "backend", "me", "active")).unwrap();
+        db.remember_project(memory("CoreProject", "frontend", "me", "planned")).unwrap();
+        db.remember_project(memory("OtherProject", "backend", "me", "done")).unwrap();
+
+        // Test basic retrieval by project
+        let mut q = query("me", Some("CoreProject"), None);
+        let facts = db.project_memories(query("me", Some("CoreProject"), None)).unwrap();
+        assert_eq!(facts.len(), 2, "Should retrieve all facts for CoreProject");
+
+        // Test limit
+        q.limit = 1;
+        let facts_limited = db.project_memories(q).unwrap();
+        assert_eq!(facts_limited.len(), 1, "Should respect limit");
+
+        // Test category filtering
+        let q_cat = query("me", Some("CoreProject"), Some("frontend"));
+        let facts_cat = db.project_memories(q_cat).unwrap();
+        assert_eq!(facts_cat.len(), 1, "Should filter by category");
+        assert_eq!(facts_cat[0].value, "planned");
+
+        // Test filtering by non-existent project
+        let q_none = query("me", Some("NonExistent"), None);
+        let facts_none = db.project_memories(q_none).unwrap();
+        assert!(facts_none.is_empty(), "Should return empty for non-existent project");
+    }
+
+    #[test]
+    fn project_memories_limit_zero_returns_empty_and_respects_authorization() {
+        let db = MemoryDb::open(":memory:").unwrap();
+
+        let mut unauth_input = query("me", None, None);
+        unauth_input.tenant_id = TenantId("".into());
+        unauth_input.limit = 0;
+
+        assert!(db.project_memories(unauth_input).is_err(), "Authorization check should fail before limit=0 early return");
+
+        let mut auth_input = query("me", None, None);
+        auth_input.limit = 0;
+
+        let result = db.project_memories(auth_input).unwrap();
+        assert!(result.is_empty(), "Result should be empty when limit=0");
     }
 
     #[test]
