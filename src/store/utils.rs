@@ -7,5 +7,9 @@ pub(crate) fn new_id(transaction: &Transaction<'_>) -> Result<String> {
 
 #[allow(dead_code)]
 pub(crate) fn now_iso(transaction: &Transaction<'_>) -> Result<String> {
-    Ok(transaction.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', 'now')", [], |row| row.get(0))?)
+    Ok(
+        transaction.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', 'now')", [], |row| {
+            row.get(0)
+        })?,
+    )
 }
