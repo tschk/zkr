@@ -146,7 +146,8 @@ impl MemoryDb {
                     "parent rebuild derives citations from its children".to_owned(),
                 ));
             }
-            let child_ids_json = serde_json::to_string(&stale.child_ids).map_err(super::sql_json_error)?;
+            let child_ids_json =
+                serde_json::to_string(&stale.child_ids).map_err(super::sql_json_error)?;
             let mut stmt = transaction.prepare(
                 "SELECT live.id
                  FROM json_each(?1) AS child_ids
@@ -156,11 +157,10 @@ impl MemoryDb {
                     AND live.level = child.level AND live.stale_at IS NULL
                  ORDER BY CAST(child_ids.key AS INTEGER)"
             )?;
-            let children_results = stmt
-                .query_map(
-                    params![child_ids_json, input.tenant_id.0, input.person_id.0],
-                    |row| row.get::<_, String>(0).map(SummaryId)
-                )?;
+            let children_results = stmt.query_map(
+                params![child_ids_json, input.tenant_id.0, input.person_id.0],
+                |row| row.get::<_, String>(0).map(SummaryId),
+            )?;
             let mut children = Vec::new();
             for result in children_results {
                 children.push(result?);
@@ -468,8 +468,6 @@ fn stale_summary(
         Err(Error::Invalid("summary is not stale".to_owned()))
     }
 }
-
-
 
 fn summary_row(
     connection: &Connection,
