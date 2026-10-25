@@ -214,9 +214,9 @@ pub(super) fn evidence_records(
     }
     let ids_json = serde_json::to_string(evidence_ids).map_err(super::sql_json_error)?;
     let mut statement = transaction.prepare_cached(
-        "SELECT e.id, e.source_id, e.source_revision, e.quote, e.recorded_at, e.deleted_at, l.device_id, l.provider, l.stream_id, l.segment_id, l.start_ms, l.end_ms FROM evidence e LEFT JOIN evidence_locators l ON l.evidence_id = e.id AND l.tenant_id = e.tenant_id AND l.person_id = e.person_id WHERE e.tenant_id = ?1 AND e.person_id = ?2 AND e.id IN (SELECT value FROM json_each(?3))"
+        "SELECT e.id, e.source_id, e.source_revision, e.quote, e.recorded_at, e.deleted_at, l.device_id, l.provider, l.stream_id, l.segment_id, l.start_ms, l.end_ms FROM json_each(?3) j JOIN evidence e ON e.id = j.value AND e.tenant_id = ?1 AND e.person_id = ?2 LEFT JOIN evidence_locators l ON l.evidence_id = e.id AND l.tenant_id = e.tenant_id AND l.person_id = e.person_id"
     )?;
-    statement
+    let records: Result<Vec<EvidenceRecord>> = statement
         .query_map(params![tenant_id.0, person_id.0, ids_json], |row| {
             let evidence_id: String = row.get(0)?;
             let device_id = row.get::<_, Option<String>>(6)?;
@@ -247,7 +247,12 @@ pub(super) fn evidence_records(
             })
         })?
         .map(|result| result.map_err(Error::from))
-        .collect()
+        .collect();
+    let records = records?;
+    if records.len() != evidence_ids.len() {
+        return Err(Error::NotFound);
+    }
+    Ok(records)
 }
 
 pub(super) fn claim_record(
