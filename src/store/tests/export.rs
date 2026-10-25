@@ -418,6 +418,42 @@ fn append_rejects_cross_scope_payload_and_rolls_back_commit() {
 }
 
 #[test]
+fn append_rejects_oversized_payload_and_rolls_back_commit() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let transaction = db.connection.transaction().unwrap();
+    let commit = crate::store::export::begin_commit(
+        &transaction,
+        &TenantId("a".into()),
+        &PersonId("sam".into()),
+        10,
+    )
+    .unwrap();
+    let record = ExportRecord::Profile(ProfileEntry {
+        id: ProfileEntryId("profile".into()),
+        tenant_id: TenantId("a".into()),
+        person_id: PersonId("sam".into()),
+        key: "employer".into(),
+        value: "x".repeat(crate::store::MAX_EXPORT_RECORD_BYTES),
+        stability: ProfileStability::Current,
+        claim_id: ClaimId("claim".into()),
+        recorded_at: 10,
+    });
+    assert!(matches!(
+        crate::store::export::append_records(&transaction, commit, [record]),
+        Err(Error::Invalid(message)) if message.contains("export record exceeds")
+    ));
+    transaction.rollback().unwrap();
+    let count: i64 = db
+        .connection
+        .query_row("SELECT COUNT(*) FROM memory_commits", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 0);
+}
+
+#[test]
 fn oversized_record_rolls_back_authoritative_data_and_commit() {
     let mut db = MemoryDb {
         connection: Connection::open_in_memory().unwrap(),
