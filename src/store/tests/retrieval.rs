@@ -1175,3 +1175,18 @@ fn claim_lexical_fallback_enforces_scope_deletion_supersession_as_of_and_feature
         .is_empty()
     );
 }
+
+#[test]
+fn get_rejects_unsupported_embedding_target() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+
+    let result = db.retrieval_targets_for_embeddings_bulk(
+        &TenantId("a".into()),
+        &PersonId("sam".into()),
+        &[("unsupported".to_owned(), "id".to_owned())],
+    );
+    assert!(matches!(result, Err(Error::Invalid(msg)) if msg.contains("stored embedding target is invalid")));
+}
