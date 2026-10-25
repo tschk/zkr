@@ -1567,12 +1567,15 @@ mod tests {
                 "categories": ["extra_category"],
                 "fields": {},
                 "connections": []
-            })).unwrap(),
+            }))
+            .unwrap(),
             memory: missing_claim,
         };
 
         let err = db.remember_project_record(input).unwrap_err();
-        assert!(matches!(err, Error::Invalid(msg) if msg == "project record requires a cited claim"));
+        assert!(
+            matches!(err, Error::Invalid(msg) if msg == "project record requires a cited claim")
+        );
 
         // 2. Merging categories
         let mut mem = memory("Tofu", "work", "me", "good");
@@ -1584,7 +1587,8 @@ mod tests {
                 "categories": ["extra_category", "existing_category", "work"],
                 "fields": {},
                 "connections": []
-            })).unwrap(),
+            }))
+            .unwrap(),
             memory: mem,
         };
 
