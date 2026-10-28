@@ -2723,4 +2723,25 @@ mod tests {
         q.max_hops = Some(5);
         assert!(db.project_memories(q).is_err());
     }
+
+    #[test]
+    fn max_hops_validation() {
+        let db = MemoryDb::open(":memory:").unwrap();
+
+        let mut q_zero = query("me", None, None);
+        q_zero.max_hops = Some(0);
+        let res_zero = db.project_memories(q_zero);
+        assert_eq!(
+            res_zero.unwrap_err().to_string(),
+            "max_hops must be between 1 and 4"
+        );
+
+        let mut q_five = query("me", None, None);
+        q_five.max_hops = Some(5);
+        let res_five = db.project_memories(q_five);
+        assert_eq!(
+            res_five.unwrap_err().to_string(),
+            "max_hops must be between 1 and 4"
+        );
+    }
 }

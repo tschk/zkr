@@ -119,6 +119,17 @@ fn test_remember_project_with_embedding() {
     ).unwrap();
 
     assert_eq!(count, 1);
+
+    // The automatic embedding is written alongside the inline one.
+    let auto_count: i64 = db
+        .connection
+        .query_row(
+            "SELECT count(*) FROM embeddings WHERE target_kind = 'claim' AND target_id = ?1 AND model = ?2",
+            [claim_id.0.as_str(), AUTO_EMBEDDING_MODEL],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(auto_count, 1);
 }
 
 #[test]

@@ -230,6 +230,55 @@ mod tests {
     }
 
     #[test]
+    fn augment_formats_multiple_lessons_correctly() {
+        let db = MemoryDb::open(":memory:").unwrap();
+        let (tenant_id, person_id) = test_ids();
+        let mut improve = SelfImprove::new(db, tenant_id, person_id);
+
+        improve
+            .record(
+                "testing",
+                "add unit tests",
+                "success",
+                "isolate IO in tests",
+            )
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        improve
+            .record(
+                "testing",
+                "mock db",
+                "success",
+                "use in-memory db for tests",
+            )
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        improve
+            .record("testing", "add e2e", "success", "verify end-to-end flow")
+            .unwrap();
+
+        let augmented = improve
+            .augment("testing", "You are a helpful agent.")
+            .unwrap();
+
+        let lines: Vec<&str> = augmented.lines().collect();
+        assert_eq!(lines[0], "You are a helpful agent.");
+        assert_eq!(lines[1], "");
+        assert_eq!(lines[2], "<lessons_learned>");
+
+        assert!(lines[3].starts_with("1. testing improved "));
+        assert!(lines[4].starts_with("2. testing improved "));
+        assert!(lines[5].starts_with("3. testing improved "));
+        assert_eq!(lines[6], "</lessons_learned>");
+
+        assert!(augmented.contains("isolate IO in tests"));
+        assert!(augmented.contains("use in-memory db for tests"));
+        assert!(augmented.contains("verify end-to-end flow"));
+    }
+
+    #[test]
     fn augment_with_no_lessons_returns_base() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("memory.db")).unwrap();
