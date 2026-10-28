@@ -20,6 +20,8 @@ See [the architecture](docs/architecture.md), [embedding design](docs/embeddings
 
 Transcript captures can include an optional `locator` with `device_id`, `provider`, `stream_id`, `segment_id`, `start_ms`, and `end_ms`. The locator remains attached to its evidence citation and can be retrieved with the `locator` CLI command. Library callers can use `MemoryDb::remember_with_locator` without changing existing `RememberInput` code.
 
+Library callers that retry `remember` with wall-clock timestamps can call `MemoryDb::ingestion_timestamps` to reuse the `captured_at`, `recorded_at`, and claim `valid_from` stored for an ingestion key, so an idempotent replay does not trip the ingestion key conflict check.
+
 ## Install
 
 ```sh

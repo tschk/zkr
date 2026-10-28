@@ -157,6 +157,20 @@ pub struct TranscriptLocator {
     pub end_ms: u64,
 }
 
+/// Timestamps stored for an ingestion key the first time it was remembered.
+///
+/// Returned by [`MemoryDb::ingestion_timestamps`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct IngestionTimestamps {
+    /// The stored source's `captured_at`.
+    pub captured_at: Timestamp,
+    /// The stored source's `recorded_at`.
+    pub recorded_at: Timestamp,
+    /// `valid_from` of the claim created with the source, or `None` when the
+    /// key was remembered without a claim.
+    pub valid_from: Option<Timestamp>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct EvidenceLocatorInput {
     pub tenant_id: TenantId,

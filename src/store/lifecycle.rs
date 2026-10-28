@@ -190,21 +190,80 @@ impl MemoryDb {
         })
     }
 
-    /// Timestamps stored for an existing ingestion key: `(captured_at,
-    /// recorded_at, origin claim valid_from)`. Lets callers that stamp
-    /// records with the wall clock replay them idempotently.
-    pub(crate) fn ingestion_timestamps(
+    /// Returns the timestamps stored when `ingestion_key` was first
+    /// remembered for this tenant and person.
+    ///
+    /// The result holds the source's `captured_at` and `recorded_at`, plus
+    /// the `valid_from` of the claim created with it (`None` when the key was
+    /// remembered without a claim). Returns `Ok(None)` when no source in this
+    /// tenant and person scope uses the key. A key whose source was later
+    /// deleted still returns its timestamps, because the key stays reserved.
+    ///
+    /// This is meant for callers that implement idempotent replay and stamp
+    /// [`RememberInput`] with the wall clock. [`MemoryDb::remember`] treats a
+    /// repeated `ingestion_key` with different `captured_at`, `recorded_at`,
+    /// or claim `valid_from` as a payload conflict, so a retry should reuse
+    /// the first stored timestamps instead of the current time.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Invalid`] when `tenant_id`, `person_id`, or
+    /// `ingestion_key` is empty, and [`Error::Sql`] when the query fails.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use zkr::{MemoryDb, PersonId, RememberInput, SourceKind, TenantId};
+    ///
+    /// let mut db = MemoryDb::open(":memory:")?;
+    /// let tenant = TenantId::new("acme")?;
+    /// let person = PersonId::new("sam")?;
+    /// let input = |now| RememberInput {
+    ///     tenant_id: tenant.clone(),
+    ///     person_id: person.clone(),
+    ///     ingestion_key: Some("turn-1".into()),
+    ///     kind: SourceKind::Conversation,
+    ///     text: "Sam prefers tea".into(),
+    ///     captured_at: now,
+    ///     recorded_at: now,
+    ///     claim: None,
+    ///     feature_flag: None,
+    ///     aliases: Vec::new(),
+    /// };
+    ///
+    /// assert_eq!(db.ingestion_timestamps(&tenant, &person, "turn-1")?, None);
+    /// let first = db.remember(input(1_000))?;
+    ///
+    /// // A retry later reuses the stored timestamps instead of the wall clock.
+    /// let mut retry = input(2_000);
+    /// if let Some(stored) = db.ingestion_timestamps(&tenant, &person, "turn-1")? {
+    ///     retry.captured_at = stored.captured_at;
+    ///     retry.recorded_at = stored.recorded_at;
+    /// }
+    /// let replayed = db.remember(retry)?;
+    /// assert_eq!(first.source_id, replayed.source_id);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn ingestion_timestamps(
         &self,
         tenant_id: &TenantId,
         person_id: &PersonId,
         ingestion_key: &str,
-    ) -> Result<Option<(Timestamp, Timestamp, Option<Timestamp>)>> {
+    ) -> Result<Option<IngestionTimestamps>> {
+        require_scope(tenant_id, person_id)?;
+        require_text("ingestion_key", ingestion_key)?;
         Ok(self
             .connection
             .query_row(
                 "SELECT s.captured_at, s.recorded_at, c.valid_from FROM sources s LEFT JOIN claims c ON c.id = s.origin_claim_id AND c.tenant_id = s.tenant_id AND c.person_id = s.person_id WHERE s.tenant_id = ?1 AND s.person_id = ?2 AND s.ingestion_key = ?3",
                 params![tenant_id.0, person_id.0, ingestion_key],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| {
+                    Ok(IngestionTimestamps {
+                        captured_at: row.get(0)?,
+                        recorded_at: row.get(1)?,
+                        valid_from: row.get(2)?,
+                    })
+                },
             )
             .optional()?)
     }
