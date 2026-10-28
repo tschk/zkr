@@ -1,5 +1,6 @@
 use super::export::{
-    append_commit, claim_evidence_record, claim_record, evidence_record, source_record,
+    append_commit, claim_evidence_record, claim_record, evidence_record, evidence_records,
+    source_record,
 };
 use super::repair::{enqueue_projection_repair, enqueue_projection_repairs, record_operation};
 use super::summaries::invalidate_summaries_for_evidence;
@@ -187,6 +188,25 @@ impl MemoryDb {
             evidence_id,
             claim_id,
         })
+    }
+
+    /// Timestamps stored for an existing ingestion key: `(captured_at,
+    /// recorded_at, origin claim valid_from)`. Lets callers that stamp
+    /// records with the wall clock replay them idempotently.
+    pub(crate) fn ingestion_timestamps(
+        &self,
+        tenant_id: &TenantId,
+        person_id: &PersonId,
+        ingestion_key: &str,
+    ) -> Result<Option<(Timestamp, Timestamp, Option<Timestamp>)>> {
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT s.captured_at, s.recorded_at, c.valid_from FROM sources s LEFT JOIN claims c ON c.id = s.origin_claim_id AND c.tenant_id = s.tenant_id AND c.person_id = s.person_id WHERE s.tenant_id = ?1 AND s.person_id = ?2 AND s.ingestion_key = ?3",
+                params![tenant_id.0, person_id.0, ingestion_key],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?)
     }
 
     pub fn evidence_locator(
@@ -1309,17 +1329,14 @@ fn build_deletion_records(
             deleted_at,
         }),
     ];
-    for evidence_id in evidence_ids {
-        records.push(ExportRecord::Evidence(evidence_record(
-            transaction,
-            tenant_id,
-            person_id,
-            evidence_id,
-        )?));
+    let evidence_records_list = evidence_records(transaction, tenant_id, person_id, evidence_ids)?;
+    for record in evidence_records_list {
+        let ev_id = record.evidence.id.clone();
+        records.push(ExportRecord::Evidence(record));
         records.push(ExportRecord::Deletion(DeletionRecord {
             tenant_id: tenant_id.clone(),
             person_id: person_id.clone(),
-            target: MemoryRef::Evidence(evidence_id.clone()),
+            target: MemoryRef::Evidence(ev_id),
             deleted_at,
         }));
     }

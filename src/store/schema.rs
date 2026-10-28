@@ -459,7 +459,7 @@ fn ensure_column(
     Ok(())
 }
 
-fn is_valid_identifier(ident: &str) -> bool {
+pub(super) fn is_valid_identifier(ident: &str) -> bool {
     !ident.is_empty() && ident.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 

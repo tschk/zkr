@@ -163,6 +163,61 @@ pub(super) fn claim_records(
         .collect()
 }
 
+pub(super) fn evidence_records(
+    transaction: &Transaction<'_>,
+    tenant_id: &TenantId,
+    person_id: &PersonId,
+    evidence_ids: &[EvidenceId],
+) -> Result<Vec<EvidenceRecord>> {
+    if evidence_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ids_json = serde_json::to_string(evidence_ids).map_err(super::sql_json_error)?;
+    let mut statement = transaction.prepare_cached(
+        "SELECT e.id, e.source_id, e.source_revision, e.quote, e.recorded_at, e.deleted_at, l.device_id, l.provider, l.stream_id, l.segment_id, l.start_ms, l.end_ms FROM json_each(?3) j JOIN evidence e ON e.id = j.value AND e.tenant_id = ?1 AND e.person_id = ?2 LEFT JOIN evidence_locators l ON l.evidence_id = e.id AND l.tenant_id = e.tenant_id AND l.person_id = e.person_id ORDER BY j.key"
+    )?;
+    let records: Result<Vec<EvidenceRecord>> = statement
+        .query_map(params![tenant_id.0, person_id.0, ids_json], |row| {
+            let evidence_id = EvidenceId(row.get(0)?);
+            let device_id = row.get::<_, Option<String>>(6)?;
+            let locator = match device_id {
+                Some(device_id) => Some(TranscriptLocator {
+                    device_id,
+                    provider: row.get(7)?,
+                    stream_id: row.get(8)?,
+                    segment_id: row.get(9)?,
+                    start_ms: row.get(10)?,
+                    end_ms: row.get(11)?,
+                }),
+                None => None,
+            };
+            Ok(EvidenceRecord {
+                evidence: Evidence {
+                    id: evidence_id,
+                    tenant_id: tenant_id.clone(),
+                    person_id: person_id.clone(),
+                    source_id: SourceId(row.get(1)?),
+                    source_revision: row.get(2)?,
+                    quote: row.get(3)?,
+                    byte_range: None,
+                    recorded_at: row.get(4)?,
+                },
+                locator,
+                deleted_at: row.get(5)?,
+            })
+        })?
+        .map(|result| result.map_err(Error::from))
+        .collect();
+
+    let records = records?;
+    if records.len() != evidence_ids.len() {
+        return Err(Error::Invalid(
+            "One or more evidence records missing during export".into(),
+        ));
+    }
+    Ok(records)
+}
+
 pub(super) fn evidence_record(
     transaction: &Transaction<'_>,
     tenant_id: &TenantId,

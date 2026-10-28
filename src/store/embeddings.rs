@@ -561,68 +561,9 @@ impl MemoryDb {
         let limit = bounded_limit(input.limit) as usize;
 
         while let Some(row) = rows.next()? {
-            let kind: String = row.get(0)?;
-            let id: String = row.get(1)?;
-            let text: String = row.get(2)?;
-            let target_revision: i64 = row.get(3)?;
-
-            let stored: Option<(i64, String, i64, usize, String, String, String)> =
-                match row.get::<_, Option<i64>>(4)? {
-                    Some(rev) => Some((
-                        rev,
-                        row.get(5)?,
-                        row.get(6)?,
-                        row.get(7)?,
-                        row.get(8)?,
-                        row.get(9)?,
-                        row.get(10)?,
-                    )),
-                    None => None,
-                };
-
-            let target = embedding_target(&kind, &id)?;
-            let projection = ProjectionInput {
-                target,
-                input_hash: input_hash(&text),
-                text,
-                target_revision,
-            };
-
-            let state = match &stored {
-                None => ProjectionState::Missing,
-                Some((revision, hash, _, _, _, _, _))
-                    if *revision != projection.target_revision
-                        || hash != &projection.input_hash =>
-                {
-                    ProjectionState::Stale
-                }
-                Some((_, _, _, dimension, normalization, distance, vector))
-                    if !stored_embedding_is_valid(*dimension, normalization, distance, vector) =>
-                {
-                    ProjectionState::Stale
-                }
-                Some((_, _, _, dimension, normalization, distance, _)) => {
-                    let configuration = (
-                        *dimension,
-                        serde_json::from_str(normalization)?,
-                        serde_json::from_str(distance)?,
-                    );
-                    if lane
-                        .as_ref()
-                        .is_some_and(|expected| expected != &configuration)
-                    {
-                        ProjectionState::Stale
-                    } else {
-                        continue;
-                    }
-                }
-            };
-            let issue = ProjectionIssue {
-                state,
-                input: projection,
-                stored_target_revision: stored.as_ref().map(|value| value.0),
-                stored_input_hash: stored.as_ref().map(|value| value.1.clone()),
-                stored_created_at: stored.map(|value| value.2),
+            let issue = match process_projection_row(row, &lane)? {
+                Some(issue) => issue,
+                None => continue,
             };
             let issue_bytes = serde_json::to_vec(&issue)?.len();
             if issue_bytes + 2 > MAX_PROJECTION_PAGE_BYTES {
@@ -641,4 +582,73 @@ impl MemoryDb {
         }
         Ok(issues)
     }
+}
+
+fn process_projection_row(
+    row: &rusqlite::Row<'_>,
+    lane: &Option<EmbeddingLane>,
+) -> Result<Option<ProjectionIssue>> {
+    let kind: String = row.get(0)?;
+    let id: String = row.get(1)?;
+    let text: String = row.get(2)?;
+    let target_revision: i64 = row.get(3)?;
+
+    let stored: Option<(i64, String, i64, usize, String, String, String)> =
+        match row.get::<_, Option<i64>>(4)? {
+            Some(rev) => Some((
+                rev,
+                row.get(5)?,
+                row.get(6)?,
+                row.get(7)?,
+                row.get(8)?,
+                row.get(9)?,
+                row.get(10)?,
+            )),
+            None => None,
+        };
+
+    let target = embedding_target(&kind, &id)?;
+    let projection = ProjectionInput {
+        target,
+        input_hash: input_hash(&text),
+        text,
+        target_revision,
+    };
+
+    let state = match &stored {
+        None => ProjectionState::Missing,
+        Some((revision, hash, _, _, _, _, _))
+            if *revision != projection.target_revision || hash != &projection.input_hash =>
+        {
+            ProjectionState::Stale
+        }
+        Some((_, _, _, dimension, normalization, distance, vector))
+            if !stored_embedding_is_valid(*dimension, normalization, distance, vector) =>
+        {
+            ProjectionState::Stale
+        }
+        Some((_, _, _, dimension, normalization, distance, _)) => {
+            let configuration = (
+                *dimension,
+                serde_json::from_str(normalization)?,
+                serde_json::from_str(distance)?,
+            );
+            if lane
+                .as_ref()
+                .is_some_and(|expected| expected != &configuration)
+            {
+                ProjectionState::Stale
+            } else {
+                return Ok(None);
+            }
+        }
+    };
+
+    Ok(Some(ProjectionIssue {
+        state,
+        input: projection,
+        stored_target_revision: stored.as_ref().map(|value| value.0),
+        stored_input_hash: stored.as_ref().map(|value| value.1.clone()),
+        stored_created_at: stored.map(|value| value.2),
+    }))
 }
