@@ -87,4 +87,6 @@ mod projects;
 mod repair;
 mod repair_perf;
 mod retrieval;
+mod schema;
 mod summaries;
+mod utils;
