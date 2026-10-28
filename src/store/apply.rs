@@ -337,6 +337,39 @@ fn apply_source_origin(transaction: &Transaction<'_>, record: &SourceRecord) -> 
     Ok(())
 }
 
+struct StoredEvidence {
+    source_id: String,
+    source_revision: u64,
+    quote: String,
+    recorded_at: Timestamp,
+    deleted_at: Option<Timestamp>,
+}
+
+fn fetch_stored_locator(
+    transaction: &Transaction<'_>,
+    tenant_id: &TenantId,
+    person_id: &PersonId,
+    evidence_id: &EvidenceId,
+) -> Result<Option<TranscriptLocator>> {
+    transaction
+        .query_row(
+            "SELECT device_id, provider, stream_id, segment_id, start_ms, end_ms FROM evidence_locators WHERE tenant_id = ?1 AND person_id = ?2 AND evidence_id = ?3",
+            params![tenant_id.0, person_id.0, evidence_id.0],
+            |row| {
+                Ok(TranscriptLocator {
+                    device_id: row.get(0)?,
+                    provider: row.get(1)?,
+                    stream_id: row.get(2)?,
+                    segment_id: row.get(3)?,
+                    start_ms: row.get(4)?,
+                    end_ms: row.get(5)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(Into::into)
+}
+
 fn apply_evidence(
     transaction: &Transaction<'_>,
     record: &EvidenceRecord,
@@ -372,13 +405,13 @@ fn apply_evidence(
             "SELECT source_id, source_revision, quote, recorded_at, deleted_at FROM evidence WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3",
             params![evidence.id.0, evidence.tenant_id.0, evidence.person_id.0],
             |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, u64>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, Timestamp>(3)?,
-                    row.get::<_, Option<Timestamp>>(4)?,
-                ))
+                Ok(StoredEvidence {
+                    source_id: row.get::<_, String>(0)?,
+                    source_revision: row.get::<_, u64>(1)?,
+                    quote: row.get::<_, String>(2)?,
+                    recorded_at: row.get::<_, Timestamp>(3)?,
+                    deleted_at: row.get::<_, Option<Timestamp>>(4)?,
+                })
             },
         )
         .optional()?;
@@ -395,45 +428,35 @@ fn apply_evidence(
         }
         return Ok(());
     };
-    if stored.0 != evidence.source_id.0
-        || stored.1 != evidence.source_revision
-        || stored.2 != evidence.quote
-        || stored.3 != evidence.recorded_at
+    if stored.source_id != evidence.source_id.0
+        || stored.source_revision != evidence.source_revision
+        || stored.quote != evidence.quote
+        || stored.recorded_at != evidence.recorded_at
     {
         return Err(Error::Invalid(format!(
             "applied evidence {} conflicts with the stored evidence payload",
             evidence.id.0
         )));
     }
-    let stored_locator = transaction
-        .query_row(
-            "SELECT device_id, provider, stream_id, segment_id, start_ms, end_ms FROM evidence_locators WHERE tenant_id = ?1 AND person_id = ?2 AND evidence_id = ?3",
-            params![evidence.tenant_id.0, evidence.person_id.0, evidence.id.0],
-            |row| {
-                Ok(TranscriptLocator {
-                    device_id: row.get(0)?,
-                    provider: row.get(1)?,
-                    stream_id: row.get(2)?,
-                    segment_id: row.get(3)?,
-                    start_ms: row.get(4)?,
-                    end_ms: row.get(5)?,
-                })
-            },
-        )
-        .optional()?;
+    let stored_locator = fetch_stored_locator(
+        transaction,
+        &evidence.tenant_id,
+        &evidence.person_id,
+        &evidence.id,
+    )?;
     if stored_locator.as_ref() != record.locator.as_ref() {
         return Err(Error::Invalid(format!(
             "applied evidence {} conflicts with the stored transcript locator",
             evidence.id.0
         )));
     }
-    if stored.4.is_some() && record.deleted_at.is_none() {
+    if stored.deleted_at.is_some() && record.deleted_at.is_none() {
         return Err(Error::Invalid(format!(
             "applied evidence {} cannot revive tombstoned evidence",
             evidence.id.0
         )));
     }
-    if let Some(deleted_at) = record.deleted_at.filter(|_| stored.4.is_none()) {
+    if let Some(deleted_at) = record.deleted_at.filter(|_| stored.deleted_at.is_none()) {
         transaction.execute(
             "UPDATE evidence SET deleted_at = ?1 WHERE id = ?2 AND tenant_id = ?3 AND person_id = ?4",
             params![deleted_at, evidence.id.0, evidence.tenant_id.0, evidence.person_id.0],
