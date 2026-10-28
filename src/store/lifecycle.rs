@@ -190,6 +190,25 @@ impl MemoryDb {
         })
     }
 
+    /// Timestamps stored for an existing ingestion key: `(captured_at,
+    /// recorded_at, origin claim valid_from)`. Lets callers that stamp
+    /// records with the wall clock replay them idempotently.
+    pub(crate) fn ingestion_timestamps(
+        &self,
+        tenant_id: &TenantId,
+        person_id: &PersonId,
+        ingestion_key: &str,
+    ) -> Result<Option<(Timestamp, Timestamp, Option<Timestamp>)>> {
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT s.captured_at, s.recorded_at, c.valid_from FROM sources s LEFT JOIN claims c ON c.id = s.origin_claim_id AND c.tenant_id = s.tenant_id AND c.person_id = s.person_id WHERE s.tenant_id = ?1 AND s.person_id = ?2 AND s.ingestion_key = ?3",
+                params![tenant_id.0, person_id.0, ingestion_key],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?)
+    }
+
     pub fn evidence_locator(
         &self,
         input: EvidenceLocatorInput,
