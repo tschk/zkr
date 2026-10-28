@@ -504,9 +504,7 @@ export function tools(
           record_type: Type.Optional(Type.String({ minLength: 1 })),
           relation: Type.Optional(Type.String({ minLength: 1 })),
           target: Type.Optional(Type.String({ minLength: 1 })),
-          where_fields: Type.Optional(
-            Type.Record(Type.String(), Type.Unknown()),
-          ),
+          where_fields: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
           connected_to: Type.Optional(Type.String({ minLength: 1 })),
           max_hops: Type.Optional(Type.Integer({ minimum: 1, maximum: 4 })),
           vector_query: Type.Optional(Type.String({ minLength: 1 })),
