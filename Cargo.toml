@@ -45,6 +45,3 @@ harness = false
 [[bench]]
 name = "validate_evidence"
 harness = false
-[[bench]]
-name = "lifecycle_deletion_evidence_nplus1"
-harness = false
