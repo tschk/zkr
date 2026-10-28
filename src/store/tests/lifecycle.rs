@@ -30,6 +30,53 @@ fn ingestion_keys_are_idempotent_within_scope() {
 }
 
 #[test]
+fn ingestion_timestamps_report_stored_values_within_scope() {
+    let mut db = MemoryDb::open(":memory:").unwrap();
+    let (tenant, person) = (TenantId("a".into()), PersonId("sam".into()));
+    let mut claimed = remember("a", "sam", "Acme");
+    claimed.ingestion_key = Some("claimed".into());
+    claimed.captured_at = 7;
+    claimed.recorded_at = 8;
+    claimed.claim.as_mut().unwrap().valid_from = 9;
+    db.remember(claimed).unwrap();
+    let mut raw = remember_raw("a", "sam", "No claim here");
+    raw.ingestion_key = Some("raw".into());
+    db.remember(raw).unwrap();
+
+    assert_eq!(
+        db.ingestion_timestamps(&tenant, &person, "claimed")
+            .unwrap(),
+        Some(IngestionTimestamps {
+            captured_at: 7,
+            recorded_at: 8,
+            valid_from: Some(9),
+        })
+    );
+    assert_eq!(
+        db.ingestion_timestamps(&tenant, &person, "raw").unwrap(),
+        Some(IngestionTimestamps {
+            captured_at: 10,
+            recorded_at: 10,
+            valid_from: None,
+        })
+    );
+    assert_eq!(
+        db.ingestion_timestamps(&TenantId("b".into()), &person, "claimed")
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        db.ingestion_timestamps(&tenant, &person, "missing")
+            .unwrap(),
+        None
+    );
+    assert!(matches!(
+        db.ingestion_timestamps(&tenant, &person, " "),
+        Err(Error::Invalid(_))
+    ));
+}
+
+#[test]
 fn raw_ingestion_replay_is_not_changed_by_later_claim_links() {
     let mut db = MemoryDb {
         connection: Connection::open_in_memory().unwrap(),

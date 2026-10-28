@@ -1201,13 +1201,13 @@ impl Personality {
         // reuses the originally stored timestamps so only real payload
         // differences trip the ingestion_key conflict check.
         let (mut captured_at, mut recorded_at) = (now, now);
-        if let Some((stored_captured, stored_recorded, stored_valid_from)) = self
-            .db
-            .ingestion_timestamps(&self.tenant_id, &self.person_id, &ingestion_key)?
+        if let Some(stored) =
+            self.db
+                .ingestion_timestamps(&self.tenant_id, &self.person_id, &ingestion_key)?
         {
-            captured_at = stored_captured;
-            recorded_at = stored_recorded;
-            if let (Some(claim), Some(valid_from)) = (claim.as_mut(), stored_valid_from)
+            captured_at = stored.captured_at;
+            recorded_at = stored.recorded_at;
+            if let (Some(claim), Some(valid_from)) = (claim.as_mut(), stored.valid_from)
                 && claim.valid_from == now
             {
                 claim.valid_from = valid_from;
@@ -1245,6 +1245,7 @@ impl Personality {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::IngestionTimestamps;
 
     fn test_ids() -> (TenantId, PersonId) {
         (TenantId("t1".into()), PersonId("p1".into()))
@@ -2740,7 +2741,11 @@ mod tests {
                     "persona:clocked-bot"
                 )
                 .unwrap(),
-            Some((1_000, 1_000, Some(1_000)))
+            Some(IngestionTimestamps {
+                captured_at: 1_000,
+                recorded_at: 1_000,
+                valid_from: Some(1_000),
+            })
         );
         let context = personality.persona_context("clocked-bot", 5).unwrap();
         assert_eq!(context.len(), 1);
