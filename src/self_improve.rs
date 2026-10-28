@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn augment_formats_multiple_lessons_correctly() {
-        let db = MemoryDb::open_in_memory().unwrap();
+        let db = MemoryDb::open(":memory:").unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut improve = SelfImprove::new(db, tenant_id, person_id);
 
@@ -268,12 +268,6 @@ mod tests {
         assert_eq!(lines[1], "");
         assert_eq!(lines[2], "<lessons_learned>");
 
-        let mut lessons: Vec<&str> = lines[3..6].to_vec();
-        lessons.sort();
-
-        // Check that they start with 1. 2. 3. (We know there are 3 lessons)
-        // Since we sort them alphabetically by the content, the numbers won't be 1,2,3 in order
-        // Let's just check that each line starts with a digit and a dot, and that all our lessons are present.
         assert!(lines[3].starts_with("1. testing improved "));
         assert!(lines[4].starts_with("2. testing improved "));
         assert!(lines[5].starts_with("3. testing improved "));

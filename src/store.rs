@@ -560,13 +560,6 @@ pub struct MemoryDb {
 }
 
 impl MemoryDb {
-    pub fn open_in_memory() -> Result<Self> {
-        let connection = Connection::open_in_memory()?;
-        let mut database = Self { connection };
-        database.migrate()?;
-        Ok(database)
-    }
-
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let connection = Connection::open(path)?;
         let mut database = Self { connection };
