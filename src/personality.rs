@@ -974,7 +974,10 @@ impl Personality {
 
     /// Store a persona blueprint.
     pub fn store_persona(&mut self, persona: &PersonaBlueprint) -> Result<()> {
-        let now = now_seconds();
+        self.store_persona_at(persona, now_seconds())
+    }
+
+    fn store_persona_at(&mut self, persona: &PersonaBlueprint, now: Timestamp) -> Result<()> {
         let text = format!(
             "Persona \"{}\": traits=[{}], constraints=[{}], citations=[{}], prompt=\"{}\"",
             persona.name,
@@ -1192,16 +1195,32 @@ impl Personality {
         kind: SourceKind,
         text: String,
         now: Timestamp,
-        claim: Option<ClaimInput>,
+        mut claim: Option<ClaimInput>,
     ) -> Result<()> {
+        // `now` is the wall clock, not content: a replay of an existing key
+        // reuses the originally stored timestamps so only real payload
+        // differences trip the ingestion_key conflict check.
+        let (mut captured_at, mut recorded_at) = (now, now);
+        if let Some((stored_captured, stored_recorded, stored_valid_from)) = self
+            .db
+            .ingestion_timestamps(&self.tenant_id, &self.person_id, &ingestion_key)?
+        {
+            captured_at = stored_captured;
+            recorded_at = stored_recorded;
+            if let (Some(claim), Some(valid_from)) = (claim.as_mut(), stored_valid_from)
+                && claim.valid_from == now
+            {
+                claim.valid_from = valid_from;
+            }
+        }
         self.db.remember(RememberInput {
             tenant_id: self.tenant_id.clone(),
             person_id: self.person_id.clone(),
             ingestion_key: Some(ingestion_key),
             kind,
             text,
-            captured_at: now,
-            recorded_at: now,
+            captured_at,
+            recorded_at,
             claim,
             feature_flag: Some(FEATURE_FLAG.into()),
             aliases: Vec::new(),
@@ -2696,6 +2715,54 @@ mod tests {
 
         let context = personality.persona_context("idempotent-bot", 5).unwrap();
         assert_eq!(context.len(), 1);
+    }
+
+    #[test]
+    fn store_persona_replay_ignores_wall_clock() {
+        let (_tmp, mut personality) = setup_test_personality();
+        let blueprint = PersonaBlueprint {
+            name: "clocked-bot".into(),
+            traits: vec!["steady".into()],
+            system_prompt: "Same every time.".into(),
+            constraints: vec![],
+            citations: vec![],
+        };
+
+        personality.store_persona_at(&blueprint, 1_000).unwrap();
+        personality.store_persona_at(&blueprint, 1_001).unwrap();
+
+        assert_eq!(
+            personality
+                .db
+                .ingestion_timestamps(
+                    &personality.tenant_id,
+                    &personality.person_id,
+                    "persona:clocked-bot"
+                )
+                .unwrap(),
+            Some((1_000, 1_000, Some(1_000)))
+        );
+        let context = personality.persona_context("clocked-bot", 5).unwrap();
+        assert_eq!(context.len(), 1);
+    }
+
+    #[test]
+    fn store_persona_changed_content_still_conflicts() {
+        let (_tmp, mut personality) = setup_test_personality();
+        let mut blueprint = PersonaBlueprint {
+            name: "drifting-bot".into(),
+            traits: vec!["steady".into()],
+            system_prompt: "Version one.".into(),
+            constraints: vec![],
+            citations: vec![],
+        };
+
+        personality.store_persona_at(&blueprint, 1_000).unwrap();
+        blueprint.system_prompt = "Version two.".into();
+        for now in [1_000, 1_001] {
+            let error = personality.store_persona_at(&blueprint, now).unwrap_err();
+            assert!(error.to_string().contains("ingestion_key conflicts"));
+        }
     }
 
     #[test]
