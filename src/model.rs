@@ -309,28 +309,32 @@ mod tests {
             MemoryProcessingState::Blocked,
         ];
 
+        let check = |tier: &MemoryTier, status: &ClaimStatus, state: &MemoryProcessingState| {
+            let mut expected = true;
+
+            if *tier == MemoryTier::Archive && *status == ClaimStatus::Superseded {
+                expected = false;
+            }
+            if (*tier == MemoryTier::LongTerm || *tier == MemoryTier::Archive)
+                && *state != MemoryProcessingState::Processed
+            {
+                expected = false;
+            }
+
+            assert_eq!(
+                is_legal_state_combination(tier, status, state),
+                expected,
+                "Failed for tier={:?}, status={:?}, processing_state={:?}",
+                tier,
+                status,
+                state
+            );
+        };
+
         for tier in &tiers {
             for status in &statuses {
                 for state in &states {
-                    let mut expected = true;
-
-                    if *tier == MemoryTier::Archive && *status == ClaimStatus::Superseded {
-                        expected = false;
-                    }
-                    if (*tier == MemoryTier::LongTerm || *tier == MemoryTier::Archive)
-                        && *state != MemoryProcessingState::Processed
-                    {
-                        expected = false;
-                    }
-
-                    assert_eq!(
-                        is_legal_state_combination(tier, status, state),
-                        expected,
-                        "Failed for tier={:?}, status={:?}, processing_state={:?}",
-                        tier,
-                        status,
-                        state
-                    );
+                    check(tier, status, state);
                 }
             }
         }
