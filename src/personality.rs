@@ -535,20 +535,12 @@ impl Personality {
     // --- Social signals: derivation -----------------------------------------
 
     fn derive_response_latency_signal(&self, event: &ConversationEvent) -> Option<SocialSignal> {
-        if event.event_kind == "message" {
-            if let Some(prev) = self.recent_events.iter().rev().nth(1) {
-                if prev.participant != event.participant && prev.event_kind == "message" {
-                    let latency = event.epoch.saturating_sub(prev.epoch);
-                    return Some(SocialSignal {
-                        signal_kind: "response_latency".into(),
-                        participant: event.participant.clone(),
-                        value: format!("{}epochs", latency),
-                        epoch: event.epoch,
-                    });
-                }
-            }
+        if event.event_kind != "message" {
+            return None;
         }
-        None
+
+        let prev = self.recent_events.iter().rev().nth(1)?;
+        extract_latency_signal(event, prev)
     }
 
     fn derive_typing_without_send_signal(&self, event: &ConversationEvent) -> Option<SocialSignal> {
@@ -1240,6 +1232,21 @@ impl Personality {
         })?;
         Ok(pack.items.into_iter().map(|item| item.excerpt).collect())
     }
+}
+
+
+fn extract_latency_signal(event: &ConversationEvent, prev: &ConversationEvent) -> Option<SocialSignal> {
+    if prev.participant == event.participant || prev.event_kind != "message" {
+        return None;
+    }
+
+    let latency = event.epoch.saturating_sub(prev.epoch);
+    Some(SocialSignal {
+        signal_kind: "response_latency".into(),
+        participant: event.participant.clone(),
+        value: format!("{}epochs", latency),
+        epoch: event.epoch,
+    })
 }
 
 #[cfg(test)]
