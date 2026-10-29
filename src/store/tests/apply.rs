@@ -1,5 +1,4 @@
 use super::*;
-
 const STATE_QUERIES: [&str; 9] = [
     "SELECT id, person_id, ingestion_key, revision, kind, content, captured_at, recorded_at, deleted_at, origin_evidence_id, origin_claim_id FROM sources WHERE tenant_id = 'a' ORDER BY id",
     "SELECT id, person_id, source_id, source_revision, quote, recorded_at, deleted_at FROM evidence WHERE tenant_id = 'a' ORDER BY id",
@@ -11,7 +10,6 @@ const STATE_QUERIES: [&str; 9] = [
     "SELECT id, person_id, day, summary, evidence_ids, recorded_at FROM daily_reviews WHERE tenant_id = 'a' ORDER BY id",
     "SELECT source_id, content FROM source_fts WHERE tenant_id = 'a' ORDER BY source_id",
 ];
-
 fn empty() -> MemoryDb {
     let mut db = MemoryDb {
         connection: Connection::open_in_memory().unwrap(),
@@ -19,7 +17,6 @@ fn empty() -> MemoryDb {
     db.migrate().unwrap();
     db
 }
-
 fn locator() -> TranscriptLocator {
     TranscriptLocator {
         device_id: "device".into(),
@@ -30,11 +27,9 @@ fn locator() -> TranscriptLocator {
         end_ms: 20,
     }
 }
-
 fn scope() -> (TenantId, PersonId) {
     (TenantId("a".into()), PersonId("sam".into()))
 }
-
 fn table_rows(db: &MemoryDb, query: &str) -> Vec<String> {
     let mut statement = db.connection.prepare(query).unwrap();
     let columns = statement.column_count();
@@ -50,14 +45,12 @@ fn table_rows(db: &MemoryDb, query: &str) -> Vec<String> {
         .collect::<std::result::Result<Vec<_>, _>>()
         .unwrap()
 }
-
 fn state(db: &MemoryDb) -> Vec<Vec<String>> {
     STATE_QUERIES
         .iter()
         .map(|query| table_rows(db, query))
         .collect()
 }
-
 fn export_all(db: &mut MemoryDb, tenant: &str) -> Vec<ExportCommit> {
     let mut commits: Vec<ExportCommit> = Vec::new();
     let mut after_commit = 0;
@@ -93,7 +86,6 @@ fn export_all(db: &mut MemoryDb, tenant: &str) -> Vec<ExportCommit> {
     }
     commits
 }
-
 fn apply_input(commits: Vec<ExportCommit>) -> ApplyInput {
     let (tenant_id, person_id) = scope();
     ApplyInput {
@@ -104,7 +96,6 @@ fn apply_input(commits: Vec<ExportCommit>) -> ApplyInput {
         commits,
     }
 }
-
 fn populated() -> MemoryDb {
     let (tenant_id, person_id) = scope();
     let mut db = empty();
@@ -205,14 +196,12 @@ fn populated() -> MemoryDb {
     db.remember(remember("b", "sam", "Other")).unwrap();
     db
 }
-
 #[test]
 fn apply_round_trips_an_exported_replica() {
     let mut origin = populated();
     let commits = export_all(&mut origin, "a");
     let mut replica = empty();
     let applied = replica.apply(apply_input(commits.clone())).unwrap();
-
     assert_eq!(applied.commits_applied, commits.len() as u64);
     assert_eq!(applied.commits_skipped, 0);
     assert_eq!(applied.records_skipped, 0);
@@ -226,7 +215,6 @@ fn apply_round_trips_an_exported_replica() {
     assert_eq!(state(&replica), state(&origin));
     assert_eq!(export_all(&mut replica, "a"), commits);
     assert!(state(&replica).iter().all(|table| !table.is_empty()));
-
     let (tenant_id, person_id) = scope();
     let located = replica
         .connection
@@ -254,13 +242,11 @@ fn apply_round_trips_an_exported_replica() {
         .is_empty()
     );
 }
-
 #[test]
 fn apply_tracks_applied_records() {
     let mut origin = populated();
     let commits = export_all(&mut origin, "a");
     let mut replica = empty();
-
     // First apply
     let applied = replica.apply(apply_input(commits.clone())).unwrap();
     let total_records: u64 = commits.iter().map(|c| c.records.len() as u64).sum();
@@ -268,7 +254,6 @@ fn apply_tracks_applied_records() {
     assert_eq!(applied.records_applied, total_records);
     assert_eq!(applied.commits_skipped, 0);
     assert_eq!(applied.records_skipped, 0);
-
     // Check memory_applied_records table
     let applied_count: i64 = replica
         .connection
@@ -279,14 +264,12 @@ fn apply_tracks_applied_records() {
         )
         .unwrap();
     assert_eq!(applied_count as u64, total_records);
-
     // Second apply
     let replayed = replica.apply(apply_input(commits.clone())).unwrap();
     assert_eq!(replayed.commits_applied, 0);
     assert_eq!(replayed.records_applied, 0);
     assert_eq!(replayed.commits_skipped, commits.len() as u64);
     assert_eq!(replayed.records_skipped, total_records);
-
     // Check memory_applied_records table again, should not have increased
     let applied_count_after: i64 = replica
         .connection
@@ -298,7 +281,6 @@ fn apply_tracks_applied_records() {
         .unwrap();
     assert_eq!(applied_count_after as u64, total_records);
 }
-
 #[test]
 fn apply_is_idempotent_across_replays() {
     let mut origin = populated();
@@ -307,14 +289,12 @@ fn apply_is_idempotent_across_replays() {
     replica.apply(apply_input(commits.clone())).unwrap();
     let first = state(&replica);
     let feed = export_all(&mut replica, "a");
-
     let replayed = replica.apply(apply_input(commits.clone())).unwrap();
     assert_eq!(replayed.records_applied, 0);
     assert_eq!(replayed.commits_applied, 0);
     assert_eq!(replayed.commits_skipped, commits.len() as u64);
     assert_eq!(state(&replica), first);
     assert_eq!(export_all(&mut replica, "a"), feed);
-
     let mut halves = commits.clone();
     let tail = halves.split_off(commits.len() / 2);
     let mut incremental = empty();
@@ -323,7 +303,6 @@ fn apply_is_idempotent_across_replays() {
     incremental.apply(apply_input(tail)).unwrap();
     assert_eq!(state(&incremental), first);
 }
-
 #[test]
 fn apply_is_order_independent_inside_a_commit() {
     let mut origin = populated();
@@ -340,7 +319,6 @@ fn apply_is_order_independent_inside_a_commit() {
     replica.apply(apply_input(reversed)).unwrap();
     assert_eq!(state(&replica), state(&origin));
 }
-
 #[test]
 fn apply_preserves_evidence_locators_exactly() {
     let mut origin = empty();
@@ -354,7 +332,6 @@ fn apply_preserves_evidence_locators_exactly() {
         table_rows(&replica, STATE_QUERIES[2]),
         table_rows(&origin, STATE_QUERIES[2])
     );
-
     let mut rewritten = commits;
     for record in rewritten.iter_mut().flat_map(|c| &mut c.records) {
         if let ExportRecord::Evidence(record) = record {
@@ -371,7 +348,6 @@ fn apply_preserves_evidence_locators_exactly() {
         table_rows(&origin, STATE_QUERIES[2])
     );
 }
-
 #[test]
 fn apply_rejects_dangling_references_without_partial_writes() {
     let mut origin = populated();
@@ -393,59 +369,49 @@ fn apply_rejects_dangling_references_without_partial_writes() {
     assert!(state(&replica).iter().all(|table| table.is_empty()));
     assert_eq!(export_all(&mut replica, "a").len(), 0);
 }
-
 #[test]
 fn apply_rejects_partial_commits_and_foreign_scope() {
     let mut origin = populated();
     let commits = export_all(&mut origin, "a");
     let mut replica = empty();
-
     let mut partial = commits.clone();
     partial[0].first_event_index = 1;
     assert!(
         matches!(replica.apply(apply_input(partial)).unwrap_err(), Error::Invalid(message) if message.contains("partial"))
     );
-
     let mut miscounted = commits.clone();
     miscounted[0].event_count += 1;
     assert!(
         matches!(replica.apply(apply_input(miscounted)).unwrap_err(), Error::Invalid(message) if message.contains("declares"))
     );
-
     let mut unordered = commits.clone();
     unordered.reverse();
     assert!(
         matches!(replica.apply(apply_input(unordered)).unwrap_err(), Error::Invalid(message) if message.contains("ascending"))
     );
-
     let mut foreign = apply_input(commits.clone());
     foreign.tenant_id = TenantId("b".into());
     assert!(
         matches!(replica.apply(foreign).unwrap_err(), Error::Invalid(message) if message.contains("scope"))
     );
-
     let mut stale = apply_input(commits.clone());
     stale.export_format = EXPORT_FORMAT_VERSION + 1;
     assert!(
         matches!(replica.apply(stale).unwrap_err(), Error::Invalid(message) if message.contains("export_format"))
     );
-
     let mut newer = apply_input(commits);
     newer.database_schema_version = Some(DATABASE_SCHEMA_VERSION + 1);
     assert!(
         matches!(replica.apply(newer).unwrap_err(), Error::Invalid(message) if message.contains("schema"))
     );
-
     assert!(state(&replica).iter().all(|table| table.is_empty()));
 }
-
 #[test]
 fn apply_rejects_contradictory_authored_content() {
     let mut origin = populated();
     let commits = export_all(&mut origin, "a");
     let mut replica = empty();
     replica.apply(apply_input(commits.clone())).unwrap();
-
     let mut rewritten = commits;
     for record in rewritten.iter_mut().flat_map(|c| &mut c.records) {
         if let ExportRecord::Source(record) = record {
@@ -456,7 +422,6 @@ fn apply_rejects_contradictory_authored_content() {
     assert!(matches!(error, Error::Invalid(message) if message.contains("conflicts")));
     assert_eq!(state(&replica), state(&origin));
 }
-
 #[test]
 fn applied_records_stay_searchable_and_repairable() {
     let mut origin = populated();
@@ -464,7 +429,6 @@ fn applied_records_stay_searchable_and_repairable() {
     let mut replica = empty();
     replica.apply(apply_input(commits)).unwrap();
     let (tenant_id, person_id) = scope();
-
     let pack = replica
         .search(SearchInput {
             tenant_id: tenant_id.clone(),
@@ -478,7 +442,6 @@ fn applied_records_stay_searchable_and_repairable() {
         .unwrap();
     assert!(!pack.items.is_empty());
     assert!(pack.items.iter().all(|item| !item.evidence_ids.is_empty()));
-
     let issues = replica
         .projection_issues(ProjectionAuditInput {
             tenant_id,
@@ -498,7 +461,6 @@ fn applied_records_stay_searchable_and_repairable() {
 #[test]
 fn test_record_identity_source() {
     use crate::store::apply::record_identity;
-
     let source_record = ExportRecord::Source(SourceRecord {
         source: Source {
             id: SourceId("src-1".into()),
@@ -516,17 +478,14 @@ fn test_record_identity_source() {
         origin_evidence_id: None,
         origin_claim_id: None,
     });
-
     assert_eq!(
         record_identity(&source_record),
         ("source", "src-1".to_string())
     );
 }
-
 #[test]
 fn test_record_identity_evidence() {
     use crate::store::apply::record_identity;
-
     let evidence_record = ExportRecord::Evidence(EvidenceRecord {
         evidence: Evidence {
             id: EvidenceId("ev-1".into()),
@@ -541,18 +500,15 @@ fn test_record_identity_evidence() {
         locator: None,
         deleted_at: None,
     });
-
     assert_eq!(
         record_identity(&evidence_record),
         ("evidence", "ev-1".to_string())
     );
 }
-
 #[test]
 fn test_record_identity_claim() {
     use crate::TimeRange;
     use crate::store::apply::record_identity;
-
     let claim_record = ExportRecord::Claim(Claim {
         id: ClaimId("claim-1".into()),
         tenant_id: TenantId("t".into()),
@@ -573,17 +529,14 @@ fn test_record_identity_claim() {
         tier: MemoryTier::LongTerm,
         processing_state: MemoryProcessingState::Processed,
     });
-
     assert_eq!(
         record_identity(&claim_record),
         ("claim", "claim-1".to_string())
     );
 }
-
 #[test]
 fn test_record_identity_claim_evidence() {
     use crate::store::apply::record_identity;
-
     let claim_evidence = ExportRecord::ClaimEvidence(ClaimEvidence {
         tenant_id: TenantId("t".into()),
         person_id: PersonId("p".into()),
@@ -592,17 +545,14 @@ fn test_record_identity_claim_evidence() {
         relation: EvidenceRelation::Supports,
         confidence_basis_points: 100,
     });
-
     assert_eq!(
         record_identity(&claim_evidence),
         ("claim_evidence", "claim-1/ev-1".to_string())
     );
 }
-
 #[test]
 fn test_record_identity_correction() {
     use crate::store::apply::record_identity;
-
     let correction = ExportRecord::Correction(CorrectionRecord {
         tenant_id: TenantId("t".into()),
         person_id: PersonId("p".into()),
@@ -613,17 +563,14 @@ fn test_record_identity_correction() {
         valid_at: 1,
         recorded_at: 1,
     });
-
     assert_eq!(
         record_identity(&correction),
         ("correction", "claim-0/claim-1".to_string())
     );
 }
-
 #[test]
 fn test_record_identity_profile() {
     use crate::store::apply::record_identity;
-
     let profile = ExportRecord::Profile(ProfileEntry {
         id: ProfileEntryId("prof-1".into()),
         tenant_id: TenantId("t".into()),
@@ -634,14 +581,11 @@ fn test_record_identity_profile() {
         claim_id: ClaimId("claim-1".into()),
         recorded_at: 1,
     });
-
     assert_eq!(record_identity(&profile), ("profile", "prof-1".to_string()));
 }
-
 #[test]
 fn test_record_identity_daily_review() {
     use crate::store::apply::record_identity;
-
     let daily_review = ExportRecord::DailyReview(DailyReview {
         id: DailyReviewId("rev-1".into()),
         tenant_id: TenantId("t".into()),
@@ -651,26 +595,36 @@ fn test_record_identity_daily_review() {
         evidence_ids: vec![],
         recorded_at: 1,
     });
-
     assert_eq!(
         record_identity(&daily_review),
         ("daily_review", "rev-1".to_string())
     );
 }
-
 #[test]
 fn test_record_identity_deletion() {
     use crate::store::apply::record_identity;
-
     let deletion = ExportRecord::Deletion(DeletionRecord {
         tenant_id: TenantId("t".into()),
         person_id: PersonId("p".into()),
         target: MemoryRef::Source(SourceId("src-1".into())),
         deleted_at: 1,
     });
-
     assert_eq!(
         record_identity(&deletion),
         ("deletion", "source:src-1".to_string())
     );
+}
+#[test]
+fn apply_rejects_empty_scope() {
+    let mut replica = empty();
+    // Test empty tenant_id
+    let mut empty_tenant = apply_input(vec![]);
+    empty_tenant.tenant_id = TenantId("".into());
+    let error = replica.apply(empty_tenant).unwrap_err();
+    assert!(matches!(error, Error::Invalid(msg) if msg.contains("tenant_id must not be empty")));
+    // Test empty person_id
+    let mut empty_person = apply_input(vec![]);
+    empty_person.person_id = PersonId("".into());
+    let error = replica.apply(empty_person).unwrap_err();
+    assert!(matches!(error, Error::Invalid(msg) if msg.contains("person_id must not be empty")));
 }
