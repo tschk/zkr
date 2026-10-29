@@ -299,82 +299,10 @@ impl MemoryDb {
         require_text("value", &input.value)?;
 
         let transaction = self.connection.transaction()?;
-
-        let (removed_profiles, old_claim, stale_evidence_ids) = find_correction_targets(
-            &transaction,
-            &input.tenant_id,
-            &input.person_id,
-            &input.claim_id,
-        )?;
-
-        validate_correction_time(
-            input.valid_at,
-            input.recorded_at,
-            old_claim.valid_from,
-            old_claim.recorded_from,
-        )?;
-
-        let (source_id, evidence_id) = insert_correction_source_and_evidence(
-            &transaction,
-            &input.tenant_id,
-            &input.person_id,
-            &input.text,
-            input.valid_at,
-            input.recorded_at,
-        )?;
-
-        supersede_stale_claim(
-            &transaction,
-            &input.tenant_id,
-            &input.person_id,
-            &input.claim_id,
-            &stale_evidence_ids,
-            input.valid_at,
-            input.recorded_at,
-        )?;
-
-        let (claim_id, correction) = apply_correction_claim(
-            &transaction,
-            &input.tenant_id,
-            &input.person_id,
-            &input.claim_id,
-            &old_claim,
-            &input.value,
-            input.valid_at,
-            input.recorded_at,
-            &source_id,
-            &evidence_id,
-        )?;
-
-        let records = build_correction_records(
-            &transaction,
-            &input.tenant_id,
-            &input.person_id,
-            &input.claim_id,
-            &source_id,
-            &evidence_id,
-            &claim_id,
-            correction,
-            removed_profiles,
-            input.recorded_at,
-        )?;
-
-        append_commit(
-            &transaction,
-            &input.tenant_id,
-            &input.person_id,
-            input.recorded_at,
-            records,
-        )?;
-
+        let corrected = execute_correction(&transaction, &input)?;
         transaction.commit()?;
 
-        Ok(Corrected {
-            source_id,
-            evidence_id,
-            claim_id,
-            superseded_claim_id: input.claim_id,
-        })
+        Ok(corrected)
     }
     pub fn delete_source(&mut self, input: DeleteInput) -> Result<Deleted> {
         require_scope(&input.tenant_id, &input.person_id)?;
@@ -1459,4 +1387,83 @@ fn render_profile_pager(generated_at: Timestamp, entries: &[ProfileEntry]) -> St
         ));
     }
     markdown
+}
+
+fn execute_correction(
+    transaction: &rusqlite::Transaction<'_>,
+    input: &CorrectInput,
+) -> Result<Corrected> {
+    let (removed_profiles, old_claim, stale_evidence_ids) = find_correction_targets(
+        transaction,
+        &input.tenant_id,
+        &input.person_id,
+        &input.claim_id,
+    )?;
+
+    validate_correction_time(
+        input.valid_at,
+        input.recorded_at,
+        old_claim.valid_from,
+        old_claim.recorded_from,
+    )?;
+
+    let (source_id, evidence_id) = insert_correction_source_and_evidence(
+        transaction,
+        &input.tenant_id,
+        &input.person_id,
+        &input.text,
+        input.valid_at,
+        input.recorded_at,
+    )?;
+
+    supersede_stale_claim(
+        transaction,
+        &input.tenant_id,
+        &input.person_id,
+        &input.claim_id,
+        &stale_evidence_ids,
+        input.valid_at,
+        input.recorded_at,
+    )?;
+
+    let (claim_id, correction) = apply_correction_claim(
+        transaction,
+        &input.tenant_id,
+        &input.person_id,
+        &input.claim_id,
+        &old_claim,
+        &input.value,
+        input.valid_at,
+        input.recorded_at,
+        &source_id,
+        &evidence_id,
+    )?;
+
+    let records = build_correction_records(
+        transaction,
+        &input.tenant_id,
+        &input.person_id,
+        &input.claim_id,
+        &source_id,
+        &evidence_id,
+        &claim_id,
+        correction,
+        removed_profiles,
+        input.recorded_at,
+    )?;
+
+    append_commit(
+        transaction,
+        &input.tenant_id,
+        &input.person_id,
+        input.recorded_at,
+        records,
+    )?;
+
+    Ok(Corrected {
+        source_id,
+        evidence_id,
+        claim_id,
+        superseded_claim_id: input.claim_id.clone(),
+    })
 }
