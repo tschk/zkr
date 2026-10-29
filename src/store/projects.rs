@@ -1658,7 +1658,6 @@ mod tests {
         assert_eq!(fallback_short, expected_fallback);
     }
 
-
     #[test]
     fn test_auto_vectorize_unicode_characters() {
         // Test strings with Unicode characters (non-ASCII)
