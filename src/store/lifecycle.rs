@@ -395,31 +395,11 @@ impl MemoryDb {
             input.deleted_at,
         )?;
 
-        let evidence_count = soft_delete_source_and_evidence(
+        let (evidence_count, claim_count, changed_claim_ids) = apply_deletion_mutations(
             &transaction,
-            &input.tenant_id,
-            &input.person_id,
-            &input.source_id,
+            &input,
             &evidence_ids,
-            input.deleted_at,
-        )?;
-
-        let (claim_count, changed_claim_ids) = retract_claims(
-            &transaction,
-            &input.tenant_id,
-            &input.person_id,
-            &input.source_id,
             &candidate_claim_ids,
-            input.deleted_at,
-        )?;
-
-        enqueue_deletion_repairs(&transaction, &input, &evidence_ids, &changed_claim_ids)?;
-
-        delete_dependent_projections(
-            &transaction,
-            &input.tenant_id,
-            &input.person_id,
-            &input.source_id,
         )?;
 
         let records = build_deletion_records(
@@ -1459,4 +1439,40 @@ fn render_profile_pager(generated_at: Timestamp, entries: &[ProfileEntry]) -> St
         ));
     }
     markdown
+}
+
+fn apply_deletion_mutations(
+    transaction: &rusqlite::Transaction<'_>,
+    input: &DeleteInput,
+    evidence_ids: &[EvidenceId],
+    candidate_claim_ids: &[ClaimId],
+) -> Result<(u64, u64, Vec<ClaimId>)> {
+    let evidence_count = soft_delete_source_and_evidence(
+        transaction,
+        &input.tenant_id,
+        &input.person_id,
+        &input.source_id,
+        evidence_ids,
+        input.deleted_at,
+    )?;
+
+    let (claim_count, changed_claim_ids) = retract_claims(
+        transaction,
+        &input.tenant_id,
+        &input.person_id,
+        &input.source_id,
+        candidate_claim_ids,
+        input.deleted_at,
+    )?;
+
+    enqueue_deletion_repairs(transaction, input, evidence_ids, &changed_claim_ids)?;
+
+    delete_dependent_projections(
+        transaction,
+        &input.tenant_id,
+        &input.person_id,
+        &input.source_id,
+    )?;
+
+    Ok((evidence_count, claim_count, changed_claim_ids))
 }
