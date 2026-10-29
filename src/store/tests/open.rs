@@ -20,9 +20,14 @@ fn open_fails_on_migration_error() {
     let result = MemoryDb::open(&db_path);
     assert!(result.is_err());
 
-    if let Err(Error::Invalid(msg)) = result {
-        assert!(msg.contains("is newer than supported version"), "Expected version error, got: {}", msg);
-    } else {
-        panic!("Expected Error::Invalid, got: {:?}", result.err());
+    match result {
+        Err(Error::Invalid(msg)) => {
+            assert!(
+                msg.contains("is newer than supported version"),
+                "Expected version error, got: {}",
+                msg
+            );
+        }
+        _ => panic!("Expected Error::Invalid, got: {:?}", result.err()),
     }
 }
