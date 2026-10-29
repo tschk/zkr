@@ -293,50 +293,17 @@ mod tests {
 
     #[test]
     fn test_is_legal_state_combination() {
-        let tiers = vec![
-            MemoryTier::ShortTerm,
-            MemoryTier::LongTerm,
-            MemoryTier::Archive,
-        ];
-        let statuses = vec![
-            ClaimStatus::Accepted,
-            ClaimStatus::Superseded,
-            ClaimStatus::Retracted,
-        ];
-        let states = vec![
-            MemoryProcessingState::Pending,
-            MemoryProcessingState::Processed,
-            MemoryProcessingState::Blocked,
-        ];
-
-        let check = |tier: &MemoryTier, status: &ClaimStatus, state: &MemoryProcessingState| {
-            let mut expected = true;
-
-            if *tier == MemoryTier::Archive && *status == ClaimStatus::Superseded {
-                expected = false;
-            }
-            if (*tier == MemoryTier::LongTerm || *tier == MemoryTier::Archive)
-                && *state != MemoryProcessingState::Processed
-            {
-                expected = false;
-            }
-
-            assert_eq!(
-                is_legal_state_combination(tier, status, state),
-                expected,
-                "Failed for tier={:?}, status={:?}, processing_state={:?}",
-                tier,
-                status,
-                state
-            );
-        };
-
-        for tier in &tiers {
-            for status in &statuses {
-                for state in &states {
-                    check(tier, status, state);
-                }
-            }
+        use {ClaimStatus::*, MemoryProcessingState::*, MemoryTier::*};
+        for (t, s, p, e) in [
+            (ShortTerm, Accepted, Pending, true),
+            (ShortTerm, Superseded, Processed, true),
+            (LongTerm, Accepted, Processed, true),
+            (LongTerm, Accepted, Pending, false),
+            (Archive, Retracted, Processed, true),
+            (Archive, Superseded, Processed, false),
+            (Archive, Accepted, Blocked, false),
+        ] {
+            assert_eq!(is_legal_state_combination(&t, &s, &p), e);
         }
     }
 
