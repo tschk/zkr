@@ -38,7 +38,39 @@ pub struct InlineEmbedding {
 
 /// Deterministic, zero-dependency L2-normalized semantic feature-hashing vectorizer
 /// over word tokens, token bigrams, and character n-grams.
-pub fn auto_vectorize(text: &str) -> Vec<f32> {
+const STOPWORDS: &[&str] = &[
+    "zkr",
+    "project",
+    "record",
+    "record_type",
+    "type",
+    "fields",
+    "connections",
+    "relation",
+    "target",
+    "categories",
+    "weight_basis_points",
+    "the",
+    "and",
+    "for",
+    "with",
+    "into",
+    "from",
+    "that",
+    "this",
+    "are",
+    "was",
+];
+
+fn extract_words(text: &str) -> Vec<String> {
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| s.len() >= 2 && !STOPWORDS.contains(s))
+        .map(str::to_owned)
+        .collect()
+}
+
+fn accumulate_features(words: &[String]) -> [f64; AUTO_EMBEDDING_DIM] {
     let mut accum = [0.0_f64; AUTO_EMBEDDING_DIM];
     let mut add_feature = |feature: &str, weight: f64| {
         let digest = Sha256::digest(feature.as_bytes());
@@ -48,38 +80,7 @@ pub fn auto_vectorize(text: &str) -> Vec<f32> {
         accum[idx2] += weight * 0.5;
     };
 
-    const STOPWORDS: &[&str] = &[
-        "zkr",
-        "project",
-        "record",
-        "record_type",
-        "type",
-        "fields",
-        "connections",
-        "relation",
-        "target",
-        "categories",
-        "weight_basis_points",
-        "the",
-        "and",
-        "for",
-        "with",
-        "into",
-        "from",
-        "that",
-        "this",
-        "are",
-        "was",
-    ];
-
-    let words: Vec<String> = text
-        .to_lowercase()
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|s| s.len() >= 2 && !STOPWORDS.contains(s))
-        .map(str::to_owned)
-        .collect();
-
-    for word in &words {
+    for word in words {
         add_feature(&format!("w:{word}"), 3.0);
         let chars: Vec<char> = word.chars().collect();
         if chars.len() >= 4 {
@@ -100,7 +101,10 @@ pub fn auto_vectorize(text: &str) -> Vec<f32> {
     for pair in words.windows(2) {
         add_feature(&format!("b:{} {}", pair[0], pair[1]), 1.5);
     }
+    accum
+}
 
+fn normalize_vector(accum: [f64; AUTO_EMBEDDING_DIM]) -> Vec<f32> {
     let norm = accum.iter().map(|v| v * v).sum::<f64>().sqrt();
     if norm > 1e-9 {
         accum.into_iter().map(|v| (v / norm) as f32).collect()
@@ -109,6 +113,12 @@ pub fn auto_vectorize(text: &str) -> Vec<f32> {
         fallback[0] = 1.0;
         fallback
     }
+}
+
+pub fn auto_vectorize(text: &str) -> Vec<f32> {
+    let words = extract_words(text);
+    let accum = accumulate_features(&words);
+    normalize_vector(accum)
 }
 
 /// Categorize a cited fact or task across one or more categories without introducing a second memory lifecycle.
