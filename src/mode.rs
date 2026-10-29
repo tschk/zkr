@@ -35,13 +35,19 @@ pub struct MemoryPreset {
 
 impl MemoryMode {
     pub fn preset(self) -> MemoryPreset {
-        let (scope, default_tier, retrieval_limit, max_retrieval_limit, profile_memory) =
-            match self {
-                Self::Coding => (ScopeBoundary::Workspace, MemoryTier::LongTerm, 10, 20, false),
-                Self::Personal => (ScopeBoundary::Person, MemoryTier::LongTerm, 10, 20, true),
-                Self::Research => (ScopeBoundary::Project, MemoryTier::LongTerm, 20, 50, false),
-                Self::Agent => (ScopeBoundary::Agent, MemoryTier::ShortTerm, 8, 20, false),
-            };
+        let (scope, default_tier, retrieval_limit, max_retrieval_limit, profile_memory) = match self
+        {
+            Self::Coding => (
+                ScopeBoundary::Workspace,
+                MemoryTier::LongTerm,
+                10,
+                20,
+                false,
+            ),
+            Self::Personal => (ScopeBoundary::Person, MemoryTier::LongTerm, 10, 20, true),
+            Self::Research => (ScopeBoundary::Project, MemoryTier::LongTerm, 20, 50, false),
+            Self::Agent => (ScopeBoundary::Agent, MemoryTier::ShortTerm, 8, 20, false),
+        };
 
         MemoryPreset {
             mode: self,
