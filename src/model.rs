@@ -247,14 +247,16 @@ pub fn is_legal_state_combination(
 ) -> bool {
     match tier {
         MemoryTier::ShortTerm => {
-            matches!(status, ClaimStatus::Accepted) &&
-            matches!(processing_state, MemoryProcessingState::Pending | MemoryProcessingState::Processed)
+            matches!(status, ClaimStatus::Accepted)
+                && matches!(
+                    processing_state,
+                    MemoryProcessingState::Pending | MemoryProcessingState::Processed
+                )
         }
-        MemoryTier::LongTerm => {
-            *processing_state == MemoryProcessingState::Processed
-        }
+        MemoryTier::LongTerm => *processing_state == MemoryProcessingState::Processed,
         MemoryTier::Archive => {
-            *status != ClaimStatus::Superseded && *processing_state == MemoryProcessingState::Processed
+            *status != ClaimStatus::Superseded
+                && *processing_state == MemoryProcessingState::Processed
         }
     }
 }
