@@ -1471,6 +1471,7 @@ fn fetch_profile_claim(
         .map_err(Into::into)
 }
 
+#[allow(clippy::type_complexity)]
 fn fetch_existing_profile_entry(
     transaction: &rusqlite::Transaction,
     tenant_id: &crate::TenantId,
