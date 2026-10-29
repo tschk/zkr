@@ -55,44 +55,10 @@ impl MemoryDb {
         children.sort_by_key(|summary| summary.start_sequence);
         let left = &children[0];
         let right = &children[1];
-        if left.level != right.level
-            || left.end_sequence.checked_add(1) != Some(right.start_sequence)
-            || left.start_sequence % (1_u64 << (left.level + 1)) != 0
-        {
-            return Err(Error::Invalid(
-                "merge children must be adjacent aligned summaries at the same level".to_owned(),
-            ));
-        }
-        if input.recorded_at < left.recorded_at.max(right.recorded_at) {
-            return Err(Error::Invalid(
-                "merge recorded_at cannot predate its children".to_owned(),
-            ));
-        }
-        let placeholders = (3..3 + children.len())
-            .map(|index| format!("?{index}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let query = format!(
-            "SELECT EXISTS(SELECT 1 FROM summary_nodes parent JOIN json_each(parent.child_ids) child_id WHERE parent.tenant_id = ?1 AND parent.person_id = ?2 AND parent.stale_at IS NULL AND child_id.value IN ({}))",
-            placeholders
-        );
-        let mut query_params: Vec<&dyn rusqlite::ToSql> =
-            vec![&input.tenant_id.0, &input.person_id.0];
-        query_params.extend(
-            children
-                .iter()
-                .map(|child| &child.id.0 as &dyn rusqlite::ToSql),
-        );
 
-        let has_parent: bool =
-            transaction.query_row(&query, rusqlite::params_from_iter(query_params), |row| {
-                row.get(0)
-            })?;
-        if has_parent {
-            return Err(Error::Invalid(
-                "summary child already has a live parent".to_owned(),
-            ));
-        }
+        validate_merge_adjacency(left, right, input.recorded_at)?;
+        check_unparented(&transaction, &input.tenant_id, &input.person_id, &children)?;
+
         let evidence_ids = unique_evidence(&children);
         let child_ids = children
             .iter()
@@ -276,6 +242,60 @@ pub(super) fn stale_summary_count(
         |row| row.get(0),
     )
     .map_err(Error::from)
+}
+
+fn validate_merge_adjacency(
+    left: &MemorySummary,
+    right: &MemorySummary,
+    recorded_at: Timestamp,
+) -> Result<()> {
+    if left.level != right.level
+        || left.end_sequence.checked_add(1) != Some(right.start_sequence)
+        || left.start_sequence % (1_u64 << (left.level + 1)) != 0
+    {
+        return Err(Error::Invalid(
+            "merge children must be adjacent aligned summaries at the same level".to_owned(),
+        ));
+    }
+    if recorded_at < left.recorded_at.max(right.recorded_at) {
+        return Err(Error::Invalid(
+            "merge recorded_at cannot predate its children".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn check_unparented(
+    transaction: &Transaction<'_>,
+    tenant_id: &TenantId,
+    person_id: &PersonId,
+    children: &[MemorySummary],
+) -> Result<()> {
+    let placeholders = (3..3 + children.len())
+        .map(|index| format!("?{index}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let query = format!(
+        "SELECT EXISTS(SELECT 1 FROM summary_nodes parent JOIN json_each(parent.child_ids) child_id WHERE parent.tenant_id = ?1 AND parent.person_id = ?2 AND parent.stale_at IS NULL AND child_id.value IN ({}))",
+        placeholders
+    );
+    let mut query_params: Vec<&dyn rusqlite::ToSql> = vec![&tenant_id.0, &person_id.0];
+    query_params.extend(
+        children
+            .iter()
+            .map(|child| &child.id.0 as &dyn rusqlite::ToSql),
+    );
+
+    let has_parent: bool =
+        transaction.query_row(&query, rusqlite::params_from_iter(query_params), |row| {
+            row.get(0)
+        })?;
+    if has_parent {
+        return Err(Error::Invalid(
+            "summary child already has a live parent".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_evidence(
