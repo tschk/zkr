@@ -674,3 +674,22 @@ fn test_record_identity_deletion() {
         ("deletion", "source:src-1".to_string())
     );
 }
+
+#[test]
+fn apply_rejects_empty_ids() {
+    let mut origin = populated();
+    let commits = export_all(&mut origin, "a");
+    let mut replica = empty();
+
+    let mut no_tenant = apply_input(commits.clone());
+    no_tenant.tenant_id = TenantId("".into());
+    assert!(
+        matches!(replica.apply(no_tenant).unwrap_err(), Error::Invalid(message) if message.contains("tenant_id"))
+    );
+
+    let mut no_person = apply_input(commits);
+    no_person.person_id = PersonId("".into());
+    assert!(
+        matches!(replica.apply(no_person).unwrap_err(), Error::Invalid(message) if message.contains("person_id"))
+    );
+}
