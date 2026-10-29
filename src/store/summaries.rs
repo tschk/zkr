@@ -146,25 +146,19 @@ impl MemoryDb {
                     "parent rebuild derives citations from its children".to_owned(),
                 ));
             }
-            let children = stale
-                .child_ids
-                .iter()
-                .map(|child_id| {
-                    let child = summary_any(&transaction, &input.tenant_id, &input.person_id, child_id)?;
-                    transaction
-                        .query_row(
-                            "SELECT id FROM summary_nodes WHERE tenant_id = ?1 AND person_id = ?2 AND start_sequence = ?3 AND end_sequence = ?4 AND level = ?5 AND stale_at IS NULL",
-                            params![input.tenant_id.0, input.person_id.0, child.start_sequence, child.end_sequence, child.level],
-                            |row| row.get::<_, String>(0).map(SummaryId),
-                        )
-                        .optional()?
-                        .ok_or(Error::NotFound)
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let children = children
-                .iter()
-                .map(|id| live_summary(&transaction, &input.tenant_id, &input.person_id, id))
-                .collect::<Result<Vec<_>>>()?;
+            let child_ids_json = serde_json::to_string(&stale.child_ids)
+                .map_err(|_| Error::Invalid("failed to serialize child ids".to_owned()))?;
+            let mut statement = transaction.prepare(
+                "SELECT live.id, live.summary, live.evidence_ids, live.child_ids, live.start_sequence, live.end_sequence, live.level, live.recorded_at FROM summary_nodes parent JOIN json_each(?3) child_id ON parent.id = child_id.value JOIN summary_nodes live ON live.tenant_id = parent.tenant_id AND live.person_id = parent.person_id AND live.start_sequence = parent.start_sequence AND live.end_sequence = parent.end_sequence AND live.level = parent.level AND live.stale_at IS NULL WHERE parent.tenant_id = ?1 AND parent.person_id = ?2 ORDER BY CAST(child_id.key AS INTEGER)"
+            )?;
+            let rows = statement.query_map(
+                params![input.tenant_id.0, input.person_id.0, child_ids_json],
+                |row| summary_from_row_at(SummaryId(row.get(0)?), row, 1),
+            )?;
+            let children = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+            if children.len() != stale.child_ids.len() {
+                return Err(Error::NotFound);
+            }
             (
                 unique_evidence(&children),
                 children.into_iter().map(|child| child.id).collect(),
@@ -460,15 +454,6 @@ fn stale_summary(
     } else {
         Err(Error::Invalid("summary is not stale".to_owned()))
     }
-}
-
-fn summary_any(
-    transaction: &Transaction<'_>,
-    tenant_id: &TenantId,
-    person_id: &PersonId,
-    id: &SummaryId,
-) -> Result<MemorySummary> {
-    summary_row(transaction, tenant_id, person_id, id, false)
 }
 
 fn summary_row(
