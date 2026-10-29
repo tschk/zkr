@@ -302,12 +302,12 @@ mod tests {
         for tier in [&ShortTerm, &LongTerm, &Archive] {
             for status in [&Accepted, &Superseded, &Retracted] {
                 for state in [&Pending, &Processed, &Blocked] {
-                    let expected = match (tier, status, state) {
-                        (&ShortTerm, &Accepted, &Pending | &Processed) => true,
-                        (&LongTerm, _, &Processed) => true,
-                        (&Archive, &Accepted | &Retracted, &Processed) => true,
-                        _ => false,
-                    };
+                    let expected = matches!(
+                        (tier, status, state),
+                        (&ShortTerm, &Accepted, &Pending | &Processed)
+                            | (&LongTerm, _, &Processed)
+                            | (&Archive, &Accepted | &Retracted, &Processed)
+                    );
                     assert_eq!(is_legal_state_combination(tier, status, state), expected);
                 }
             }
