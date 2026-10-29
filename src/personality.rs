@@ -639,6 +639,16 @@ impl Personality {
         Ok(())
     }
 
+
+    fn has_recent_followup_message(&self, te: &ConversationEvent) -> bool {
+        self.recent_events.iter().any(|e| {
+            e.epoch > te.epoch
+                && e.participant == te.participant
+                && e.event_kind == "message"
+                && e.epoch <= te.epoch + 5
+        })
+    }
+
     /// Compute a signal summary for a participant across all recent events.
     pub fn signal_summary(&self, participant: &str) -> SignalSummary {
         let events: Vec<&ConversationEvent> = self
@@ -676,14 +686,7 @@ impl Personality {
         let typing_without_send = events
             .iter()
             .filter(|e| e.event_kind == "typing")
-            .filter(|te| {
-                !self.recent_events.iter().any(|e| {
-                    e.epoch > te.epoch
-                        && e.participant == te.participant
-                        && e.event_kind == "message"
-                        && e.epoch <= te.epoch + 5
-                })
-            })
+            .filter(|te| !self.has_recent_followup_message(te))
             .count() as u64;
 
         // Reaction count.
