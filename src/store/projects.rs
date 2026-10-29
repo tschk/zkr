@@ -1674,7 +1674,6 @@ mod tests {
         assert!((norm_long - 1.0).abs() < 1e-6);
     }
 
-
     #[test]
     fn remember_project_record_merges_categories_and_requires_claim() {
         let mut db = MemoryDb::open(":memory:").unwrap();
