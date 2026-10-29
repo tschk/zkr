@@ -292,6 +292,24 @@ pub(super) fn embedding_target(kind: &str, id: &str) -> Result<EmbeddingTarget> 
     })
 }
 
+
+pub(super) fn current_target_revision_and_text(
+    target_kind: &str,
+    s_rev: Option<i64>,
+    s_content: Option<String>,
+    e_rev: Option<i64>,
+    e_quote: Option<String>,
+    c_rev: Option<i64>,
+    c_value: Option<String>,
+) -> Option<(i64, String)> {
+    match target_kind {
+        "source" => s_rev.zip(s_content),
+        "evidence" => e_rev.zip(e_quote),
+        "claim" => c_rev.zip(c_value),
+        _ => None,
+    }
+}
+
 impl MemoryDb {
     pub(super) fn dense_claims(
         &self,
@@ -361,29 +379,10 @@ impl MemoryDb {
                 c_value,
             ) = row?;
 
-            let (current_target_revision, text) = match target_kind.as_str() {
-                "source" => {
-                    if let (Some(r), Some(t)) = (s_rev, s_content) {
-                        (r, t)
-                    } else {
-                        continue;
-                    }
-                }
-                "evidence" => {
-                    if let (Some(r), Some(t)) = (e_rev, e_quote) {
-                        (r, t)
-                    } else {
-                        continue;
-                    }
-                }
-                "claim" => {
-                    if let (Some(r), Some(t)) = (c_rev, c_value) {
-                        (r, t)
-                    } else {
-                        continue;
-                    }
-                }
-                _ => continue,
+            let Some((current_target_revision, text)) = current_target_revision_and_text(
+                &target_kind, s_rev, s_content, e_rev, e_quote, c_rev, c_value,
+            ) else {
+                continue;
             };
 
             if current_target_revision != stored_target_revision
