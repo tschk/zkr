@@ -1608,6 +1608,24 @@ mod tests {
         assert_eq!(stopwords_vec, empty_vec);
     }
 
+    #[test]
+    fn test_auto_vectorize_edge_cases() {
+        // Test Unicode / Emojis
+        let unicode_text = "こんにちは世界 emojis 🌍 🦀";
+        let v_unicode = auto_vectorize(unicode_text);
+        assert_eq!(v_unicode.len(), AUTO_EMBEDDING_DIM);
+        let norm_unicode = v_unicode.iter().map(|v| v * v).sum::<f32>().sqrt();
+        assert!((norm_unicode - 1.0).abs() < 1e-5);
+
+        // Test Very Long String
+        let long_text = "word ".repeat(1000);
+        let v_long = auto_vectorize(&long_text);
+        assert_eq!(v_long.len(), AUTO_EMBEDDING_DIM);
+        let norm_long = v_long.iter().map(|v| v * v).sum::<f32>().sqrt();
+        assert!((norm_long - 1.0).abs() < 1e-5);
+    }
+
+
     use serde_json::json;
 
     fn memory(project: &str, category: &str, person: &str, value: &str) -> ProjectMemoryInput {
