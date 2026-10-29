@@ -650,21 +650,7 @@ impl MemoryDb {
     pub fn store_profile(&mut self, input: ProfileInput) -> Result<ProfileEntry> {
         require_scope(&input.tenant_id, &input.person_id)?;
         let transaction = self.connection.transaction()?;
-        let claim = transaction
-            .query_row(
-            "SELECT predicate, value, recorded_from FROM claims WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND kind = 'profile_fact' AND status = 'accepted' AND valid_until IS NULL AND recorded_until IS NULL",
-            params![input.claim_id.0, input.tenant_id.0, input.person_id.0],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Timestamp>(2)?)),
-        )
-            .optional()?;
-        let Some((key, value, claim_recorded_at)) = claim else {
-            return Err(Error::NotFound);
-        };
-        if input.recorded_at < claim_recorded_at {
-            return Err(Error::Invalid(
-                "profile entry cannot predate its backing claim".to_owned(),
-            ));
-        }
+        let (key, value) = resolve_profile_claim(&transaction, &input)?;
         let existing = transaction
             .query_row(
                 "SELECT id, value, stability, claim_id, recorded_at FROM profile_entries WHERE tenant_id = ?1 AND person_id = ?2 AND key = ?3",
@@ -673,15 +659,11 @@ impl MemoryDb {
             )
             .optional()?;
         let stability = serde_json::to_string(&input.stability)?;
-        if let Some((id, stored_value, stored_stability, stored_claim_id, stored_at)) = &existing {
-            if stored_value == &value
-                && stored_stability == &stability
-                && stored_claim_id == &input.claim_id.0
-                && *stored_at == input.recorded_at
-            {
+        if let Some(existing_record) = &existing {
+            if check_profile_unchanged(existing_record, &input, &value, &stability)? {
                 transaction.commit()?;
                 return Ok(ProfileEntry {
-                    id: ProfileEntryId(id.clone()),
+                    id: ProfileEntryId(existing_record.0.clone()),
                     tenant_id: input.tenant_id,
                     person_id: input.person_id,
                     key,
@@ -691,16 +673,11 @@ impl MemoryDb {
                     recorded_at: input.recorded_at,
                 });
             }
-            if input.recorded_at <= *stored_at {
-                return Err(Error::Invalid(
-                    "profile replacement must advance recorded_at".to_owned(),
-                ));
-            }
         }
         let profile = ProfileEntry {
             id: existing
                 .as_ref()
-                .map(|existing| ProfileEntryId(existing.0.clone()))
+                .map(|existing_record| ProfileEntryId(existing_record.0.clone()))
                 .unwrap_or(ProfileEntryId(new_id(&transaction)?)),
             tenant_id: input.tenant_id,
             person_id: input.person_id,
@@ -1459,4 +1436,51 @@ fn render_profile_pager(generated_at: Timestamp, entries: &[ProfileEntry]) -> St
         ));
     }
     markdown
+}
+
+
+type StoredProfile = (String, String, String, String, Timestamp);
+
+fn resolve_profile_claim(
+    transaction: &rusqlite::Transaction<'_>,
+    input: &ProfileInput,
+) -> Result<(String, String)> {
+    let claim = transaction
+        .query_row(
+            "SELECT predicate, value, recorded_from FROM claims WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND kind = 'profile_fact' AND status = 'accepted' AND valid_until IS NULL AND recorded_until IS NULL",
+            params![input.claim_id.0, input.tenant_id.0, input.person_id.0],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Timestamp>(2)?)),
+        )
+        .optional()?;
+    let Some((key, value, claim_recorded_at)) = claim else {
+        return Err(Error::NotFound);
+    };
+    if input.recorded_at < claim_recorded_at {
+        return Err(Error::Invalid(
+            "profile entry cannot predate its backing claim".to_owned(),
+        ));
+    }
+    Ok((key, value))
+}
+
+fn check_profile_unchanged(
+    existing: &StoredProfile,
+    input: &ProfileInput,
+    value: &str,
+    stability: &str,
+) -> Result<bool> {
+    let (_, stored_value, stored_stability, stored_claim_id, stored_at) = existing;
+    if stored_value == value
+        && stored_stability == stability
+        && stored_claim_id == &input.claim_id.0
+        && *stored_at == input.recorded_at
+    {
+        return Ok(true);
+    }
+    if input.recorded_at <= *stored_at {
+        return Err(Error::Invalid(
+            "profile replacement must advance recorded_at".to_owned(),
+        ));
+    }
+    Ok(false)
 }
