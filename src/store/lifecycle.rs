@@ -1394,7 +1394,7 @@ fn execute_correction(
     input: &CorrectInput,
 ) -> Result<Corrected> {
     let (removed_profiles, old_claim, stale_evidence_ids) = find_correction_targets(
-        &transaction,
+        transaction,
         &input.tenant_id,
         &input.person_id,
         &input.claim_id,
@@ -1408,7 +1408,7 @@ fn execute_correction(
     )?;
 
     let (source_id, evidence_id) = insert_correction_source_and_evidence(
-        &transaction,
+        transaction,
         &input.tenant_id,
         &input.person_id,
         &input.text,
@@ -1417,7 +1417,7 @@ fn execute_correction(
     )?;
 
     supersede_stale_claim(
-        &transaction,
+        transaction,
         &input.tenant_id,
         &input.person_id,
         &input.claim_id,
@@ -1427,7 +1427,7 @@ fn execute_correction(
     )?;
 
     let (claim_id, correction) = apply_correction_claim(
-        &transaction,
+        transaction,
         &input.tenant_id,
         &input.person_id,
         &input.claim_id,
@@ -1440,7 +1440,7 @@ fn execute_correction(
     )?;
 
     let records = build_correction_records(
-        &transaction,
+        transaction,
         &input.tenant_id,
         &input.person_id,
         &input.claim_id,
@@ -1453,7 +1453,7 @@ fn execute_correction(
     )?;
 
     append_commit(
-        &transaction,
+        transaction,
         &input.tenant_id,
         &input.person_id,
         input.recorded_at,
