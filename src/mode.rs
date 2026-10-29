@@ -35,78 +35,88 @@ pub struct MemoryPreset {
 
 impl MemoryMode {
     pub fn preset(self) -> MemoryPreset {
-        let (
-            scope,
-            default_tier,
-            retrieval_limit,
-            max_retrieval_limit,
-            profile_memory,
-            allowed_source_kinds,
-        ) = match self {
-            Self::Coding => (
-                ScopeBoundary::Workspace,
-                MemoryTier::LongTerm,
-                10,
-                20,
-                false,
-                vec![
-                    SourceKind::Conversation,
-                    SourceKind::Document,
-                    SourceKind::Integration,
-                    SourceKind::UserCorrection,
-                ],
-            ),
-            Self::Personal => (
-                ScopeBoundary::Person,
-                MemoryTier::LongTerm,
-                10,
-                20,
-                true,
-                vec![
-                    SourceKind::Conversation,
-                    SourceKind::Screen,
-                    SourceKind::Audio,
-                    SourceKind::Document,
-                    SourceKind::Integration,
-                    SourceKind::UserCorrection,
-                ],
-            ),
-            Self::Research => (
-                ScopeBoundary::Project,
-                MemoryTier::LongTerm,
-                20,
-                50,
-                false,
-                vec![
-                    SourceKind::Conversation,
-                    SourceKind::Document,
-                    SourceKind::Integration,
-                    SourceKind::UserCorrection,
-                ],
-            ),
-            Self::Agent => (
-                ScopeBoundary::Agent,
-                MemoryTier::ShortTerm,
-                8,
-                20,
-                false,
-                vec![
-                    SourceKind::Conversation,
-                    SourceKind::Integration,
-                    SourceKind::UserCorrection,
-                ],
-            ),
-        };
+        match self {
+            Self::Coding => Self::coding_preset(),
+            Self::Personal => Self::personal_preset(),
+            Self::Research => Self::research_preset(),
+            Self::Agent => Self::agent_preset(),
+        }
+    }
+
+    fn coding_preset() -> MemoryPreset {
         MemoryPreset {
-            mode: self,
-            scope,
-            default_tier,
-            retrieval_limit,
-            max_retrieval_limit,
+            mode: Self::Coding,
+            scope: ScopeBoundary::Workspace,
+            default_tier: MemoryTier::LongTerm,
+            retrieval_limit: 10,
+            max_retrieval_limit: 20,
             citations_required: true,
             scope_isolated: true,
-            profile_memory,
-            allowed_source_kinds,
+            profile_memory: false,
+            allowed_source_kinds: vec![
+                SourceKind::Conversation,
+                SourceKind::Document,
+                SourceKind::Integration,
+                SourceKind::UserCorrection,
+            ],
+        }
+    }
+
+    fn personal_preset() -> MemoryPreset {
+        MemoryPreset {
+            mode: Self::Personal,
+            scope: ScopeBoundary::Person,
+            default_tier: MemoryTier::LongTerm,
+            retrieval_limit: 10,
+            max_retrieval_limit: 20,
+            citations_required: true,
+            scope_isolated: true,
+            profile_memory: true,
+            allowed_source_kinds: vec![
+                SourceKind::Conversation,
+                SourceKind::Screen,
+                SourceKind::Audio,
+                SourceKind::Document,
+                SourceKind::Integration,
+                SourceKind::UserCorrection,
+            ],
+        }
+    }
+
+    fn research_preset() -> MemoryPreset {
+        MemoryPreset {
+            mode: Self::Research,
+            scope: ScopeBoundary::Project,
+            default_tier: MemoryTier::LongTerm,
+            retrieval_limit: 20,
+            max_retrieval_limit: 50,
+            citations_required: true,
+            scope_isolated: true,
+            profile_memory: false,
+            allowed_source_kinds: vec![
+                SourceKind::Conversation,
+                SourceKind::Document,
+                SourceKind::Integration,
+                SourceKind::UserCorrection,
+            ],
+        }
+    }
+
+    fn agent_preset() -> MemoryPreset {
+        MemoryPreset {
+            mode: Self::Agent,
+            scope: ScopeBoundary::Agent,
+            default_tier: MemoryTier::ShortTerm,
+            retrieval_limit: 8,
+            max_retrieval_limit: 20,
+            citations_required: true,
+            scope_isolated: true,
+            profile_memory: false,
+            allowed_source_kinds: vec![
+                SourceKind::Conversation,
+                SourceKind::Integration,
+                SourceKind::UserCorrection,
+            ],
         }
     }
 }
