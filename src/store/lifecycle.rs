@@ -650,13 +650,7 @@ impl MemoryDb {
     pub fn store_profile(&mut self, input: ProfileInput) -> Result<ProfileEntry> {
         require_scope(&input.tenant_id, &input.person_id)?;
         let transaction = self.connection.transaction()?;
-        let claim = transaction
-            .query_row(
-            "SELECT predicate, value, recorded_from FROM claims WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND kind = 'profile_fact' AND status = 'accepted' AND valid_until IS NULL AND recorded_until IS NULL",
-            params![input.claim_id.0, input.tenant_id.0, input.person_id.0],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Timestamp>(2)?)),
-        )
-            .optional()?;
+        let claim = fetch_profile_claim(&transaction, &input.claim_id, &input.tenant_id, &input.person_id)?;
         let Some((key, value, claim_recorded_at)) = claim else {
             return Err(Error::NotFound);
         };
@@ -665,13 +659,7 @@ impl MemoryDb {
                 "profile entry cannot predate its backing claim".to_owned(),
             ));
         }
-        let existing = transaction
-            .query_row(
-                "SELECT id, value, stability, claim_id, recorded_at FROM profile_entries WHERE tenant_id = ?1 AND person_id = ?2 AND key = ?3",
-                params![input.tenant_id.0, input.person_id.0, key],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?, row.get::<_, Timestamp>(4)?)),
-            )
-            .optional()?;
+        let existing = fetch_existing_profile_entry(&transaction, &input.tenant_id, &input.person_id, &key)?;
         let stability = serde_json::to_string(&input.stability)?;
         if let Some((id, stored_value, stored_stability, stored_claim_id, stored_at)) = &existing {
             if stored_value == &value
@@ -1459,4 +1447,36 @@ fn render_profile_pager(generated_at: Timestamp, entries: &[ProfileEntry]) -> St
         ));
     }
     markdown
+}
+
+fn fetch_profile_claim(
+    transaction: &rusqlite::Transaction,
+    claim_id: &crate::ClaimId,
+    tenant_id: &crate::TenantId,
+    person_id: &crate::PersonId,
+) -> Result<Option<(String, String, crate::Timestamp)>> {
+    transaction
+        .query_row(
+            "SELECT predicate, value, recorded_from FROM claims WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND kind = 'profile_fact' AND status = 'accepted' AND valid_until IS NULL AND recorded_until IS NULL",
+            params![claim_id.0, tenant_id.0, person_id.0],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Timestamp>(2)?)),
+        )
+        .optional()
+        .map_err(Into::into)
+}
+
+fn fetch_existing_profile_entry(
+    transaction: &rusqlite::Transaction,
+    tenant_id: &crate::TenantId,
+    person_id: &crate::PersonId,
+    key: &str,
+) -> Result<Option<(String, String, String, String, crate::Timestamp)>> {
+    transaction
+        .query_row(
+            "SELECT id, value, stability, claim_id, recorded_at FROM profile_entries WHERE tenant_id = ?1 AND person_id = ?2 AND key = ?3",
+            params![tenant_id.0, person_id.0, key],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?, row.get::<_, Timestamp>(4)?)),
+        )
+        .optional()
+        .map_err(Into::into)
 }
