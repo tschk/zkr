@@ -161,11 +161,7 @@ fn apply_commit(
             .enumerate()
         {
             if pass == ORIGIN_PASS {
-                if let ExportRecord::Source(record) = record {
-                    if accepted[index] {
-                        apply_source_origin(transaction, record)?;
-                    }
-                }
+                apply_origin_pass(transaction, record, accepted[index])?;
                 continue;
             }
             if record_pass(record) != pass {
@@ -213,6 +209,19 @@ fn apply_commit(
             .map(|(record, _)| record.clone()),
     )?;
     applied.commits_applied += 1;
+    Ok(())
+}
+
+fn apply_origin_pass(
+    transaction: &Transaction<'_>,
+    record: &ExportRecord,
+    is_accepted: bool,
+) -> Result<()> {
+    if let ExportRecord::Source(source_record) = record {
+        if is_accepted {
+            apply_source_origin(transaction, source_record)?;
+        }
+    }
     Ok(())
 }
 
