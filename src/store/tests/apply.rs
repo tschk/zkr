@@ -675,7 +675,6 @@ fn test_record_identity_deletion() {
     );
 }
 
-
 #[test]
 fn apply_rejects_empty_scope() {
     let mut replica = empty();
