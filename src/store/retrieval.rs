@@ -164,7 +164,8 @@ impl MemoryDb {
         as_of: Option<&TemporalQuery>,
         enabled_features: &[String],
     ) -> Result<Vec<RetrievalTarget>> {
-        let features_json = serde_json::to_string(enabled_features).map_err(|e| Error::Invalid(e.to_string()))?;
+        let features_json =
+            serde_json::to_string(enabled_features).map_err(|e| Error::Invalid(e.to_string()))?;
         let (sql, values): (&str, Vec<&dyn rusqlite::ToSql>) = match as_of {
             None => (
                 "SELECT s.id, c.id
@@ -226,7 +227,8 @@ impl MemoryDb {
         }
         let terms_json =
             serde_json::to_string(terms).map_err(|error| Error::Invalid(error.to_string()))?;
-        let features_json = serde_json::to_string(enabled_features).map_err(|e| Error::Invalid(e.to_string()))?;
+        let features_json =
+            serde_json::to_string(enabled_features).map_err(|e| Error::Invalid(e.to_string()))?;
         let (sql, values): (String, Vec<&dyn rusqlite::ToSql>) = match as_of {
             None => (
                 "SELECT id
