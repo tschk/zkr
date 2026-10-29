@@ -36,71 +36,71 @@ pub struct InlineEmbedding {
     pub distance: VectorDistance,
 }
 
-/// Deterministic, zero-dependency L2-normalized semantic feature-hashing vectorizer
-/// over word tokens, token bigrams, and character n-grams.
-pub fn auto_vectorize(text: &str) -> Vec<f32> {
-    let mut accum = [0.0_f64; AUTO_EMBEDDING_DIM];
-    let mut add_feature = |feature: &str, weight: f64| {
-        let digest = Sha256::digest(feature.as_bytes());
-        let idx1 = (digest[0] as usize) % AUTO_EMBEDDING_DIM;
-        let idx2 = (digest[1] as usize) % AUTO_EMBEDDING_DIM;
-        accum[idx1] += weight;
-        accum[idx2] += weight * 0.5;
-    };
+const STOPWORDS: &[&str] = &[
+    "zkr",
+    "project",
+    "record",
+    "record_type",
+    "type",
+    "fields",
+    "connections",
+    "relation",
+    "target",
+    "categories",
+    "weight_basis_points",
+    "the",
+    "and",
+    "for",
+    "with",
+    "into",
+    "from",
+    "that",
+    "this",
+    "are",
+    "was",
+];
 
-    const STOPWORDS: &[&str] = &[
-        "zkr",
-        "project",
-        "record",
-        "record_type",
-        "type",
-        "fields",
-        "connections",
-        "relation",
-        "target",
-        "categories",
-        "weight_basis_points",
-        "the",
-        "and",
-        "for",
-        "with",
-        "into",
-        "from",
-        "that",
-        "this",
-        "are",
-        "was",
-    ];
-
-    let words: Vec<String> = text
-        .to_lowercase()
+fn extract_words(text: &str) -> Vec<String> {
+    text.to_lowercase()
         .split(|c: char| !c.is_alphanumeric())
         .filter(|s| s.len() >= 2 && !STOPWORDS.contains(s))
         .map(str::to_owned)
-        .collect();
+        .collect()
+}
 
-    for word in &words {
-        add_feature(&format!("w:{word}"), 3.0);
+fn add_feature(accum: &mut [f64; AUTO_EMBEDDING_DIM], feature: &str, weight: f64) {
+    let digest = Sha256::digest(feature.as_bytes());
+    let idx1 = (digest[0] as usize) % AUTO_EMBEDDING_DIM;
+    let idx2 = (digest[1] as usize) % AUTO_EMBEDDING_DIM;
+    accum[idx1] += weight;
+    accum[idx2] += weight * 0.5;
+}
+
+fn add_word_features(accum: &mut [f64; AUTO_EMBEDDING_DIM], words: &[String]) {
+    for word in words {
+        add_feature(accum, &format!("w:{word}"), 3.0);
         let chars: Vec<char> = word.chars().collect();
         if chars.len() >= 4 {
             let stem4: String = chars[..4].iter().collect();
-            add_feature(&format!("s4:{stem4}"), 1.8);
+            add_feature(accum, &format!("s4:{stem4}"), 1.8);
         }
         if chars.len() >= 5 {
             let stem5: String = chars[..5].iter().collect();
-            add_feature(&format!("s5:{stem5}"), 2.2);
+            add_feature(accum, &format!("s5:{stem5}"), 2.2);
         }
         if chars.len() >= 4 {
             for win in chars.windows(4) {
                 let ngram: String = win.iter().collect();
-                add_feature(&format!("c4:{ngram}"), 0.35);
+                add_feature(accum, &format!("c4:{ngram}"), 0.35);
             }
         }
     }
     for pair in words.windows(2) {
-        add_feature(&format!("b:{} {}", pair[0], pair[1]), 1.5);
+        add_feature(accum, &format!("b:{} {}", pair[0], pair[1]), 1.5);
     }
+}
 
+fn normalize_features(accum: [f64; AUTO_EMBEDDING_DIM]) -> Vec<f32> {
     let norm = accum.iter().map(|v| v * v).sum::<f64>().sqrt();
     if norm > 1e-9 {
         accum.into_iter().map(|v| (v / norm) as f32).collect()
@@ -109,6 +109,15 @@ pub fn auto_vectorize(text: &str) -> Vec<f32> {
         fallback[0] = 1.0;
         fallback
     }
+}
+
+/// Deterministic, zero-dependency L2-normalized semantic feature-hashing vectorizer
+/// over word tokens, token bigrams, and character n-grams.
+pub fn auto_vectorize(text: &str) -> Vec<f32> {
+    let mut accum = [0.0_f64; AUTO_EMBEDDING_DIM];
+    let words = extract_words(text);
+    add_word_features(&mut accum, &words);
+    normalize_features(accum)
 }
 
 /// Categorize a cited fact or task across one or more categories without introducing a second memory lifecycle.
