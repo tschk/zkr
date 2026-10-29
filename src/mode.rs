@@ -35,68 +35,14 @@ pub struct MemoryPreset {
 
 impl MemoryMode {
     pub fn preset(self) -> MemoryPreset {
-        let (
-            scope,
-            default_tier,
-            retrieval_limit,
-            max_retrieval_limit,
-            profile_memory,
-            allowed_source_kinds,
-        ) = match self {
-            Self::Coding => (
-                ScopeBoundary::Workspace,
-                MemoryTier::LongTerm,
-                10,
-                20,
-                false,
-                vec![
-                    SourceKind::Conversation,
-                    SourceKind::Document,
-                    SourceKind::Integration,
-                    SourceKind::UserCorrection,
-                ],
-            ),
-            Self::Personal => (
-                ScopeBoundary::Person,
-                MemoryTier::LongTerm,
-                10,
-                20,
-                true,
-                vec![
-                    SourceKind::Conversation,
-                    SourceKind::Screen,
-                    SourceKind::Audio,
-                    SourceKind::Document,
-                    SourceKind::Integration,
-                    SourceKind::UserCorrection,
-                ],
-            ),
-            Self::Research => (
-                ScopeBoundary::Project,
-                MemoryTier::LongTerm,
-                20,
-                50,
-                false,
-                vec![
-                    SourceKind::Conversation,
-                    SourceKind::Document,
-                    SourceKind::Integration,
-                    SourceKind::UserCorrection,
-                ],
-            ),
-            Self::Agent => (
-                ScopeBoundary::Agent,
-                MemoryTier::ShortTerm,
-                8,
-                20,
-                false,
-                vec![
-                    SourceKind::Conversation,
-                    SourceKind::Integration,
-                    SourceKind::UserCorrection,
-                ],
-            ),
-        };
+        let (scope, default_tier, retrieval_limit, max_retrieval_limit, profile_memory) =
+            match self {
+                Self::Coding => (ScopeBoundary::Workspace, MemoryTier::LongTerm, 10, 20, false),
+                Self::Personal => (ScopeBoundary::Person, MemoryTier::LongTerm, 10, 20, true),
+                Self::Research => (ScopeBoundary::Project, MemoryTier::LongTerm, 20, 50, false),
+                Self::Agent => (ScopeBoundary::Agent, MemoryTier::ShortTerm, 8, 20, false),
+            };
+
         MemoryPreset {
             mode: self,
             scope,
@@ -106,7 +52,31 @@ impl MemoryMode {
             citations_required: true,
             scope_isolated: true,
             profile_memory,
-            allowed_source_kinds,
+            allowed_source_kinds: self.allowed_source_kinds(),
+        }
+    }
+
+    fn allowed_source_kinds(self) -> Vec<SourceKind> {
+        match self {
+            Self::Coding | Self::Research => vec![
+                SourceKind::Conversation,
+                SourceKind::Document,
+                SourceKind::Integration,
+                SourceKind::UserCorrection,
+            ],
+            Self::Personal => vec![
+                SourceKind::Conversation,
+                SourceKind::Screen,
+                SourceKind::Audio,
+                SourceKind::Document,
+                SourceKind::Integration,
+                SourceKind::UserCorrection,
+            ],
+            Self::Agent => vec![
+                SourceKind::Conversation,
+                SourceKind::Integration,
+                SourceKind::UserCorrection,
+            ],
         }
     }
 }
