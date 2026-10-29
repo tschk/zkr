@@ -1438,7 +1438,6 @@ fn render_profile_pager(generated_at: Timestamp, entries: &[ProfileEntry]) -> St
     markdown
 }
 
-
 type StoredProfile = (String, String, String, String, Timestamp);
 
 fn resolve_profile_claim(
