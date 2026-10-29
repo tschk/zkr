@@ -433,8 +433,10 @@ fn claims_explicitly_connected(left: &LiveDreamClaim, right: &LiveDreamClaim) ->
 
 type CandidateFact = (ProjectFact, String, i64, String);
 
-
-fn extract_and_validate_categories(input_category: Option<String>, input_categories: Vec<String>) -> Result<Vec<String>> {
+fn extract_and_validate_categories(
+    input_category: Option<String>,
+    input_categories: Vec<String>,
+) -> Result<Vec<String>> {
     let mut categories = Vec::new();
     let mut push_category = |cat: String| -> Result<()> {
         require_text("category", &cat)?;
@@ -495,7 +497,8 @@ impl MemoryDb {
     ) -> Result<()> {
         let target = EmbeddingTarget::Claim(claim_id.clone());
         if let Some(emb) = inline_embedding {
-            let proj = projection_input_from(&self.connection, tenant_id, person_id, target.clone())?;
+            let proj =
+                projection_input_from(&self.connection, tenant_id, person_id, target.clone())?;
             self.upsert_embedding(EmbeddingInput {
                 tenant_id: tenant_id.clone(),
                 person_id: person_id.clone(),
@@ -510,7 +513,9 @@ impl MemoryDb {
                 },
             })?;
         }
-        if let Ok(proj) = projection_input_from(&self.connection, tenant_id, person_id, target.clone()) {
+        if let Ok(proj) =
+            projection_input_from(&self.connection, tenant_id, person_id, target.clone())
+        {
             let auto_vec = auto_vectorize(&format!("{} {source_text}", proj.text));
             let _ = self.upsert_embedding(EmbeddingInput {
                 tenant_id: tenant_id.clone(),
@@ -547,11 +552,10 @@ impl MemoryDb {
             validate_embedding_vector(&emb.vector, &emb.normalization)?;
         }
 
-        let claim = input
-            .memory
-            .claim
-            .as_mut()
-            .ok_or_else(|| Error::Invalid("project memory requires a cited claim".to_owned()))?;
+        let claim =
+            input.memory.claim.as_mut().ok_or_else(|| {
+                Error::Invalid("project memory requires a cited claim".to_owned())
+            })?;
 
         let mut subject_parts = Vec::with_capacity(1 + categories.len());
         subject_parts.push(project.as_str());
