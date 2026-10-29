@@ -395,12 +395,8 @@ impl MemoryDb {
             input.deleted_at,
         )?;
 
-        let (evidence_count, claim_count, changed_claim_ids) = apply_deletion_mutations(
-            &transaction,
-            &input,
-            &evidence_ids,
-            &candidate_claim_ids,
-        )?;
+        let (evidence_count, claim_count, changed_claim_ids) =
+            apply_deletion_mutations(&transaction, &input, &evidence_ids, &candidate_claim_ids)?;
 
         let records = build_deletion_records(
             &transaction,
