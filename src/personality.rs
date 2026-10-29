@@ -639,7 +639,24 @@ impl Personality {
         Ok(())
     }
 
+
+    fn compute_typing_without_send(&self, events: &[&ConversationEvent]) -> u64 {
+        events
+            .iter()
+            .filter(|e| e.event_kind == "typing")
+            .filter(|te| {
+                !self.recent_events.iter().any(|e| {
+                    e.epoch > te.epoch
+                        && e.participant == te.participant
+                        && e.event_kind == "message"
+                        && e.epoch <= te.epoch + 5
+                })
+            })
+            .count() as u64
+    }
+
     /// Compute a signal summary for a participant across all recent events.
+
     pub fn signal_summary(&self, participant: &str) -> SignalSummary {
         let events: Vec<&ConversationEvent> = self
             .recent_events
@@ -673,18 +690,7 @@ impl Personality {
         };
 
         // Typing without send.
-        let typing_without_send = events
-            .iter()
-            .filter(|e| e.event_kind == "typing")
-            .filter(|te| {
-                !self.recent_events.iter().any(|e| {
-                    e.epoch > te.epoch
-                        && e.participant == te.participant
-                        && e.event_kind == "message"
-                        && e.epoch <= te.epoch + 5
-                })
-            })
-            .count() as u64;
+        let typing_without_send = self.compute_typing_without_send(&events);
 
         // Reaction count.
         let reaction_count = events.iter().filter(|e| e.event_kind == "reaction").count() as u64;
