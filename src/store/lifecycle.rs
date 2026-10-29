@@ -380,67 +380,7 @@ impl MemoryDb {
         require_scope(&input.tenant_id, &input.person_id)?;
         let transaction = self.connection.transaction()?;
 
-        let (evidence_ids, candidate_claim_ids, profile_ids, review_ids) = find_deletion_targets(
-            &transaction,
-            &input.tenant_id,
-            &input.person_id,
-            &input.source_id,
-        )?;
-
-        validate_deletion_time(
-            &transaction,
-            &input.tenant_id,
-            &input.person_id,
-            &input.source_id,
-            input.deleted_at,
-        )?;
-
-        let evidence_count = soft_delete_source_and_evidence(
-            &transaction,
-            &input.tenant_id,
-            &input.person_id,
-            &input.source_id,
-            &evidence_ids,
-            input.deleted_at,
-        )?;
-
-        let (claim_count, changed_claim_ids) = retract_claims(
-            &transaction,
-            &input.tenant_id,
-            &input.person_id,
-            &input.source_id,
-            &candidate_claim_ids,
-            input.deleted_at,
-        )?;
-
-        enqueue_deletion_repairs(&transaction, &input, &evidence_ids, &changed_claim_ids)?;
-
-        delete_dependent_projections(
-            &transaction,
-            &input.tenant_id,
-            &input.person_id,
-            &input.source_id,
-        )?;
-
-        let records = build_deletion_records(
-            &transaction,
-            &input.tenant_id,
-            &input.person_id,
-            &input.source_id,
-            &evidence_ids,
-            &changed_claim_ids,
-            profile_ids,
-            review_ids,
-            input.deleted_at,
-        )?;
-
-        append_commit(
-            &transaction,
-            &input.tenant_id,
-            &input.person_id,
-            input.deleted_at,
-            records,
-        )?;
+        let (evidence_count, claim_count) = execute_source_deletion(&transaction, &input)?;
 
         transaction.commit()?;
 
@@ -1166,6 +1106,75 @@ fn build_correction_records(
         })
     }));
     Ok(records)
+}
+
+fn execute_source_deletion(
+    transaction: &rusqlite::Transaction<'_>,
+    input: &DeleteInput,
+) -> Result<(u64, u64)> {
+    let (evidence_ids, candidate_claim_ids, profile_ids, review_ids) = find_deletion_targets(
+        transaction,
+        &input.tenant_id,
+        &input.person_id,
+        &input.source_id,
+    )?;
+
+    validate_deletion_time(
+        transaction,
+        &input.tenant_id,
+        &input.person_id,
+        &input.source_id,
+        input.deleted_at,
+    )?;
+
+    let evidence_count = soft_delete_source_and_evidence(
+        transaction,
+        &input.tenant_id,
+        &input.person_id,
+        &input.source_id,
+        &evidence_ids,
+        input.deleted_at,
+    )?;
+
+    let (claim_count, changed_claim_ids) = retract_claims(
+        transaction,
+        &input.tenant_id,
+        &input.person_id,
+        &input.source_id,
+        &candidate_claim_ids,
+        input.deleted_at,
+    )?;
+
+    enqueue_deletion_repairs(transaction, input, &evidence_ids, &changed_claim_ids)?;
+
+    delete_dependent_projections(
+        transaction,
+        &input.tenant_id,
+        &input.person_id,
+        &input.source_id,
+    )?;
+
+    let records = build_deletion_records(
+        transaction,
+        &input.tenant_id,
+        &input.person_id,
+        &input.source_id,
+        &evidence_ids,
+        &changed_claim_ids,
+        profile_ids,
+        review_ids,
+        input.deleted_at,
+    )?;
+
+    append_commit(
+        transaction,
+        &input.tenant_id,
+        &input.person_id,
+        input.deleted_at,
+        records,
+    )?;
+
+    Ok((evidence_count, claim_count))
 }
 
 #[allow(clippy::type_complexity)]
