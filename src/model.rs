@@ -245,15 +245,20 @@ pub fn is_legal_state_combination(
     status: &ClaimStatus,
     processing_state: &MemoryProcessingState,
 ) -> bool {
-    if *tier == MemoryTier::Archive && *status == ClaimStatus::Superseded {
-        return false;
+    match tier {
+        MemoryTier::ShortTerm => {
+            matches!(status, ClaimStatus::Accepted)
+                && matches!(
+                    processing_state,
+                    MemoryProcessingState::Pending | MemoryProcessingState::Processed
+                )
+        }
+        MemoryTier::LongTerm => *processing_state == MemoryProcessingState::Processed,
+        MemoryTier::Archive => {
+            *status != ClaimStatus::Superseded
+                && *processing_state == MemoryProcessingState::Processed
+        }
     }
-    if (*tier == MemoryTier::LongTerm || *tier == MemoryTier::Archive)
-        && *processing_state != MemoryProcessingState::Processed
-    {
-        return false;
-    }
-    true
 }
 
 pub fn assert_legal_state(
@@ -293,53 +298,21 @@ mod tests {
 
     #[test]
     fn test_is_legal_state_combination() {
-        let tiers = vec![
-            MemoryTier::ShortTerm,
-            MemoryTier::LongTerm,
-            MemoryTier::Archive,
-        ];
-        let statuses = vec![
-            ClaimStatus::Accepted,
-            ClaimStatus::Superseded,
-            ClaimStatus::Retracted,
-        ];
-        let states = vec![
-            MemoryProcessingState::Pending,
-            MemoryProcessingState::Processed,
-            MemoryProcessingState::Blocked,
-        ];
-
-        let check = |tier: &MemoryTier, status: &ClaimStatus, state: &MemoryProcessingState| {
-            let mut expected = true;
-
-            if *tier == MemoryTier::Archive && *status == ClaimStatus::Superseded {
-                expected = false;
-            }
-            if (*tier == MemoryTier::LongTerm || *tier == MemoryTier::Archive)
-                && *state != MemoryProcessingState::Processed
-            {
-                expected = false;
-            }
-
-            assert_eq!(
-                is_legal_state_combination(tier, status, state),
-                expected,
-                "Failed for tier={:?}, status={:?}, processing_state={:?}",
-                tier,
-                status,
-                state
-            );
-        };
-
-        for tier in &tiers {
-            for status in &statuses {
-                for state in &states {
-                    check(tier, status, state);
+        use {ClaimStatus::*, MemoryProcessingState::*, MemoryTier::*};
+        for tier in [&ShortTerm, &LongTerm, &Archive] {
+            for status in [&Accepted, &Superseded, &Retracted] {
+                for state in [&Pending, &Processed, &Blocked] {
+                    let expected = matches!(
+                        (tier, status, state),
+                        (&ShortTerm, &Accepted, &Pending | &Processed)
+                            | (&LongTerm, _, &Processed)
+                            | (&Archive, &Accepted | &Retracted, &Processed)
+                    );
+                    assert_eq!(is_legal_state_combination(tier, status, state), expected);
                 }
             }
         }
     }
-
     #[test]
     fn test_assert_legal_state_valid() {
         assert_eq!(
