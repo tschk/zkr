@@ -164,63 +164,43 @@ impl MemoryDb {
         as_of: Option<&TemporalQuery>,
         enabled_features: &[String],
     ) -> Result<Vec<RetrievalTarget>> {
-        let feature_condition = if enabled_features.is_empty() {
-            "s.feature_flag IS NULL".to_string()
-        } else {
-            let placeholders = (5..5 + enabled_features.len())
-                .map(|i| format!("?{i}"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("(s.feature_flag IS NULL OR s.feature_flag IN ({placeholders}))")
-        };
-        let as_of_feature_condition = if enabled_features.is_empty() {
-            "s.feature_flag IS NULL".to_string()
-        } else {
-            let placeholders = (7..7 + enabled_features.len())
-                .map(|i| format!("?{i}"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("(s.feature_flag IS NULL OR s.feature_flag IN ({placeholders}))")
-        };
-        let (sql, mut values): (&str, Vec<&dyn rusqlite::ToSql>) = match as_of {
+        let features_json = serde_json::to_string(enabled_features).map_err(|error| Error::Invalid(error.to_string()))?;
+        let (sql, values): (&str, Vec<&dyn rusqlite::ToSql>) = match as_of {
             None => (
-                &format!("SELECT s.id, c.id
+                "SELECT s.id, c.id
                  FROM source_fts
                  JOIN sources s ON s.id = source_fts.source_id AND s.tenant_id = source_fts.tenant_id AND s.person_id = source_fts.person_id
                  JOIN evidence e ON e.source_id = s.id AND e.tenant_id = s.tenant_id AND e.person_id = s.person_id AND e.deleted_at IS NULL
                  LEFT JOIN claim_evidence ce ON ce.evidence_id = e.id AND ce.tenant_id = e.tenant_id AND ce.person_id = e.person_id AND ce.relation = '\"supports\"'
                  LEFT JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL AND c.tier IN ('short_term', 'long_term') AND c.processing_state = 'processed'
-                 WHERE source_fts MATCH ?1 AND source_fts.tenant_id = ?2 AND source_fts.person_id = ?3 AND s.deleted_at IS NULL AND {feature_condition}
+                 WHERE source_fts MATCH ?1 AND source_fts.tenant_id = ?2 AND source_fts.person_id = ?3 AND s.deleted_at IS NULL AND (s.feature_flag IS NULL OR s.feature_flag IN (SELECT value FROM json_each(?5)))
                  AND (c.id IS NOT NULL OR NOT EXISTS (
                      SELECT 1 FROM evidence live_e
                      JOIN claim_evidence live_ce ON live_ce.evidence_id = live_e.id AND live_ce.tenant_id = live_e.tenant_id AND live_ce.person_id = live_e.person_id AND live_ce.relation = '\"supports\"'
 
                      WHERE live_e.source_id = s.id AND live_e.tenant_id = s.tenant_id AND live_e.person_id = s.person_id AND live_e.deleted_at IS NULL
                  ))
-                 ORDER BY bm25(source_fts), s.id, c.id LIMIT ?4"),
-                vec![&query, &tenant_id.0, &person_id.0, &candidate_limit],
+                 ORDER BY bm25(source_fts), s.id, c.id LIMIT ?4",
+                vec![&query as &dyn rusqlite::ToSql, &tenant_id.0, &person_id.0, &candidate_limit, &features_json],
             ),
             Some(as_of) => (
-                &format!("SELECT s.id, c.id
+                "SELECT s.id, c.id
                  FROM source_fts
                  JOIN sources s ON s.id = source_fts.source_id AND s.tenant_id = source_fts.tenant_id AND s.person_id = source_fts.person_id
                  JOIN evidence e ON e.source_id = s.id AND e.tenant_id = s.tenant_id AND e.person_id = s.person_id AND e.deleted_at IS NULL AND e.recorded_at <= ?5
                  LEFT JOIN claim_evidence ce ON ce.evidence_id = e.id AND ce.tenant_id = e.tenant_id AND ce.person_id = e.person_id AND ce.relation = '\"supports\"'
                  LEFT JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ce.tenant_id AND c.person_id = ce.person_id AND c.status IN ('accepted', 'superseded') AND c.valid_from <= ?4 AND (c.valid_until IS NULL OR c.valid_until > ?4) AND c.recorded_from <= ?5 AND (c.recorded_until IS NULL OR c.recorded_until > ?5) AND c.processing_state = 'processed'
-                 WHERE source_fts MATCH ?1 AND source_fts.tenant_id = ?2 AND source_fts.person_id = ?3 AND s.deleted_at IS NULL AND s.captured_at <= ?4 AND s.recorded_at <= ?5 AND {as_of_feature_condition}
+                 WHERE source_fts MATCH ?1 AND source_fts.tenant_id = ?2 AND source_fts.person_id = ?3 AND s.deleted_at IS NULL AND s.captured_at <= ?4 AND s.recorded_at <= ?5 AND (s.feature_flag IS NULL OR s.feature_flag IN (SELECT value FROM json_each(?7)))
                  AND (c.id IS NOT NULL OR NOT EXISTS (
                      SELECT 1 FROM evidence live_e
                      JOIN claim_evidence live_ce ON live_ce.evidence_id = live_e.id AND live_ce.tenant_id = live_e.tenant_id AND live_ce.person_id = live_e.person_id AND live_ce.relation = '\"supports\"'
                      JOIN claims live_c ON live_c.id = live_ce.claim_id AND live_c.tenant_id = live_ce.tenant_id AND live_c.person_id = live_ce.person_id
                      WHERE live_e.source_id = s.id AND live_e.tenant_id = s.tenant_id AND live_e.person_id = s.person_id AND live_e.deleted_at IS NULL AND live_e.recorded_at <= ?5 AND live_c.status IN ('accepted', 'superseded') AND live_c.valid_from <= ?4 AND (live_c.valid_until IS NULL OR live_c.valid_until > ?4) AND live_c.recorded_from <= ?5 AND (live_c.recorded_until IS NULL OR live_c.recorded_until > ?5) AND live_c.processing_state = 'processed'
                  ))
-                 ORDER BY bm25(source_fts), s.id, c.id LIMIT ?6"),
-                vec![&query, &tenant_id.0, &person_id.0, &as_of.valid_at, &as_of.recorded_at, &candidate_limit],
+                 ORDER BY bm25(source_fts), s.id, c.id LIMIT ?6",
+                vec![&query as &dyn rusqlite::ToSql, &tenant_id.0, &person_id.0, &as_of.valid_at, &as_of.recorded_at, &candidate_limit, &features_json],
             ),
         };
-        for feature in enabled_features {
-            values.push(feature);
-        }
         let mut statement = self.connection.prepare(sql)?;
         let rows = statement.query_map(rusqlite::params_from_iter(values), |row| {
             let source_id = row.get::<_, String>(0)?;
@@ -231,7 +211,6 @@ impl MemoryDb {
         })?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
-
     fn claim_lexical_targets(
         &self,
         tenant_id: &TenantId,
@@ -246,28 +225,10 @@ impl MemoryDb {
         }
         let terms_json =
             serde_json::to_string(terms).map_err(|error| Error::Invalid(error.to_string()))?;
-        let feature_condition = if enabled_features.is_empty() {
-            "s.feature_flag IS NULL".to_string()
-        } else {
-            let placeholders = (5..5 + enabled_features.len())
-                .map(|i| format!("?{i}"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("(s.feature_flag IS NULL OR s.feature_flag IN ({placeholders}))")
-        };
-        let as_of_feature_condition = if enabled_features.is_empty() {
-            "s.feature_flag IS NULL".to_string()
-        } else {
-            let placeholders = (7..7 + enabled_features.len())
-                .map(|i| format!("?{i}"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("(s.feature_flag IS NULL OR s.feature_flag IN ({placeholders}))")
-        };
-        let (sql, mut values): (String, Vec<&dyn rusqlite::ToSql>) = match as_of {
+        let features_json = serde_json::to_string(enabled_features).map_err(|error| Error::Invalid(error.to_string()))?;
+        let (sql, values): (&str, Vec<&dyn rusqlite::ToSql>) = match as_of {
             None => (
-                format!(
-                    "SELECT id
+                "SELECT id
                      FROM (
                          SELECT c.id AS id,
                                 c.recorded_from AS recorded_from,
@@ -287,18 +248,16 @@ impl MemoryDb {
                            AND c.recorded_until IS NULL
                            AND c.tier IN ('short_term', 'long_term')
                            AND c.processing_state = 'processed'
-                           AND {feature_condition}
+                           AND (s.feature_flag IS NULL OR s.feature_flag IN (SELECT value FROM json_each(?5)))
                          GROUP BY c.id, c.recorded_from, c.subject, c.predicate, c.value
                      )
                      WHERE match_count > 0
                      ORDER BY match_count DESC, recorded_from DESC, id ASC
-                     LIMIT ?4"
-                ),
-                vec![&terms_json, &tenant_id.0, &person_id.0, &candidate_limit],
+                     LIMIT ?4",
+                vec![&terms_json as &dyn rusqlite::ToSql, &tenant_id.0, &person_id.0, &candidate_limit, &features_json],
             ),
             Some(as_of) => (
-                format!(
-                    "SELECT id
+                "SELECT id
                      FROM (
                          SELECT c.id AS id,
                                 c.recorded_from AS recorded_from,
@@ -319,27 +278,24 @@ impl MemoryDb {
                            AND c.recorded_from <= ?5
                            AND (c.recorded_until IS NULL OR c.recorded_until > ?5)
                            AND c.processing_state = 'processed'
-                           AND {as_of_feature_condition}
+                           AND (s.feature_flag IS NULL OR s.feature_flag IN (SELECT value FROM json_each(?7)))
                          GROUP BY c.id, c.recorded_from, c.subject, c.predicate, c.value
                      )
                      WHERE match_count > 0
                      ORDER BY match_count DESC, recorded_from DESC, id ASC
-                     LIMIT ?6"
-                ),
+                     LIMIT ?6",
                 vec![
-                    &terms_json,
+                    &terms_json as &dyn rusqlite::ToSql,
                     &tenant_id.0,
                     &person_id.0,
                     &as_of.valid_at,
                     &as_of.recorded_at,
                     &candidate_limit,
+                    &features_json,
                 ],
             ),
         };
-        for feature in enabled_features {
-            values.push(feature);
-        }
-        let mut statement = self.connection.prepare(&sql)?;
+        let mut statement = self.connection.prepare(sql)?;
         let rows = statement.query_map(rusqlite::params_from_iter(values), |row| {
             Ok(RetrievalTarget::Claim(ClaimId(row.get(0)?)))
         })?;
