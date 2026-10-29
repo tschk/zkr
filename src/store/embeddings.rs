@@ -292,7 +292,6 @@ pub(super) fn embedding_target(kind: &str, id: &str) -> Result<EmbeddingTarget> 
     })
 }
 
-
 const PROJECTION_ISSUES_QUERY: &str = "SELECT targets.target_kind, targets.target_id, targets.text, targets.target_revision,
        embeddings.target_revision, embeddings.input_hash, embeddings.created_at, embeddings.dimension, embeddings.normalization, embeddings.distance, embeddings.vector
 FROM (
@@ -560,7 +559,6 @@ impl MemoryDb {
         paginate_projection_issues(&mut rows, &lane, bounded_limit(input.limit) as usize)
     }
 }
-
 
 fn paginate_projection_issues(
     rows: &mut rusqlite::Rows<'_>,
