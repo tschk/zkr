@@ -1659,6 +1659,31 @@ mod tests {
     }
 
     #[test]
+    fn test_auto_vectorize_edge_cases() {
+        // Unicode string test
+        let unicode_text = "Привет мир! こんにちは世界 🌟 Rust is great!";
+        let vec_unicode = auto_vectorize(unicode_text);
+        assert_eq!(vec_unicode.len(), super::AUTO_EMBEDDING_DIM);
+
+        let norm_unicode: f32 = vec_unicode.iter().map(|v| v * v).sum::<f32>().sqrt();
+        assert!((norm_unicode - 1.0).abs() < 1e-5);
+
+        let mut fallback = vec![0.0_f32; super::AUTO_EMBEDDING_DIM];
+        fallback[0] = 1.0;
+        assert_ne!(vec_unicode, fallback);
+
+        // Extremely long string test
+        let long_text = "rust ".repeat(10000);
+        let vec_long = auto_vectorize(&long_text);
+        assert_eq!(vec_long.len(), super::AUTO_EMBEDDING_DIM);
+
+        let norm_long: f32 = vec_long.iter().map(|v| v * v).sum::<f32>().sqrt();
+        assert!((norm_long - 1.0).abs() < 1e-5);
+        assert_ne!(vec_long, fallback);
+    }
+
+
+    #[test]
     fn remember_project_record_merges_categories_and_requires_claim() {
         let mut db = MemoryDb::open(":memory:").unwrap();
 
