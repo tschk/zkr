@@ -983,7 +983,8 @@ impl MemoryDb {
         let hubs = dream_aggregate_hubs(&claims, limit);
         let unresolved_targets = dream_find_unresolved_targets(&claims, limit);
 
-        let contradictions = self.dream_find_contradictions(&input.tenant_id, &input.person_id, limit)?;
+        let contradictions =
+            self.dream_find_contradictions(&input.tenant_id, &input.person_id, limit)?;
 
         let short_term_claims = claims
             .iter()
@@ -1060,6 +1061,7 @@ impl MemoryDb {
             .map_err(Into::into)
     }
 
+    #[allow(clippy::type_complexity)]
     fn dream_compute_associations(
         &self,
         tenant_id: &TenantId,
@@ -1068,7 +1070,11 @@ impl MemoryDb {
         min_similarity: i64,
         limit: usize,
         claims: &[LiveDreamClaim],
-    ) -> Result<(Vec<DreamAssociation>, HashMap<ClaimId, Vec<f32>>, VectorDistance)> {
+    ) -> Result<(
+        Vec<DreamAssociation>,
+        HashMap<ClaimId, Vec<f32>>,
+        VectorDistance,
+    )> {
         let mut associations = Vec::new();
         let mut paired_claims = HashSet::<(ClaimId, ClaimId)>::new();
         let mut claim_vectors = HashMap::<ClaimId, Vec<f32>>::new();
@@ -1138,7 +1144,15 @@ impl MemoryDb {
                     },
                 )?;
                 for row in emb_rows {
-                    let (target_id, dim, norm_str, dist_str, vec_str, rev, hash): (String, usize, String, String, String, i64, String) = row?;
+                    let (target_id, dim, norm_str, dist_str, vec_str, rev, hash): (
+                        String,
+                        usize,
+                        String,
+                        String,
+                        String,
+                        i64,
+                        String,
+                    ) = row?;
                     let Some(claim) = claim_by_id.get(target_id.as_str()) else {
                         continue;
                     };
@@ -1334,10 +1348,9 @@ impl MemoryDb {
              LIMIT ?3",
         )?;
         contradiction_stmt
-            .query_map(
-                params![tenant_id.0, person_id.0, limit as i64],
-                |row| row.get::<_, String>(0).map(ClaimId),
-            )?
+            .query_map(params![tenant_id.0, person_id.0, limit as i64], |row| {
+                row.get::<_, String>(0).map(ClaimId)
+            })?
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(Into::into)
     }
@@ -1363,10 +1376,9 @@ impl MemoryDb {
              LIMIT ?3",
         )?;
         unsummarized_stmt
-            .query_map(
-                params![tenant_id.0, person_id.0, limit as i64],
-                |row| row.get::<_, String>(0).map(EvidenceId),
-            )?
+            .query_map(params![tenant_id.0, person_id.0, limit as i64], |row| {
+                row.get::<_, String>(0).map(EvidenceId)
+            })?
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(Into::into)
     }
@@ -1394,14 +1406,12 @@ impl MemoryDb {
              LIMIT ?3",
         )?;
         stale_summary_stmt
-            .query_map(
-                params![tenant_id.0, person_id.0, limit as i64],
-                |row| row.get::<_, String>(0).map(SummaryId),
-            )?
+            .query_map(params![tenant_id.0, person_id.0, limit as i64], |row| {
+                row.get::<_, String>(0).map(SummaryId)
+            })?
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(Into::into)
     }
-
 }
 
 fn dream_aggregate_categories(
@@ -1495,7 +1505,7 @@ fn dream_aggregate_categories(
             if claim_vec.len() != centroid.len() {
                 continue;
             }
-            let score = vector_score(claim_vec, centroid, &active_distance)?;
+            let score = vector_score(claim_vec, centroid, active_distance)?;
             let bps = (f64::from(score) * 10_000.0).round() as i64;
             if bps >= min_similarity {
                 category_suggestions.push(CategorySuggestion {
@@ -1625,10 +1635,7 @@ fn dream_aggregate_hubs(claims: &[LiveDreamClaim], limit: usize) -> Vec<MemoryHu
     hubs
 }
 
-fn dream_find_unresolved_targets(
-    claims: &[LiveDreamClaim],
-    limit: usize,
-) -> Vec<UnresolvedTarget> {
+fn dream_find_unresolved_targets(claims: &[LiveDreamClaim], limit: usize) -> Vec<UnresolvedTarget> {
     let mut known_identifiers = HashSet::new();
     for claim in claims {
         known_identifiers.insert(claim.id.0.clone());
