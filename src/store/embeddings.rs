@@ -361,29 +361,16 @@ impl MemoryDb {
                 c_value,
             ) = row?;
 
-            let (current_target_revision, text) = match target_kind.as_str() {
-                "source" => {
-                    if let (Some(r), Some(t)) = (s_rev, s_content) {
-                        (r, t)
-                    } else {
-                        continue;
-                    }
-                }
-                "evidence" => {
-                    if let (Some(r), Some(t)) = (e_rev, e_quote) {
-                        (r, t)
-                    } else {
-                        continue;
-                    }
-                }
-                "claim" => {
-                    if let (Some(r), Some(t)) = (c_rev, c_value) {
-                        (r, t)
-                    } else {
-                        continue;
-                    }
-                }
-                _ => continue,
+            let Some((current_target_revision, text)) = extract_target_revision_and_text(
+                &target_kind,
+                s_rev,
+                s_content,
+                e_rev,
+                e_quote,
+                c_rev,
+                c_value,
+            ) else {
+                continue;
             };
 
             if current_target_revision != stored_target_revision
@@ -651,4 +638,40 @@ fn process_projection_row(
         stored_input_hash: stored.as_ref().map(|value| value.1.clone()),
         stored_created_at: stored.map(|value| value.2),
     }))
+}
+
+
+fn extract_target_revision_and_text(
+    target_kind: &str,
+    s_rev: Option<i64>,
+    s_content: Option<String>,
+    e_rev: Option<i64>,
+    e_quote: Option<String>,
+    c_rev: Option<i64>,
+    c_value: Option<String>,
+) -> Option<(i64, String)> {
+    match target_kind {
+        "source" => {
+            if let (Some(r), Some(t)) = (s_rev, s_content) {
+                Some((r, t))
+            } else {
+                None
+            }
+        }
+        "evidence" => {
+            if let (Some(r), Some(t)) = (e_rev, e_quote) {
+                Some((r, t))
+            } else {
+                None
+            }
+        }
+        "claim" => {
+            if let (Some(r), Some(t)) = (c_rev, c_value) {
+                Some((r, t))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
 }
