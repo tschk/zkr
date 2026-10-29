@@ -640,7 +640,6 @@ fn process_projection_row(
     }))
 }
 
-
 fn extract_target_revision_and_text(
     target_kind: &str,
     s_rev: Option<i64>,
@@ -651,27 +650,9 @@ fn extract_target_revision_and_text(
     c_value: Option<String>,
 ) -> Option<(i64, String)> {
     match target_kind {
-        "source" => {
-            if let (Some(r), Some(t)) = (s_rev, s_content) {
-                Some((r, t))
-            } else {
-                None
-            }
-        }
-        "evidence" => {
-            if let (Some(r), Some(t)) = (e_rev, e_quote) {
-                Some((r, t))
-            } else {
-                None
-            }
-        }
-        "claim" => {
-            if let (Some(r), Some(t)) = (c_rev, c_value) {
-                Some((r, t))
-            } else {
-                None
-            }
-        }
+        "source" => s_rev.zip(s_content),
+        "evidence" => e_rev.zip(e_quote),
+        "claim" => c_rev.zip(c_value),
         _ => None,
     }
 }
