@@ -121,7 +121,6 @@ pub fn auto_vectorize(text: &str) -> Vec<f32> {
     normalize_vector(accum)
 }
 
-
 /// Categorize a cited fact or task across one or more categories without introducing a second memory lifecycle.
 #[derive(Debug, Deserialize)]
 pub struct ProjectMemoryInput {
