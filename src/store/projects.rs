@@ -1658,6 +1658,38 @@ mod tests {
         assert_eq!(fallback_short, expected_fallback);
     }
 
+
+    #[test]
+    fn test_auto_vectorize_unicode_characters() {
+        // Test strings with Unicode characters (non-ASCII)
+        let vec_unicode = auto_vectorize("こんにちは世界 🦀 ПРИВЕТ мир 🦀🦀🦀");
+        assert_eq!(vec_unicode.len(), super::AUTO_EMBEDDING_DIM);
+
+        // Ensure it is L2-normalized
+        let norm: f32 = vec_unicode.iter().map(|v| v * v).sum::<f32>().sqrt();
+        assert!((norm - 1.0).abs() < 1e-5);
+
+        // Ensure determinism
+        let vec_unicode_2 = auto_vectorize("こんにちは世界 🦀 ПРИВЕТ мир 🦀🦀🦀");
+        assert_eq!(vec_unicode, vec_unicode_2);
+    }
+
+    #[test]
+    fn test_auto_vectorize_very_long_string() {
+        // Test an extremely long string
+        let long_string = "rust ".repeat(10_000);
+        let vec_long = auto_vectorize(&long_string);
+        assert_eq!(vec_long.len(), super::AUTO_EMBEDDING_DIM);
+
+        // Ensure it is L2-normalized
+        let norm: f32 = vec_long.iter().map(|v| v * v).sum::<f32>().sqrt();
+        assert!((norm - 1.0).abs() < 1e-5); // Long strings might have slight floating point accumulation differences
+
+        // Ensure determinism
+        let vec_long_2 = auto_vectorize(&long_string);
+        assert_eq!(vec_long, vec_long_2);
+    }
+
     #[test]
     fn remember_project_record_merges_categories_and_requires_claim() {
         let mut db = MemoryDb::open(":memory:").unwrap();
