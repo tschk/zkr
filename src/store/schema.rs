@@ -395,13 +395,14 @@ fn scoped_ids(
     tenant_id: &TenantId,
     person_id: &PersonId,
 ) -> Result<Vec<String>> {
-    if !is_valid_identifier(table) || !is_valid_identifier(column) {
-        return Err(Error::Invalid("invalid table or column identifier".into()));
-    }
+    let query = match (table, column) {
+        ("sources", "id") => "SELECT id FROM sources WHERE tenant_id = ?1 AND person_id = ?2 ORDER BY id",
+        ("evidence", "id") => "SELECT id FROM evidence WHERE tenant_id = ?1 AND person_id = ?2 ORDER BY id",
+        ("daily_reviews", "id") => "SELECT id FROM daily_reviews WHERE tenant_id = ?1 AND person_id = ?2 ORDER BY id",
+        _ => return Err(Error::Invalid("invalid table or column identifier".into())),
+    };
 
-    let mut statement = transaction.prepare(&format!(
-        "SELECT {column} FROM {table} WHERE tenant_id = ?1 AND person_id = ?2 ORDER BY {column}"
-    ))?;
+    let mut statement = transaction.prepare(query)?;
     Ok(statement
         .query_map(params![tenant_id.0, person_id.0], |row| row.get(0))?
         .collect::<std::result::Result<Vec<_>, _>>()?)
