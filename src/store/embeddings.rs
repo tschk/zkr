@@ -292,7 +292,6 @@ pub(super) fn embedding_target(kind: &str, id: &str) -> Result<EmbeddingTarget> 
     })
 }
 
-
 pub(super) fn current_target_revision_and_text(
     target_kind: &str,
     s_rev: Option<i64>,
@@ -380,7 +379,13 @@ impl MemoryDb {
             ) = row?;
 
             let Some((current_target_revision, text)) = current_target_revision_and_text(
-                &target_kind, s_rev, s_content, e_rev, e_quote, c_rev, c_value,
+                &target_kind,
+                s_rev,
+                s_content,
+                e_rev,
+                e_quote,
+                c_rev,
+                c_value,
             ) else {
                 continue;
             };
