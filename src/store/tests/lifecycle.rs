@@ -1292,3 +1292,22 @@ fn archive_rejects_invalid_states() {
         .unwrap_err();
     assert!(matches!(err, Error::Invalid(msg) if msg == "archive cannot be superseded"));
 }
+
+#[test]
+fn open_handles_connection_and_migration_errors() {
+    let temp = tempfile::NamedTempFile::new().unwrap();
+    let conn = Connection::open(temp.path()).unwrap();
+    conn.execute("PRAGMA user_version = 99999;", []).unwrap();
+    conn.close().unwrap();
+
+    let result = MemoryDb::open(temp.path());
+    assert!(result.is_err());
+    if let Err(Error::Invalid(msg)) = result {
+        assert!(msg.contains("is newer than supported version"));
+    } else {
+        panic!("Expected Error::Invalid for migration failure");
+    }
+
+    let result_conn_err = MemoryDb::open("/invalid/path/that/does/not/exist");
+    assert!(result_conn_err.is_err());
+}
