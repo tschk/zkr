@@ -63,7 +63,7 @@ const STOPWORDS: &[&str] = &[
 fn extract_words(text: &str) -> Vec<String> {
     text.to_lowercase()
         .split(|c: char| !c.is_alphanumeric())
-        .filter(|s| s.len() >= 2 && !STOPWORDS.contains(&s.as_ref()))
+        .filter(|s| s.len() >= 2 && !STOPWORDS.contains(s))
         .map(str::to_owned)
         .collect()
 }
