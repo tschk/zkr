@@ -433,6 +433,34 @@ fn claims_explicitly_connected(left: &LiveDreamClaim, right: &LiveDreamClaim) ->
 
 type CandidateFact = (ProjectFact, String, i64, String);
 
+
+fn extract_and_validate_categories(input_category: Option<String>, input_categories: Vec<String>) -> Result<Vec<String>> {
+    let mut categories = Vec::new();
+    let mut push_category = |cat: String| -> Result<()> {
+        require_text("category", &cat)?;
+        if cat.len() > 256 {
+            return Err(Error::Invalid("category exceeds 256 bytes".to_owned()));
+        }
+        if !categories.contains(&cat) {
+            categories.push(cat);
+        }
+        Ok(())
+    };
+    if let Some(cat) = input_category {
+        push_category(cat)?;
+    }
+    for cat in input_categories {
+        push_category(cat)?;
+    }
+    if categories.is_empty() {
+        return Err(Error::Invalid("category must not be empty".to_owned()));
+    }
+    if categories.len() > 32 {
+        return Err(Error::Invalid("categories exceed 32 entries".to_owned()));
+    }
+    Ok(categories)
+}
+
 impl MemoryDb {
     /// Store a caller-defined JSON record as the cited claim's complete value.
     /// Generic `correct` updates this serialized value; connections never grant authority.
@@ -456,6 +484,51 @@ impl MemoryDb {
 
     /// Use a stable predicate per fact/task (for example `task:launch:status`).
     /// Update it through `correct`; deletion, replication and evidence stay ordinary ZKR operations.
+
+    fn process_project_embeddings(
+        &mut self,
+        tenant_id: &TenantId,
+        person_id: &PersonId,
+        claim_id: &ClaimId,
+        source_text: &str,
+        inline_embedding: Option<InlineEmbedding>,
+    ) -> Result<()> {
+        let target = EmbeddingTarget::Claim(claim_id.clone());
+        if let Some(emb) = inline_embedding {
+            let proj = projection_input_from(&self.connection, tenant_id, person_id, target.clone())?;
+            self.upsert_embedding(EmbeddingInput {
+                tenant_id: tenant_id.clone(),
+                person_id: person_id.clone(),
+                target: target.clone(),
+                embedding: Embedding {
+                    vector: emb.vector,
+                    model: emb.model,
+                    version: emb.version,
+                    input_hash: proj.input_hash,
+                    normalization: emb.normalization,
+                    distance: emb.distance,
+                },
+            })?;
+        }
+        if let Ok(proj) = projection_input_from(&self.connection, tenant_id, person_id, target.clone()) {
+            let auto_vec = auto_vectorize(&format!("{} {source_text}", proj.text));
+            let _ = self.upsert_embedding(EmbeddingInput {
+                tenant_id: tenant_id.clone(),
+                person_id: person_id.clone(),
+                target,
+                embedding: Embedding {
+                    vector: auto_vec,
+                    model: AUTO_EMBEDDING_MODEL.to_owned(),
+                    version: AUTO_EMBEDDING_VERSION.to_owned(),
+                    input_hash: proj.input_hash,
+                    normalization: VectorNormalization::L2,
+                    distance: VectorDistance::Cosine,
+                },
+            });
+        }
+        Ok(())
+    }
+
     pub fn remember_project(&mut self, mut input: ProjectMemoryInput) -> Result<Remembered> {
         require_scope(&input.memory.tenant_id, &input.memory.person_id)?;
         let project = match input.project {
@@ -465,38 +538,21 @@ impl MemoryDb {
             }
             None => "general".to_owned(),
         };
-        let mut categories = Vec::new();
-        let mut push_category = |cat: String| -> Result<()> {
-            require_text("category", &cat)?;
-            if cat.len() > 256 {
-                return Err(Error::Invalid("category exceeds 256 bytes".to_owned()));
-            }
-            if !categories.contains(&cat) {
-                categories.push(cat);
-            }
-            Ok(())
-        };
-        if let Some(cat) = input.category {
-            push_category(cat)?;
-        }
-        for cat in input.categories {
-            push_category(cat)?;
-        }
-        if categories.is_empty() {
-            return Err(Error::Invalid("category must not be empty".to_owned()));
-        }
-        if categories.len() > 32 {
-            return Err(Error::Invalid("categories exceed 32 entries".to_owned()));
-        }
+
+        let categories = extract_and_validate_categories(input.category, input.categories)?;
+
         if let Some(emb) = &input.embedding {
             require_text("embedding model", &emb.model)?;
             require_text("embedding version", &emb.version)?;
             validate_embedding_vector(&emb.vector, &emb.normalization)?;
         }
-        let claim =
-            input.memory.claim.as_mut().ok_or_else(|| {
-                Error::Invalid("project memory requires a cited claim".to_owned())
-            })?;
+
+        let claim = input
+            .memory
+            .claim
+            .as_mut()
+            .ok_or_else(|| Error::Invalid("project memory requires a cited claim".to_owned()))?;
+
         let mut subject_parts = Vec::with_capacity(1 + categories.len());
         subject_parts.push(project.as_str());
         for cat in &categories {
@@ -504,55 +560,24 @@ impl MemoryDb {
         }
         // JSON preserves exact labels containing separators and quotes.
         claim.subject = format!("zkr:project:{}", serde_json::to_string(&subject_parts)?);
+
         let tenant_id = input.memory.tenant_id.clone();
         let person_id = input.memory.person_id.clone();
         let source_text = input.memory.text.clone();
         let inline_embedding = input.embedding;
+
         let remembered = self.remember(input.memory)?;
+
         if let Some(claim_id) = remembered.claim_id.clone() {
-            if let Some(emb) = inline_embedding {
-                let proj = projection_input_from(
-                    &self.connection,
-                    &tenant_id,
-                    &person_id,
-                    EmbeddingTarget::Claim(claim_id.clone()),
-                )?;
-                self.upsert_embedding(EmbeddingInput {
-                    tenant_id: tenant_id.clone(),
-                    person_id: person_id.clone(),
-                    target: EmbeddingTarget::Claim(claim_id.clone()),
-                    embedding: Embedding {
-                        vector: emb.vector,
-                        model: emb.model,
-                        version: emb.version,
-                        input_hash: proj.input_hash,
-                        normalization: emb.normalization,
-                        distance: emb.distance,
-                    },
-                })?;
-            }
-            if let Ok(proj) = projection_input_from(
-                &self.connection,
+            self.process_project_embeddings(
                 &tenant_id,
                 &person_id,
-                EmbeddingTarget::Claim(claim_id.clone()),
-            ) {
-                let auto_vec = auto_vectorize(&format!("{} {source_text}", proj.text));
-                let _ = self.upsert_embedding(EmbeddingInput {
-                    tenant_id,
-                    person_id,
-                    target: EmbeddingTarget::Claim(claim_id),
-                    embedding: Embedding {
-                        vector: auto_vec,
-                        model: AUTO_EMBEDDING_MODEL.to_owned(),
-                        version: AUTO_EMBEDDING_VERSION.to_owned(),
-                        input_hash: proj.input_hash,
-                        normalization: VectorNormalization::L2,
-                        distance: VectorDistance::Cosine,
-                    },
-                });
-            }
+                &claim_id,
+                &source_text,
+                inline_embedding,
+            )?;
         }
+
         Ok(remembered)
     }
 
