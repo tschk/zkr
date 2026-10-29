@@ -591,3 +591,29 @@ impl MemoryDb {
         Ok(export_page)
     }
 }
+
+pub(super) fn claim_evidence_records(
+    transaction: &Transaction<'_>,
+    tenant_id: &TenantId,
+    person_id: &PersonId,
+) -> Result<Vec<ClaimEvidence>> {
+    let mut statement = transaction.prepare(
+        "SELECT claim_id, evidence_id, relation, confidence_basis_points FROM claim_evidence WHERE tenant_id = ?1 AND person_id = ?2 ORDER BY claim_id, evidence_id"
+    )?;
+    statement
+        .query_map(params![tenant_id.0, person_id.0], |row| {
+            let claim_id_str: String = row.get(0)?;
+            let evidence_id_str: String = row.get(1)?;
+            let relation: String = row.get(2)?;
+            Ok(ClaimEvidence {
+                tenant_id: tenant_id.clone(),
+                person_id: person_id.clone(),
+                claim_id: ClaimId(claim_id_str),
+                evidence_id: EvidenceId(evidence_id_str),
+                relation: serde_json::from_str(&relation).map_err(super::sql_json_error)?,
+                confidence_basis_points: row.get(3)?,
+            })
+        })?
+        .map(|res| res.map_err(Error::from))
+        .collect::<Result<Vec<_>>>()
+}
