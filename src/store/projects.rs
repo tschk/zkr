@@ -486,7 +486,6 @@ impl MemoryDb {
 
     /// Use a stable predicate per fact/task (for example `task:launch:status`).
     /// Update it through `correct`; deletion, replication and evidence stay ordinary ZKR operations.
-
     fn process_project_embeddings(
         &mut self,
         tenant_id: &TenantId,
