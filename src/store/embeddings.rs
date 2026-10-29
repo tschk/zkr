@@ -292,6 +292,17 @@ pub(super) fn embedding_target(kind: &str, id: &str) -> Result<EmbeddingTarget> 
     })
 }
 
+
+const PROJECTION_ISSUES_QUERY: &str = "SELECT targets.target_kind, targets.target_id, targets.text, targets.target_revision,
+       embeddings.target_revision, embeddings.input_hash, embeddings.created_at, embeddings.dimension, embeddings.normalization, embeddings.distance, embeddings.vector
+FROM (
+       SELECT 'source' AS target_kind, id AS target_id, content AS text, revision AS target_revision FROM sources WHERE tenant_id = ?1 AND person_id = ?2 AND deleted_at IS NULL
+       UNION ALL SELECT 'evidence', e.id, e.quote, e.source_revision FROM evidence e JOIN sources s ON s.id = e.source_id AND s.tenant_id = e.tenant_id AND s.person_id = e.person_id WHERE e.tenant_id = ?1 AND e.person_id = ?2 AND e.deleted_at IS NULL AND s.deleted_at IS NULL
+       UNION ALL SELECT 'claim', c.id, c.subject || ' ' || c.predicate || ' ' || c.value, c.recorded_from FROM claims c WHERE c.tenant_id = ?1 AND c.person_id = ?2 AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL AND c.tier IN ('short_term', 'long_term') AND c.processing_state = 'processed'
+) targets
+LEFT JOIN embeddings ON embeddings.target_kind = targets.target_kind AND embeddings.target_id = targets.target_id AND embeddings.tenant_id = ?1 AND embeddings.person_id = ?2 AND embeddings.model = ?3 AND embeddings.version = ?4
+ORDER BY targets.target_kind, targets.target_id";
+
 impl MemoryDb {
     pub(super) fn dense_claims(
         &self,
@@ -538,17 +549,7 @@ impl MemoryDb {
             &input.version,
             None,
         )?;
-        let mut statement = self.connection.prepare(
-            "SELECT targets.target_kind, targets.target_id, targets.text, targets.target_revision,
-                    embeddings.target_revision, embeddings.input_hash, embeddings.created_at, embeddings.dimension, embeddings.normalization, embeddings.distance, embeddings.vector
-             FROM (
-                    SELECT 'source' AS target_kind, id AS target_id, content AS text, revision AS target_revision FROM sources WHERE tenant_id = ?1 AND person_id = ?2 AND deleted_at IS NULL
-                    UNION ALL SELECT 'evidence', e.id, e.quote, e.source_revision FROM evidence e JOIN sources s ON s.id = e.source_id AND s.tenant_id = e.tenant_id AND s.person_id = e.person_id WHERE e.tenant_id = ?1 AND e.person_id = ?2 AND e.deleted_at IS NULL AND s.deleted_at IS NULL
-                    UNION ALL SELECT 'claim', c.id, c.subject || ' ' || c.predicate || ' ' || c.value, c.recorded_from FROM claims c WHERE c.tenant_id = ?1 AND c.person_id = ?2 AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL AND c.tier IN ('short_term', 'long_term') AND c.processing_state = 'processed'
-             ) targets
-             LEFT JOIN embeddings ON embeddings.target_kind = targets.target_kind AND embeddings.target_id = targets.target_id AND embeddings.tenant_id = ?1 AND embeddings.person_id = ?2 AND embeddings.model = ?3 AND embeddings.version = ?4
-             ORDER BY targets.target_kind, targets.target_id",
-        )?;
+        let mut statement = self.connection.prepare(PROJECTION_ISSUES_QUERY)?;
         let mut rows = statement.query(params![
             input.tenant_id.0,
             input.person_id.0,
@@ -556,32 +557,40 @@ impl MemoryDb {
             input.version
         ])?;
 
-        let mut issues = Vec::new();
-        let mut page_bytes = 2;
-        let limit = bounded_limit(input.limit) as usize;
-
-        while let Some(row) = rows.next()? {
-            let issue = match process_projection_row(row, &lane)? {
-                Some(issue) => issue,
-                None => continue,
-            };
-            let issue_bytes = serde_json::to_vec(&issue)?.len();
-            if issue_bytes + 2 > MAX_PROJECTION_PAGE_BYTES {
-                return Err(Error::Invalid(format!(
-                    "projection issue exceeds the {MAX_PROJECTION_PAGE_BYTES}-byte page limit"
-                )));
-            }
-            if !issues.is_empty() && page_bytes + issue_bytes + 1 > MAX_PROJECTION_PAGE_BYTES {
-                break;
-            }
-            page_bytes += issue_bytes + usize::from(!issues.is_empty());
-            issues.push(issue);
-            if issues.len() == limit {
-                break;
-            }
-        }
-        Ok(issues)
+        paginate_projection_issues(&mut rows, &lane, bounded_limit(input.limit) as usize)
     }
+}
+
+
+fn paginate_projection_issues(
+    rows: &mut rusqlite::Rows<'_>,
+    lane: &Option<EmbeddingLane>,
+    limit: usize,
+) -> Result<Vec<ProjectionIssue>> {
+    let mut issues = Vec::new();
+    let mut page_bytes = 2;
+
+    while let Some(row) = rows.next()? {
+        let issue = match process_projection_row(row, lane)? {
+            Some(issue) => issue,
+            None => continue,
+        };
+        let issue_bytes = serde_json::to_vec(&issue)?.len();
+        if issue_bytes + 2 > MAX_PROJECTION_PAGE_BYTES {
+            return Err(Error::Invalid(format!(
+                "projection issue exceeds the {MAX_PROJECTION_PAGE_BYTES}-byte page limit"
+            )));
+        }
+        if !issues.is_empty() && page_bytes + issue_bytes + 1 > MAX_PROJECTION_PAGE_BYTES {
+            break;
+        }
+        page_bytes += issue_bytes + usize::from(!issues.is_empty());
+        issues.push(issue);
+        if issues.len() == limit {
+            break;
+        }
+    }
+    Ok(issues)
 }
 
 fn process_projection_row(
