@@ -639,7 +639,6 @@ fn process_projection_row(
         stored_created_at: stored.map(|value| value.2),
     }))
 }
-
 fn extract_target_revision_and_text(
     target_kind: &str,
     s_rev: Option<i64>,
