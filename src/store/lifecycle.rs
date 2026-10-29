@@ -650,7 +650,12 @@ impl MemoryDb {
     pub fn store_profile(&mut self, input: ProfileInput) -> Result<ProfileEntry> {
         require_scope(&input.tenant_id, &input.person_id)?;
         let transaction = self.connection.transaction()?;
-        let claim = fetch_profile_claim(&transaction, &input.claim_id, &input.tenant_id, &input.person_id)?;
+        let claim = fetch_profile_claim(
+            &transaction,
+            &input.claim_id,
+            &input.tenant_id,
+            &input.person_id,
+        )?;
         let Some((key, value, claim_recorded_at)) = claim else {
             return Err(Error::NotFound);
         };
@@ -659,7 +664,8 @@ impl MemoryDb {
                 "profile entry cannot predate its backing claim".to_owned(),
             ));
         }
-        let existing = fetch_existing_profile_entry(&transaction, &input.tenant_id, &input.person_id, &key)?;
+        let existing =
+            fetch_existing_profile_entry(&transaction, &input.tenant_id, &input.person_id, &key)?;
         let stability = serde_json::to_string(&input.stability)?;
         if let Some((id, stored_value, stored_stability, stored_claim_id, stored_at)) = &existing {
             if stored_value == &value
