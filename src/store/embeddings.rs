@@ -556,32 +556,39 @@ impl MemoryDb {
             input.version
         ])?;
 
-        let mut issues = Vec::new();
-        let mut page_bytes = 2;
-        let limit = bounded_limit(input.limit) as usize;
-
-        while let Some(row) = rows.next()? {
-            let issue = match process_projection_row(row, &lane)? {
-                Some(issue) => issue,
-                None => continue,
-            };
-            let issue_bytes = serde_json::to_vec(&issue)?.len();
-            if issue_bytes + 2 > MAX_PROJECTION_PAGE_BYTES {
-                return Err(Error::Invalid(format!(
-                    "projection issue exceeds the {MAX_PROJECTION_PAGE_BYTES}-byte page limit"
-                )));
-            }
-            if !issues.is_empty() && page_bytes + issue_bytes + 1 > MAX_PROJECTION_PAGE_BYTES {
-                break;
-            }
-            page_bytes += issue_bytes + usize::from(!issues.is_empty());
-            issues.push(issue);
-            if issues.len() == limit {
-                break;
-            }
-        }
-        Ok(issues)
+        collect_projection_issues(&mut rows, &lane, bounded_limit(input.limit) as usize)
     }
+}
+
+fn collect_projection_issues(
+    rows: &mut rusqlite::Rows<'_>,
+    lane: &Option<EmbeddingLane>,
+    limit: usize,
+) -> Result<Vec<ProjectionIssue>> {
+    let mut issues = Vec::new();
+    let mut page_bytes = 2;
+
+    while let Some(row) = rows.next()? {
+        let issue = match process_projection_row(row, lane)? {
+            Some(issue) => issue,
+            None => continue,
+        };
+        let issue_bytes = serde_json::to_vec(&issue)?.len();
+        if issue_bytes + 2 > MAX_PROJECTION_PAGE_BYTES {
+            return Err(Error::Invalid(format!(
+                "projection issue exceeds the {MAX_PROJECTION_PAGE_BYTES}-byte page limit"
+            )));
+        }
+        if !issues.is_empty() && page_bytes + issue_bytes + 1 > MAX_PROJECTION_PAGE_BYTES {
+            break;
+        }
+        page_bytes += issue_bytes + usize::from(!issues.is_empty());
+        issues.push(issue);
+        if issues.len() == limit {
+            break;
+        }
+    }
+    Ok(issues)
 }
 
 fn process_projection_row(
