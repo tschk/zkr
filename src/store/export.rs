@@ -611,5 +611,7 @@ pub(super) fn claim_evidence_records(
                 relation: serde_json::from_str(&relation).map_err(super::sql_json_error)?,
                 confidence_basis_points: row.get(3)?,
             })
-        })?.collect::<std::result::Result<Vec<_>, _>>().map_err(Error::from)
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Error::from)
 }

@@ -1,7 +1,4 @@
-use super::export::{
-    append_records, claim_records, evidence_record, review_record,
-    source_record,
-};
+use super::export::{append_records, claim_records, evidence_record, review_record, source_record};
 use super::*;
 use rusqlite::{Transaction, TransactionBehavior};
 
@@ -356,7 +353,9 @@ fn bootstrap_records(
     for claim in claim_records(transaction, tenant_id, person_id)? {
         records.push(ExportRecord::Claim(claim));
     }
-    for claim_evidence in crate::store::export::claim_evidence_records(transaction, tenant_id, person_id)? {
+    for claim_evidence in
+        crate::store::export::claim_evidence_records(transaction, tenant_id, person_id)?
+    {
         records.push(ExportRecord::ClaimEvidence(claim_evidence));
     }
     for profile in crate::store::export::profile_records(transaction, tenant_id, person_id)? {
