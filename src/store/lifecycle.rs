@@ -387,40 +387,8 @@ impl MemoryDb {
             &input.source_id,
         )?;
 
-        validate_deletion_time(
-            &transaction,
-            &input.tenant_id,
-            &input.person_id,
-            &input.source_id,
-            input.deleted_at,
-        )?;
-
-        let evidence_count = soft_delete_source_and_evidence(
-            &transaction,
-            &input.tenant_id,
-            &input.person_id,
-            &input.source_id,
-            &evidence_ids,
-            input.deleted_at,
-        )?;
-
-        let (claim_count, changed_claim_ids) = retract_claims(
-            &transaction,
-            &input.tenant_id,
-            &input.person_id,
-            &input.source_id,
-            &candidate_claim_ids,
-            input.deleted_at,
-        )?;
-
-        enqueue_deletion_repairs(&transaction, &input, &evidence_ids, &changed_claim_ids)?;
-
-        delete_dependent_projections(
-            &transaction,
-            &input.tenant_id,
-            &input.person_id,
-            &input.source_id,
-        )?;
+        let (evidence_count, claim_count, changed_claim_ids) =
+            execute_deletion_operations(&transaction, &input, &evidence_ids, &candidate_claim_ids)?;
 
         let records = build_deletion_records(
             &transaction,
@@ -1166,6 +1134,50 @@ fn build_correction_records(
         })
     }));
     Ok(records)
+}
+
+fn execute_deletion_operations(
+    transaction: &rusqlite::Transaction<'_>,
+    input: &DeleteInput,
+    evidence_ids: &[EvidenceId],
+    candidate_claim_ids: &[ClaimId],
+) -> Result<(u64, u64, Vec<ClaimId>)> {
+    validate_deletion_time(
+        transaction,
+        &input.tenant_id,
+        &input.person_id,
+        &input.source_id,
+        input.deleted_at,
+    )?;
+
+    let evidence_count = soft_delete_source_and_evidence(
+        transaction,
+        &input.tenant_id,
+        &input.person_id,
+        &input.source_id,
+        evidence_ids,
+        input.deleted_at,
+    )?;
+
+    let (claim_count, changed_claim_ids) = retract_claims(
+        transaction,
+        &input.tenant_id,
+        &input.person_id,
+        &input.source_id,
+        candidate_claim_ids,
+        input.deleted_at,
+    )?;
+
+    enqueue_deletion_repairs(transaction, input, evidence_ids, &changed_claim_ids)?;
+
+    delete_dependent_projections(
+        transaction,
+        &input.tenant_id,
+        &input.person_id,
+        &input.source_id,
+    )?;
+
+    Ok((evidence_count, claim_count, changed_claim_ids))
 }
 
 #[allow(clippy::type_complexity)]
