@@ -1659,6 +1659,22 @@ mod tests {
     }
 
     #[test]
+    fn test_auto_vectorize_edge_cases() {
+        // Unicode and emoji characters
+        let unicode_vec = auto_vectorize("Hello 🌍! おはようございます testing utf8 🚀");
+        assert_eq!(unicode_vec.len(), super::AUTO_EMBEDDING_DIM);
+        let norm_unicode: f32 = unicode_vec.iter().map(|v| v * v).sum::<f32>().sqrt();
+        assert!((norm_unicode - 1.0).abs() < 1e-6);
+
+        // Very long string
+        let long_str = "word ".repeat(10000);
+        let long_vec = auto_vectorize(&long_str);
+        assert_eq!(long_vec.len(), super::AUTO_EMBEDDING_DIM);
+        let norm_long: f32 = long_vec.iter().map(|v| v * v).sum::<f32>().sqrt();
+        assert!((norm_long - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
     fn remember_project_record_merges_categories_and_requires_claim() {
         let mut db = MemoryDb::open(":memory:").unwrap();
 
