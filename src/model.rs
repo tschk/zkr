@@ -299,9 +299,15 @@ mod tests {
 
         let legal_combinations = [
             // ShortTerm accepts any status and any state
-            (ShortTerm, Accepted, Pending), (ShortTerm, Accepted, Processed), (ShortTerm, Accepted, Blocked),
-            (ShortTerm, Superseded, Pending), (ShortTerm, Superseded, Processed), (ShortTerm, Superseded, Blocked),
-            (ShortTerm, Retracted, Pending), (ShortTerm, Retracted, Processed), (ShortTerm, Retracted, Blocked),
+            (ShortTerm, Accepted, Pending),
+            (ShortTerm, Accepted, Processed),
+            (ShortTerm, Accepted, Blocked),
+            (ShortTerm, Superseded, Pending),
+            (ShortTerm, Superseded, Processed),
+            (ShortTerm, Superseded, Blocked),
+            (ShortTerm, Retracted, Pending),
+            (ShortTerm, Retracted, Processed),
+            (ShortTerm, Retracted, Blocked),
             // LongTerm requires Processed state
             (LongTerm, Accepted, Processed),
             (LongTerm, Superseded, Processed),
@@ -323,7 +329,9 @@ mod tests {
                         is_legal_state_combination(t, s, p),
                         is_legal,
                         "Failed for tier={:?}, status={:?}, processing_state={:?}",
-                        t, s, p
+                        t,
+                        s,
+                        p
                     );
                 }
             }
