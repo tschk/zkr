@@ -1625,7 +1625,6 @@ mod tests {
         assert!((norm_long - 1.0).abs() < 1e-5);
     }
 
-
     use serde_json::json;
 
     fn memory(project: &str, category: &str, person: &str, value: &str) -> ProjectMemoryInput {
