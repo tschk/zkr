@@ -1,5 +1,5 @@
 use super::export::{
-    append_records, claim_evidence_record, claim_records, evidence_record, review_record,
+    append_records, claim_evidence_record, claim_records, evidence_record, review_records,
     source_record,
 };
 use super::*;
@@ -377,13 +377,8 @@ fn bootstrap_records(
     for profile in crate::store::export::profile_records(transaction, tenant_id, person_id)? {
         records.push(ExportRecord::Profile(profile));
     }
-    for review_id in scoped_ids(transaction, "daily_reviews", "id", tenant_id, person_id)? {
-        records.push(ExportRecord::DailyReview(review_record(
-            transaction,
-            tenant_id,
-            person_id,
-            &DailyReviewId(review_id),
-        )?));
+    for review in review_records(transaction, tenant_id, person_id)? {
+        records.push(ExportRecord::DailyReview(review));
     }
     Ok(records)
 }
