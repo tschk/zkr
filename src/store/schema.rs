@@ -396,9 +396,15 @@ fn scoped_ids(
     person_id: &PersonId,
 ) -> Result<Vec<String>> {
     let query = match (table, column) {
-        ("sources", "id") => "SELECT id FROM sources WHERE tenant_id = ?1 AND person_id = ?2 ORDER BY id",
-        ("evidence", "id") => "SELECT id FROM evidence WHERE tenant_id = ?1 AND person_id = ?2 ORDER BY id",
-        ("daily_reviews", "id") => "SELECT id FROM daily_reviews WHERE tenant_id = ?1 AND person_id = ?2 ORDER BY id",
+        ("sources", "id") => {
+            "SELECT id FROM sources WHERE tenant_id = ?1 AND person_id = ?2 ORDER BY id"
+        }
+        ("evidence", "id") => {
+            "SELECT id FROM evidence WHERE tenant_id = ?1 AND person_id = ?2 ORDER BY id"
+        }
+        ("daily_reviews", "id") => {
+            "SELECT id FROM daily_reviews WHERE tenant_id = ?1 AND person_id = ?2 ORDER BY id"
+        }
         _ => return Err(Error::Invalid("invalid table or column identifier".into())),
     };
 
