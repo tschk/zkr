@@ -975,7 +975,6 @@ fn record_hash(record: &ExportRecord) -> Result<String> {
     ))
 }
 
-
 fn apply_origin_pass_record(
     transaction: &Transaction<'_>,
     record: &ExportRecord,
