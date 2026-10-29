@@ -639,7 +639,6 @@ impl Personality {
         Ok(())
     }
 
-
     fn has_recent_followup_message(&self, te: &ConversationEvent) -> bool {
         self.recent_events.iter().any(|e| {
             e.epoch > te.epoch
