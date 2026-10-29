@@ -1041,66 +1041,22 @@ impl Personality {
 
         let mut findings = Vec::new();
 
-        // Finding: participation imbalance.
-        if total_turns > 0 && participation_balance < 0.3 {
-            findings.push(ObservationFinding {
-                scope: scope.into(),
-                finding: "Participation is heavily imbalanced — one party dominates".into(),
-                evidence: vec![format!(
-                    "agent={}/{} user={}/{} balance={:.2}",
-                    agent_turns, total_turns, user_turns, total_turns, participation_balance
-                )],
-                recommendation: Some("adjust turn-taking thresholds".into()),
-                severity: ObservationSeverity::Warning,
-            });
+        if let Some(f) = analyze_participation_imbalance(scope, total_turns, agent_turns, user_turns, participation_balance) {
+            findings.push(f);
         }
 
-        // Finding: high error rate.
-        if error_rate > 0.2 {
-            findings.push(ObservationFinding {
-                scope: scope.into(),
-                finding: format!("High error rate: {:.0}%", error_rate * 100.0),
-                evidence: vec![format!(
-                    "{} errors out of {} events",
-                    events.iter().filter(|e| e.event_kind == "error").count(),
-                    total_turns
-                )],
-                recommendation: Some("review tool configuration and retry strategy".into()),
-                severity: if error_rate > 0.5 {
-                    ObservationSeverity::Critical
-                } else {
-                    ObservationSeverity::Warning
-                },
-            });
+        if let Some(f) = analyze_error_rate(scope, events, total_turns, error_rate) {
+            findings.push(f);
         }
 
-        // Finding: conversation velocity.
         let epoch_span = self.epoch.max(1) as f64;
         let velocity = total_turns as f64 / epoch_span;
-        if velocity < 0.1 && total_turns > 5 {
-            findings.push(ObservationFinding {
-                scope: scope.into(),
-                finding: "Conversation velocity is low — long gaps between events".into(),
-                evidence: vec![format!(
-                    "{total_turns} events over {epoch_span} epochs (velocity {velocity:.2})"
-                )],
-                recommendation: Some("consider proactive engagement".into()),
-                severity: ObservationSeverity::Info,
-            });
+        if let Some(f) = analyze_velocity(scope, total_turns, epoch_span, velocity) {
+            findings.push(f);
         }
 
-        // Finding: typing without send.
-        let typing_without_send_count = events.iter().filter(|e| e.event_kind == "typing").count();
-        if typing_without_send_count > 3 {
-            findings.push(ObservationFinding {
-                scope: scope.into(),
-                finding: "Multiple typing-without-send events detected — possible confusion".into(),
-                evidence: vec![format!(
-                    "{typing_without_send_count} typing events without follow-up messages"
-                )],
-                recommendation: Some("simplify responses and check for misunderstanding".into()),
-                severity: ObservationSeverity::Warning,
-            });
+        if let Some(f) = analyze_typing_without_send(scope, events) {
+            findings.push(f);
         }
 
         // Persist findings.
@@ -1239,6 +1195,98 @@ impl Personality {
             enabled_features: vec![FEATURE_FLAG.into()],
         })?;
         Ok(pack.items.into_iter().map(|item| item.excerpt).collect())
+    }
+}
+
+
+fn analyze_participation_imbalance(
+    scope: &str,
+    total_turns: u64,
+    agent_turns: u64,
+    user_turns: u64,
+    participation_balance: f64,
+) -> Option<ObservationFinding> {
+    if total_turns > 0 && participation_balance < 0.3 {
+        Some(ObservationFinding {
+            scope: scope.into(),
+            finding: "Participation is heavily imbalanced — one party dominates".into(),
+            evidence: vec![format!(
+                "agent={}/{} user={}/{} balance={:.2}",
+                agent_turns, total_turns, user_turns, total_turns, participation_balance
+            )],
+            recommendation: Some("adjust turn-taking thresholds".into()),
+            severity: ObservationSeverity::Warning,
+        })
+    } else {
+        None
+    }
+}
+
+fn analyze_error_rate(
+    scope: &str,
+    events: &[ConversationEvent],
+    total_turns: u64,
+    error_rate: f64,
+) -> Option<ObservationFinding> {
+    if error_rate > 0.2 {
+        Some(ObservationFinding {
+            scope: scope.into(),
+            finding: format!("High error rate: {:.0}%", error_rate * 100.0),
+            evidence: vec![format!(
+                "{} errors out of {} events",
+                events.iter().filter(|e| e.event_kind == "error").count(),
+                total_turns
+            )],
+            recommendation: Some("review tool configuration and retry strategy".into()),
+            severity: if error_rate > 0.5 {
+                ObservationSeverity::Critical
+            } else {
+                ObservationSeverity::Warning
+            },
+        })
+    } else {
+        None
+    }
+}
+
+fn analyze_velocity(
+    scope: &str,
+    total_turns: u64,
+    epoch_span: f64,
+    velocity: f64,
+) -> Option<ObservationFinding> {
+    if velocity < 0.1 && total_turns > 5 {
+        Some(ObservationFinding {
+            scope: scope.into(),
+            finding: "Conversation velocity is low — long gaps between events".into(),
+            evidence: vec![format!(
+                "{total_turns} events over {epoch_span} epochs (velocity {velocity:.2})"
+            )],
+            recommendation: Some("consider proactive engagement".into()),
+            severity: ObservationSeverity::Info,
+        })
+    } else {
+        None
+    }
+}
+
+fn analyze_typing_without_send(
+    scope: &str,
+    events: &[ConversationEvent],
+) -> Option<ObservationFinding> {
+    let typing_without_send_count = events.iter().filter(|e| e.event_kind == "typing").count();
+    if typing_without_send_count > 3 {
+        Some(ObservationFinding {
+            scope: scope.into(),
+            finding: "Multiple typing-without-send events detected — possible confusion".into(),
+            evidence: vec![format!(
+                "{typing_without_send_count} typing events without follow-up messages"
+            )],
+            recommendation: Some("simplify responses and check for misunderstanding".into()),
+            severity: ObservationSeverity::Warning,
+        })
+    } else {
+        None
     }
 }
 
