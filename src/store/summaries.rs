@@ -153,7 +153,7 @@ impl MemoryDb {
             )?;
             let rows = statement.query_map(
                 params![input.tenant_id.0, input.person_id.0, child_ids_json],
-                |row| summary_from_row_at(SummaryId(row.get(0)?), row, 1)
+                |row| summary_from_row_at(SummaryId(row.get(0)?), row, 1),
             )?;
             let children = rows.collect::<std::result::Result<Vec<_>, _>>()?;
             if children.len() != stale.child_ids.len() {
