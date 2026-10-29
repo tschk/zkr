@@ -57,7 +57,12 @@ impl MemoryDb {
         let right = &children[1];
 
         validate_merge_children(left, right, input.recorded_at)?;
-        check_children_have_no_live_parent(&transaction, &input.tenant_id, &input.person_id, &children)?;
+        check_children_have_no_live_parent(
+            &transaction,
+            &input.tenant_id,
+            &input.person_id,
+            &children,
+        )?;
 
         let evidence_ids = unique_evidence(&children);
         let child_ids = children
