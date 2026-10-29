@@ -674,3 +674,21 @@ fn test_record_identity_deletion() {
         ("deletion", "source:src-1".to_string())
     );
 }
+
+
+#[test]
+fn apply_rejects_empty_scope() {
+    let mut replica = empty();
+
+    // Test empty tenant_id
+    let mut empty_tenant = apply_input(vec![]);
+    empty_tenant.tenant_id = TenantId("".into());
+    let error = replica.apply(empty_tenant).unwrap_err();
+    assert!(matches!(error, Error::Invalid(msg) if msg.contains("tenant_id must not be empty")));
+
+    // Test empty person_id
+    let mut empty_person = apply_input(vec![]);
+    empty_person.person_id = PersonId("".into());
+    let error = replica.apply(empty_person).unwrap_err();
+    assert!(matches!(error, Error::Invalid(msg) if msg.contains("person_id must not be empty")));
+}
