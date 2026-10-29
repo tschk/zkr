@@ -650,29 +650,18 @@ impl MemoryDb {
     pub fn store_profile(&mut self, input: ProfileInput) -> Result<ProfileEntry> {
         require_scope(&input.tenant_id, &input.person_id)?;
         let transaction = self.connection.transaction()?;
-        let claim = transaction
-            .query_row(
-            "SELECT predicate, value, recorded_from FROM claims WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND kind = 'profile_fact' AND status = 'accepted' AND valid_until IS NULL AND recorded_until IS NULL",
-            params![input.claim_id.0, input.tenant_id.0, input.person_id.0],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Timestamp>(2)?)),
-        )
-            .optional()?;
-        let Some((key, value, claim_recorded_at)) = claim else {
-            return Err(Error::NotFound);
-        };
+
+        let (key, value, claim_recorded_at) = fetch_profile_claim(&transaction, &input)?;
         if input.recorded_at < claim_recorded_at {
             return Err(Error::Invalid(
                 "profile entry cannot predate its backing claim".to_owned(),
             ));
         }
-        let existing = transaction
-            .query_row(
-                "SELECT id, value, stability, claim_id, recorded_at FROM profile_entries WHERE tenant_id = ?1 AND person_id = ?2 AND key = ?3",
-                params![input.tenant_id.0, input.person_id.0, key],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?, row.get::<_, Timestamp>(4)?)),
-            )
-            .optional()?;
+
+        let existing =
+            fetch_existing_profile_entry(&transaction, &input.tenant_id, &input.person_id, &key)?;
         let stability = serde_json::to_string(&input.stability)?;
+
         if let Some((id, stored_value, stored_stability, stored_claim_id, stored_at)) = &existing {
             if stored_value == &value
                 && stored_stability == &stability
@@ -697,6 +686,7 @@ impl MemoryDb {
                 ));
             }
         }
+
         let profile = ProfileEntry {
             id: existing
                 .as_ref()
@@ -710,10 +700,8 @@ impl MemoryDb {
             claim_id: input.claim_id,
             recorded_at: input.recorded_at,
         };
-        transaction.execute(
-            "INSERT INTO profile_entries(id, tenant_id, person_id, key, value, stability, claim_id, recorded_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) ON CONFLICT(tenant_id, person_id, key) DO UPDATE SET value = excluded.value, stability = excluded.stability, claim_id = excluded.claim_id, recorded_at = excluded.recorded_at",
-            params![profile.id.0, profile.tenant_id.0, profile.person_id.0, profile.key, profile.value, stability, profile.claim_id.0, profile.recorded_at],
-        )?;
+
+        upsert_profile_entry(&transaction, &profile, &stability)?;
         append_commit(
             &transaction,
             &profile.tenant_id,
@@ -1459,4 +1447,47 @@ fn render_profile_pager(generated_at: Timestamp, entries: &[ProfileEntry]) -> St
         ));
     }
     markdown
+}
+
+fn fetch_profile_claim(
+    transaction: &Transaction<'_>,
+    input: &ProfileInput,
+) -> Result<(String, String, Timestamp)> {
+    transaction
+        .query_row(
+            "SELECT predicate, value, recorded_from FROM claims WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND kind = 'profile_fact' AND status = 'accepted' AND valid_until IS NULL AND recorded_until IS NULL",
+            params![input.claim_id.0, input.tenant_id.0, input.person_id.0],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Timestamp>(2)?)),
+        )
+        .optional()?
+        .ok_or(Error::NotFound)
+}
+
+type ExistingProfileEntry = (String, String, String, String, Timestamp);
+fn fetch_existing_profile_entry(
+    transaction: &Transaction<'_>,
+    tenant_id: &TenantId,
+    person_id: &PersonId,
+    key: &str,
+) -> Result<Option<ExistingProfileEntry>> {
+    transaction
+        .query_row(
+            "SELECT id, value, stability, claim_id, recorded_at FROM profile_entries WHERE tenant_id = ?1 AND person_id = ?2 AND key = ?3",
+            params![tenant_id.0, person_id.0, key],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?, row.get::<_, Timestamp>(4)?)),
+        )
+        .optional()
+        .map_err(Into::into)
+}
+
+fn upsert_profile_entry(
+    transaction: &Transaction<'_>,
+    profile: &ProfileEntry,
+    stability: &str,
+) -> Result<()> {
+    transaction.execute(
+        "INSERT INTO profile_entries(id, tenant_id, person_id, key, value, stability, claim_id, recorded_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) ON CONFLICT(tenant_id, person_id, key) DO UPDATE SET value = excluded.value, stability = excluded.stability, claim_id = excluded.claim_id, recorded_at = excluded.recorded_at",
+        params![profile.id.0, profile.tenant_id.0, profile.person_id.0, profile.key, profile.value, stability, profile.claim_id.0, profile.recorded_at],
+    )?;
+    Ok(())
 }
