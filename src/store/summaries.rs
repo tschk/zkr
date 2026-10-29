@@ -478,13 +478,15 @@ fn summary_row(
     id: &SummaryId,
     live: bool,
 ) -> Result<MemorySummary> {
-    let stale = if live { " AND stale_at IS NULL" } else { "" };
+    let query = if live {
+        "SELECT summary, evidence_ids, child_ids, start_sequence, end_sequence, level, recorded_at FROM summary_nodes WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3 AND stale_at IS NULL"
+    } else {
+        "SELECT summary, evidence_ids, child_ids, start_sequence, end_sequence, level, recorded_at FROM summary_nodes WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3"
+    };
     connection
-        .query_row(
-            &format!("SELECT summary, evidence_ids, child_ids, start_sequence, end_sequence, level, recorded_at FROM summary_nodes WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3{stale}"),
-            params![id.0, tenant_id.0, person_id.0],
-            |row| summary_from_row(id.clone(), row),
-        )
+        .query_row(query, params![id.0, tenant_id.0, person_id.0], |row| {
+            summary_from_row(id.clone(), row)
+        })
         .optional()?
         .ok_or(Error::NotFound)
 }
