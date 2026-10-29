@@ -387,12 +387,8 @@ impl MemoryDb {
             &input.source_id,
         )?;
 
-        let (evidence_count, claim_count, changed_claim_ids) = execute_deletion_operations(
-            &transaction,
-            &input,
-            &evidence_ids,
-            &candidate_claim_ids,
-        )?;
+        let (evidence_count, claim_count, changed_claim_ids) =
+            execute_deletion_operations(&transaction, &input, &evidence_ids, &candidate_claim_ids)?;
 
         let records = build_deletion_records(
             &transaction,
