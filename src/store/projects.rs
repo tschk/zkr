@@ -419,6 +419,12 @@ struct LiveDreamClaim {
     project_categories: Option<(String, Vec<String>)>,
 }
 
+type DreamAssociationsOutput = (
+    Vec<DreamAssociation>,
+    HashMap<ClaimId, Vec<f32>>,
+    VectorDistance,
+);
+
 fn claim_points_to(from: &LiveDreamClaim, to: &LiveDreamClaim) -> bool {
     from.record.as_ref().is_some_and(|rec| {
         rec.connections.iter().any(|conn| {
@@ -1031,11 +1037,7 @@ impl MemoryDb {
         requested_lane: Option<(String, String)>,
         min_similarity: i64,
         limit: usize,
-    ) -> Result<(
-        Vec<DreamAssociation>,
-        HashMap<ClaimId, Vec<f32>>,
-        VectorDistance,
-    )> {
+    ) -> Result<DreamAssociationsOutput> {
         let mut associations = Vec::new();
         let mut paired_claims = HashSet::<(ClaimId, ClaimId)>::new();
 
