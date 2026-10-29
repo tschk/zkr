@@ -83,6 +83,7 @@ mod embeddings;
 mod export;
 mod lifecycle;
 mod migrations;
+mod open;
 mod projects;
 mod repair;
 mod repair_perf;
