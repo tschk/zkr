@@ -1,17 +1,13 @@
-use std::collections::HashMap;
-
 use crate::{
     ClaimInput, ClaimKind, MemoryDb, MemoryProcessingState, MemoryTier, PersonId, RememberInput,
     Result, SearchInput, SourceKind, TenantId, Timestamp, nanos, now_seconds,
 };
-
+use std::collections::HashMap;
 /// Feature flag used for all personality-gated memory items.
 pub const FEATURE_FLAG: &str = "personality";
-
 // ---------------------------------------------------------------------------
 // Turn-taking and proactivity
 // ---------------------------------------------------------------------------
-
 /// The router's decision for a single conversational event.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -21,7 +17,6 @@ pub enum TurnAction {
     React,
     ContinuePending,
 }
-
 /// A turn-taking decision recorded as evidence memory.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TurnDecision {
@@ -32,7 +27,6 @@ pub struct TurnDecision {
     pub confidence_basis_points: u16,
     pub rationale: String,
 }
-
 /// A normalized conversation event from the platform.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ConversationEvent {
@@ -41,7 +35,6 @@ pub struct ConversationEvent {
     pub event_kind: String,
     pub content: String,
 }
-
 /// Hard rules the router evaluates before the learned policy.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct RouterRules {
@@ -54,7 +47,6 @@ pub struct RouterRules {
     /// Max consecutive agent turns before forcing silence.
     pub max_consecutive_turns: u64,
 }
-
 impl Default for RouterRules {
     fn default() -> Self {
         Self {
@@ -65,18 +57,15 @@ impl Default for RouterRules {
         }
     }
 }
-
 /// The result of routing an event through hard rules + policy.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct RouterResult {
     pub decision: TurnDecision,
     pub behavioral_context: Vec<String>,
 }
-
 // ---------------------------------------------------------------------------
 // Social signals
 // ---------------------------------------------------------------------------
-
 /// A derived social signal from conversation events.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SocialSignal {
@@ -85,7 +74,6 @@ pub struct SocialSignal {
     pub value: String,
     pub epoch: u64,
 }
-
 /// Aggregated signal summary for a participant.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct SignalSummary {
@@ -97,11 +85,9 @@ pub struct SignalSummary {
     pub typing_without_send: u64,
     pub reaction_count: u64,
 }
-
 // ---------------------------------------------------------------------------
 // Social norms (voice card)
 // ---------------------------------------------------------------------------
-
 /// A versioned, evidence-cited voice card for a conversation scope.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct VoiceCard {
@@ -120,11 +106,9 @@ pub struct VoiceCard {
     pub valid_from: Timestamp,
     pub valid_until: Option<Timestamp>,
 }
-
 // ---------------------------------------------------------------------------
 // Theory of mind
 // ---------------------------------------------------------------------------
-
 /// An expiring hypothesis about a participant's mental state.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct MindHypothesis {
@@ -136,7 +120,6 @@ pub struct MindHypothesis {
     pub confidence_basis_points: u16,
     pub valid_until: Option<Timestamp>,
 }
-
 /// A risk assessment for a candidate reply.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct RiskAssessment {
@@ -147,7 +130,6 @@ pub struct RiskAssessment {
     pub overall_risk_basis_points: u16,
     pub recommendation: RiskRecommendation,
 }
-
 /// What to do about a risk.
 #[derive(Clone, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -157,7 +139,6 @@ pub enum RiskRecommendation {
     Refine,
     Abort,
 }
-
 /// A calibration record comparing a prediction to the real outcome.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CalibrationRecord {
@@ -167,11 +148,9 @@ pub struct CalibrationRecord {
     pub correct: bool,
     pub epoch: u64,
 }
-
 // ---------------------------------------------------------------------------
 // Personas
 // ---------------------------------------------------------------------------
-
 /// A typed persona blueprint for a fictional agent or test population.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PersonaBlueprint {
@@ -181,7 +160,6 @@ pub struct PersonaBlueprint {
     pub constraints: Vec<String>,
     pub citations: Vec<String>,
 }
-
 /// Validation result for a persona.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct PersonaValidation {
@@ -192,11 +170,9 @@ pub struct PersonaValidation {
     pub empty_fields: Vec<String>,
     pub valid: bool,
 }
-
 // ---------------------------------------------------------------------------
 // Social observability
 // ---------------------------------------------------------------------------
-
 /// An evidence-cited finding from post-conversation analysis.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ObservationFinding {
@@ -206,7 +182,6 @@ pub struct ObservationFinding {
     pub recommendation: Option<String>,
     pub severity: ObservationSeverity,
 }
-
 /// Severity of an observability finding.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -215,7 +190,6 @@ pub enum ObservationSeverity {
     Warning,
     Critical,
 }
-
 /// A conversation health summary from observability analysis.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct ConversationHealth {
@@ -227,11 +201,9 @@ pub struct ConversationHealth {
     pub error_rate: f64,
     pub findings: Vec<ObservationFinding>,
 }
-
 // ---------------------------------------------------------------------------
 // Personality runtime — backed by zkr MemoryDb
 // ---------------------------------------------------------------------------
-
 /// A behavioral runtime that stores all personality data as feature-gated
 /// evidence memory in `zkr`.
 ///
@@ -249,7 +221,6 @@ pub struct Personality {
     consecutive_agent_turns: u64,
     last_agent_reply_epoch: Option<u64>,
 }
-
 impl Personality {
     pub fn new(db: MemoryDb, tenant_id: TenantId, person_id: PersonId) -> Self {
         Self {
@@ -264,40 +235,31 @@ impl Personality {
             last_agent_reply_epoch: None,
         }
     }
-
     pub fn db(&self) -> &MemoryDb {
         &self.db
     }
-
     pub fn tenant_id(&self) -> &TenantId {
         &self.tenant_id
     }
-
     pub fn person_id(&self) -> &PersonId {
         &self.person_id
     }
-
     pub fn with_rules(mut self, rules: RouterRules) -> Self {
         self.rules = rules;
         self
     }
-
     pub fn set_rules(&mut self, rules: RouterRules) {
         self.rules = rules;
     }
-
     /// Advance the epoch and return the new value.
     pub fn advance_epoch(&mut self) -> u64 {
         self.epoch += 1;
         self.epoch
     }
-
     pub fn current_epoch(&self) -> u64 {
         self.epoch
     }
-
     // --- Turn-taking: router ------------------------------------------------
-
     /// Evaluate an incoming event through hard rules + policy and return
     /// a routing decision with behavioral context.
     ///
@@ -307,11 +269,9 @@ impl Personality {
     pub fn route_event(&mut self, event: &ConversationEvent) -> Result<RouterResult> {
         self.recent_events.push(event.clone());
         let epoch = event.epoch;
-
         let (action, strategy, confidence, rationale) = self
             .evaluate_hard_rules(event, epoch)
             .unwrap_or_else(|| self.evaluate_learned_policy(event));
-
         // Track consecutive turns.
         match action {
             TurnAction::Speak | TurnAction::React => {
@@ -322,7 +282,6 @@ impl Personality {
                 self.consecutive_agent_turns = 0;
             }
         }
-
         let decision = TurnDecision {
             epoch,
             action: action.clone(),
@@ -331,22 +290,17 @@ impl Personality {
             confidence_basis_points: confidence,
             rationale: rationale.clone(),
         };
-
         // Retrieve behavioral context for the router result.
         let behavioral_context = self.retrieve_behavioral_context(&event.content)?;
-
         // Record the decision.
         self.record_turn_decision(&decision)?;
-
         // Derive signals from the event.
         self.derive_signals(event)?;
-
         Ok(RouterResult {
             decision,
             behavioral_context,
         })
     }
-
     fn evaluate_hard_rules(
         &self,
         event: &ConversationEvent,
@@ -368,7 +322,6 @@ impl Personality {
                 ),
             ));
         }
-
         // Max consecutive turns: force silence — veto all other rules.
         if self.consecutive_agent_turns >= self.rules.max_consecutive_turns {
             return Some((
@@ -381,7 +334,6 @@ impl Personality {
                 ),
             ));
         }
-
         // Direct mention forces Speak (if not vetoed).
         if self.rules.mention_triggers_reply
             && event.event_kind == "message"
@@ -394,7 +346,6 @@ impl Personality {
                 "direct mention detected".into(),
             ));
         }
-
         // Command forces Speak (if not vetoed).
         if self.rules.command_triggers_reply
             && event.event_kind == "message"
@@ -407,10 +358,8 @@ impl Personality {
                 "command detected".into(),
             ));
         }
-
         None
     }
-
     fn evaluate_learned_policy(
         &self,
         event: &ConversationEvent,
@@ -420,7 +369,6 @@ impl Personality {
         let agent_addressed = event.content.to_lowercase().contains("agent")
             || event.content.to_lowercase().contains("assistant")
             || event.content.to_lowercase().contains("help");
-
         if is_message && is_question {
             (
                 TurnAction::Speak,
@@ -459,7 +407,6 @@ impl Personality {
             )
         }
     }
-
     /// Retrieve behavioral context relevant to an incoming event.
     fn retrieve_behavioral_context(&self, content: &str) -> Result<Vec<String>> {
         let mut context = Vec::new();
@@ -471,9 +418,7 @@ impl Personality {
         context.extend(self.turn_context(content, 2)?);
         Ok(context)
     }
-
     // --- Turn-taking: storage -----------------------------------------------
-
     /// Record a turn-taking decision as evidence memory.
     pub fn record_turn_decision(&mut self, decision: &TurnDecision) -> Result<()> {
         let now = now_seconds();
@@ -506,7 +451,6 @@ impl Personality {
         )?;
         Ok(())
     }
-
     /// Record a raw conversation event for signal derivation.
     pub fn record_event(&mut self, event: &ConversationEvent) -> Result<()> {
         self.recent_events.push(event.clone());
@@ -526,14 +470,11 @@ impl Personality {
         self.derive_signals(event)?;
         Ok(())
     }
-
     /// Retrieve recent turn context for the agent.
     pub fn turn_context(&self, query: &str, limit: u32) -> Result<Vec<String>> {
         self.search_personality(query, limit)
     }
-
     // --- Social signals: derivation -----------------------------------------
-
     fn derive_response_latency_signal(&self, event: &ConversationEvent) -> Option<SocialSignal> {
         if event.event_kind == "message" {
             if let Some(prev) = self.recent_events.iter().rev().nth(1) {
@@ -550,7 +491,6 @@ impl Personality {
         }
         None
     }
-
     fn derive_typing_without_send_signal(&self, event: &ConversationEvent) -> Option<SocialSignal> {
         if event.event_kind == "typing" {
             let followed_by_message = self
@@ -570,7 +510,6 @@ impl Personality {
         }
         None
     }
-
     fn derive_reaction_removal_signal(&self, event: &ConversationEvent) -> Option<SocialSignal> {
         if event.event_kind == "reaction_removed" {
             return Some(SocialSignal {
@@ -582,7 +521,6 @@ impl Personality {
         }
         None
     }
-
     fn derive_conversation_velocity_signal(
         &self,
         event: &ConversationEvent,
@@ -601,7 +539,6 @@ impl Personality {
             epoch: event.epoch,
         })
     }
-
     /// Derive social signals from a conversation event.
     ///
     /// Computes response latency, participation balance, conversation
@@ -610,23 +547,18 @@ impl Personality {
     fn derive_signals(&mut self, event: &ConversationEvent) -> Result<()> {
         let participant = &event.participant;
         let mut signals: Vec<SocialSignal> = Vec::new();
-
         if let Some(signal) = self.derive_response_latency_signal(event) {
             signals.push(signal);
         }
-
         if let Some(signal) = self.derive_typing_without_send_signal(event) {
             signals.push(signal);
         }
-
         if let Some(signal) = self.derive_reaction_removal_signal(event) {
             signals.push(signal);
         }
-
         if let Some(signal) = self.derive_conversation_velocity_signal(event) {
             signals.push(signal);
         }
-
         // Persist derived signals.
         for signal in &signals {
             self.record_signal(signal)?;
@@ -635,11 +567,8 @@ impl Personality {
             .entry(participant.clone())
             .or_default()
             .extend(signals);
-
         Ok(())
     }
-
-
     fn compute_typing_without_send(&self, events: &[&ConversationEvent]) -> u64 {
         events
             .iter()
@@ -654,16 +583,13 @@ impl Personality {
             })
             .count() as u64
     }
-
     /// Compute a signal summary for a participant across all recent events.
-
     pub fn signal_summary(&self, participant: &str) -> SignalSummary {
         let events: Vec<&ConversationEvent> = self
             .recent_events
             .iter()
             .filter(|e| e.participant == participant)
             .collect();
-
         let message_count = events.iter().filter(|e| e.event_kind == "message").count() as u64;
         let total_messages = self
             .recent_events
@@ -675,7 +601,6 @@ impl Personality {
         } else {
             0.0
         };
-
         // Average response latency.
         let latencies: Vec<u64> = self
             .recent_events
@@ -688,17 +613,13 @@ impl Personality {
         } else {
             Some(latencies.iter().sum::<u64>() as f64 / latencies.len() as f64)
         };
-
         // Typing without send.
         let typing_without_send = self.compute_typing_without_send(&events);
-
         // Reaction count.
         let reaction_count = events.iter().filter(|e| e.event_kind == "reaction").count() as u64;
-
         // Conversation velocity.
         let epoch_span = self.epoch.max(1) as f64;
         let conversation_velocity = total_messages as f64 / epoch_span;
-
         SignalSummary {
             participant: participant.into(),
             message_count,
@@ -709,7 +630,6 @@ impl Personality {
             reaction_count,
         }
     }
-
     /// Record a derived social signal.
     pub fn record_signal(&mut self, signal: &SocialSignal) -> Result<()> {
         let now = now_seconds();
@@ -729,9 +649,7 @@ impl Personality {
         )?;
         Ok(())
     }
-
     // --- Social norms (voice card) -----------------------------------------
-
     /// Store or update a voice card for a conversation scope.
     pub fn store_voice_card(&mut self, card: &VoiceCard) -> Result<()> {
         let now = now_seconds();
@@ -783,14 +701,11 @@ impl Personality {
         )?;
         Ok(())
     }
-
     /// Retrieve the voice card context for a scope.
     pub fn voice_card_context(&self, scope: &str, limit: u32) -> Result<Vec<String>> {
         self.search_personality(&format!("voice card norms {scope}"), limit)
     }
-
     // --- Theory of mind: prediction ----------------------------------------
-
     /// Predict a participant's likely reception of a candidate reply and
     /// return a risk assessment.
     ///
@@ -798,7 +713,6 @@ impl Personality {
     /// based on the participant's signal history and the candidate content.
     pub fn assess_risk(&self, participant: &str, candidate: &str) -> RiskAssessment {
         let summary = self.signal_summary(participant);
-
         // Misunderstanding risk: higher if participant has high typing-without-send
         // (suggests confusion) or low participation.
         let misunderstanding_risk = if summary.typing_without_send > 2 {
@@ -808,7 +722,6 @@ impl Personality {
         } else {
             2000
         };
-
         // Escalation risk: higher if candidate contains aggressive language.
         let aggressive_words = ["stupid", "wrong", "idiot", "shut up", "obviously"];
         let aggressive_count = aggressive_words
@@ -816,7 +729,6 @@ impl Personality {
             .filter(|w| candidate.to_lowercase().contains(*w))
             .count();
         let escalation_risk = (aggressive_count * 3000).min(10000) as u16;
-
         // Exclusion risk: higher if participant has very low participation share.
         let exclusion_risk = if summary.participation_share < 0.1 {
             6000
@@ -825,7 +737,6 @@ impl Personality {
         } else {
             1000
         };
-
         // Churn risk: higher if participant has declining velocity or high typing-without-send.
         let churn_risk = if summary.typing_without_send > 3 {
             6500
@@ -834,9 +745,7 @@ impl Personality {
         } else {
             1500
         };
-
         let overall = (misunderstanding_risk + escalation_risk + exclusion_risk + churn_risk) / 4;
-
         let recommendation = if overall > 6000 {
             RiskRecommendation::Abort
         } else if overall > 3500 {
@@ -844,7 +753,6 @@ impl Personality {
         } else {
             RiskRecommendation::Proceed
         };
-
         RiskAssessment {
             misunderstanding_risk,
             escalation_risk,
@@ -854,7 +762,6 @@ impl Personality {
             recommendation,
         }
     }
-
     /// Record a theory-of-mind hypothesis about a participant.
     pub fn record_hypothesis(&mut self, hyp: &MindHypothesis) -> Result<()> {
         let now = now_seconds();
@@ -891,12 +798,10 @@ impl Personality {
         )?;
         Ok(())
     }
-
     /// Retrieve theory-of-mind context for a participant.
     pub fn tom_context(&self, participant: &str, limit: u32) -> Result<Vec<String>> {
         self.search_personality(&format!("theory of mind {participant}"), limit)
     }
-
     /// Record a calibration result comparing a prediction to the real outcome.
     pub fn record_calibration(&mut self, record: &CalibrationRecord) -> Result<()> {
         let now = now_seconds();
@@ -929,9 +834,7 @@ impl Personality {
         )?;
         Ok(())
     }
-
     // --- Personas: validation ----------------------------------------------
-
     /// Validate a persona blueprint for constraint satisfaction, duplicates,
     /// and empty fields.
     pub fn validate_persona(persona: &PersonaBlueprint) -> PersonaValidation {
@@ -942,7 +845,6 @@ impl Personality {
                 duplicate_traits.push(trait_.clone());
             }
         }
-
         let mut empty_fields = Vec::new();
         if persona.name.trim().is_empty() {
             empty_fields.push("name".into());
@@ -953,7 +855,6 @@ impl Personality {
         if persona.traits.is_empty() {
             empty_fields.push("traits".into());
         }
-
         // Check constraint satisfaction: no constraint should contradict a trait.
         let constraints_satisfied = persona.constraints.iter().all(|c| {
             // A constraint like "never X" should not have a trait that says "always X".
@@ -965,9 +866,7 @@ impl Personality {
                     || (c_lower.contains("always") && t_lower.contains("never"))
             })
         });
-
         let valid = empty_fields.is_empty() && duplicate_traits.is_empty() && constraints_satisfied;
-
         PersonaValidation {
             name: persona.name.clone(),
             constraints_satisfied,
@@ -977,12 +876,10 @@ impl Personality {
             valid,
         }
     }
-
     /// Store a persona blueprint.
     pub fn store_persona(&mut self, persona: &PersonaBlueprint) -> Result<()> {
         self.store_persona_at(persona, now_seconds())
     }
-
     fn store_persona_at(&mut self, persona: &PersonaBlueprint, now: Timestamp) -> Result<()> {
         let text = format!(
             "Persona \"{}\": traits=[{}], constraints=[{}], citations=[{}], prompt=\"{}\"",
@@ -1016,14 +913,11 @@ impl Personality {
         )?;
         Ok(())
     }
-
     /// Retrieve persona context by name or traits.
     pub fn persona_context(&self, query: &str, limit: u32) -> Result<Vec<String>> {
         self.search_personality(&format!("persona {query}"), limit)
     }
-
     // --- Social observability: analysis ------------------------------------
-
     /// Analyze a conversation window and produce a health summary with
     /// findings.
     ///
@@ -1034,19 +928,15 @@ impl Personality {
         let total_turns = events.len() as u64;
         let agent_turns = events.iter().filter(|e| e.participant == "agent").count() as u64;
         let user_turns = events.iter().filter(|e| e.participant != "agent").count() as u64;
-
         let participation_balance = if total_turns > 0 {
             let agent_share = agent_turns as f64 / total_turns as f64;
             1.0 - (agent_share - 0.5).abs() * 2.0
         } else {
             0.0
         };
-
         let error_rate = events.iter().filter(|e| e.event_kind == "error").count() as f64
             / total_turns.max(1) as f64;
-
         let mut findings = Vec::new();
-
         // Finding: participation imbalance.
         if total_turns > 0 && participation_balance < 0.3 {
             findings.push(ObservationFinding {
@@ -1060,7 +950,6 @@ impl Personality {
                 severity: ObservationSeverity::Warning,
             });
         }
-
         // Finding: high error rate.
         if error_rate > 0.2 {
             findings.push(ObservationFinding {
@@ -1079,7 +968,6 @@ impl Personality {
                 },
             });
         }
-
         // Finding: conversation velocity.
         let epoch_span = self.epoch.max(1) as f64;
         let velocity = total_turns as f64 / epoch_span;
@@ -1094,7 +982,6 @@ impl Personality {
                 severity: ObservationSeverity::Info,
             });
         }
-
         // Finding: typing without send.
         let typing_without_send_count = events.iter().filter(|e| e.event_kind == "typing").count();
         if typing_without_send_count > 3 {
@@ -1108,12 +995,10 @@ impl Personality {
                 severity: ObservationSeverity::Warning,
             });
         }
-
         // Persist findings.
         for finding in &findings {
             self.record_finding(finding)?;
         }
-
         Ok(ConversationHealth {
             scope: scope.into(),
             total_turns,
@@ -1124,7 +1009,6 @@ impl Personality {
             findings,
         })
     }
-
     /// Record an observability finding from post-conversation analysis.
     pub fn record_finding(&mut self, finding: &ObservationFinding) -> Result<()> {
         let now = now_seconds();
@@ -1159,14 +1043,11 @@ impl Personality {
         )?;
         Ok(())
     }
-
     /// Retrieve observability findings for a scope.
     pub fn observation_context(&self, scope: &str, limit: u32) -> Result<Vec<String>> {
         self.search_personality(&format!("observation finding {scope}"), limit)
     }
-
     // --- Prompt augmentation ----------------------------------------------
-
     /// Retrieve all personality context relevant to a query and format it
     /// as a system-prompt block.
     ///
@@ -1179,11 +1060,9 @@ impl Personality {
         context.extend(self.tom_context(query, 2)?);
         context.extend(self.persona_context(query, 2)?);
         context.extend(self.observation_context(query, 2)?);
-
         if context.is_empty() {
             return Ok(base.to_string());
         }
-
         let mut augmented = base.to_string();
         augmented.push_str("\n\n<personality_context>\n");
         for (i, item) in context.iter().enumerate() {
@@ -1192,9 +1071,7 @@ impl Personality {
         augmented.push_str("</personality_context>");
         Ok(augmented)
     }
-
     // --- Internal ----------------------------------------------------------
-
     fn remember(
         &mut self,
         ingestion_key: String,
@@ -1233,7 +1110,6 @@ impl Personality {
         })?;
         Ok(())
     }
-
     fn search_personality(&self, query: &str, limit: u32) -> Result<Vec<String>> {
         let pack = self.db.search(SearchInput {
             tenant_id: self.tenant_id.clone(),
@@ -1247,16 +1123,13 @@ impl Personality {
         Ok(pack.items.into_iter().map(|item| item.excerpt).collect())
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::IngestionTimestamps;
-
     fn test_ids() -> (TenantId, PersonId) {
         (TenantId("t1".into()), PersonId("p1".into()))
     }
-
     fn setup_test_personality() -> (tempfile::TempDir, Personality) {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
@@ -1264,7 +1137,6 @@ mod tests {
         let personality = Personality::new(db, tenant_id, person_id);
         (tmp, personality)
     }
-
     fn test_voice_card(scope: &str) -> VoiceCard {
         VoiceCard {
             scope: scope.into(),
@@ -1283,59 +1155,47 @@ mod tests {
             valid_until: None,
         }
     }
-
     // --- Validation tests --------------------------------------------------
-
     #[test]
     fn test_with_rules() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
         let (tenant_id, person_id) = test_ids();
         let p = Personality::new(db, tenant_id, person_id);
-
         let initial_rules = p.rules.clone();
         assert!(initial_rules.mention_triggers_reply);
-
         let new_rules = RouterRules {
             mention_triggers_reply: false,
             command_triggers_reply: false,
             min_reply_interval: 10,
             max_consecutive_turns: 5,
         };
-
         let p_updated = p.with_rules(new_rules);
-
         assert!(!p_updated.rules.mention_triggers_reply);
         assert!(!p_updated.rules.command_triggers_reply);
         assert_eq!(p_updated.rules.min_reply_interval, 10);
         assert_eq!(p_updated.rules.max_consecutive_turns, 5);
     }
-
     #[test]
     fn test_set_rules() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut p = Personality::new(db, tenant_id, person_id);
-
         let initial_rules = p.rules.clone();
         assert!(initial_rules.mention_triggers_reply);
-
         let new_rules = RouterRules {
             mention_triggers_reply: false,
             command_triggers_reply: false,
             min_reply_interval: 10,
             max_consecutive_turns: 5,
         };
-
         p.set_rules(new_rules.clone());
-
         assert!(!p.rules.mention_triggers_reply);
         assert!(!p.rules.command_triggers_reply);
         assert_eq!(p.rules.min_reply_interval, 10);
         assert_eq!(p.rules.max_consecutive_turns, 5);
     }
-
     #[test]
     fn test_validate_persona_valid() {
         let blueprint = PersonaBlueprint {
@@ -1352,7 +1212,6 @@ mod tests {
         assert!(result.constraints_satisfied);
         assert_eq!(result.trait_count, 2);
     }
-
     #[test]
     fn test_validate_persona_empty_fields() {
         let blueprint = PersonaBlueprint {
@@ -1369,7 +1228,6 @@ mod tests {
         assert!(result.empty_fields.contains(&"system_prompt".to_string()));
         assert!(result.empty_fields.contains(&"traits".to_string()));
     }
-
     #[test]
     fn test_validate_persona_duplicate_traits() {
         let blueprint = PersonaBlueprint {
@@ -1388,7 +1246,6 @@ mod tests {
         assert_eq!(result.duplicate_traits.len(), 1);
         assert_eq!(result.duplicate_traits[0], "helpful");
     }
-
     #[test]
     fn test_validate_persona_constraint_contradiction_never() {
         let blueprint = PersonaBlueprint {
@@ -1402,7 +1259,6 @@ mod tests {
         assert!(!result.valid);
         assert!(!result.constraints_satisfied);
     }
-
     #[test]
     fn test_validate_persona_constraint_contradiction_always() {
         let blueprint = PersonaBlueprint {
@@ -1416,32 +1272,25 @@ mod tests {
         assert!(!result.valid);
         assert!(!result.constraints_satisfied);
     }
-
     // --- Record event tests ------------------------------------------------
-
     #[test]
     fn record_event_stores_in_memory_and_db() {
         let (_tmp, mut personality) = setup_test_personality();
-
         let event = ConversationEvent {
             epoch: 1,
             participant: "user".into(),
             event_kind: "message".into(),
             content: "hello world".into(),
         };
-
         personality.record_event(&event).unwrap();
-
         // Verify in-memory state
         assert_eq!(personality.recent_events.len(), 1);
         assert_eq!(personality.recent_events[0].content, "hello world");
-
         // Verify DB state via search_personality (turn_context)
         let context = personality.turn_context("hello world", 10).unwrap();
         assert!(!context.is_empty());
         assert!(context.iter().any(|s| s.contains("hello world")));
     }
-
     #[test]
     fn record_event_fails_on_invalid_db_input() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1450,24 +1299,19 @@ mod tests {
         let invalid_tenant_id = TenantId("".into());
         let (_, person_id) = test_ids();
         let mut personality = Personality::new(db, invalid_tenant_id, person_id);
-
         let event = ConversationEvent {
             epoch: 1,
             participant: "user".into(),
             event_kind: "message".into(),
             content: "hello world".into(),
         };
-
         let result = personality.record_event(&event);
         assert!(result.is_err());
     }
-
     // --- Turn router tests -------------------------------------------------
-
     #[test]
     fn record_turn_decision_stores_evidence_and_claim() {
         let (_tmp, mut personality) = setup_test_personality();
-
         let decision = TurnDecision {
             epoch: 42,
             action: TurnAction::Speak,
@@ -1476,19 +1320,15 @@ mod tests {
             confidence_basis_points: 8500,
             rationale: "test_rationale".to_string(),
         };
-
         personality.record_turn_decision(&decision).unwrap();
-
         // Search for the evidence memory we just recorded.
         // We use personality.search_personality as it correctly searches with the feature flag.
         let results = personality.search_personality("test_rationale", 5).unwrap();
-
         assert_eq!(results.len(), 1);
         let item = &results[0];
         // The excerpt for a claim matches: subject || ' ' || predicate || ' ' || value
         assert!(item.contains("turn:42 action Speak via test_strategy — test_rationale"));
     }
-
     #[test]
     fn record_turn_decision_propagates_db_error() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1497,7 +1337,6 @@ mod tests {
         let tenant_id = TenantId("".into());
         let person_id = PersonId("p1".into());
         let mut personality = Personality::new(db, tenant_id, person_id);
-
         let decision = TurnDecision {
             epoch: 1,
             action: TurnAction::StaySilent,
@@ -1506,15 +1345,12 @@ mod tests {
             confidence_basis_points: 1000,
             rationale: "test".to_string(),
         };
-
         let result = personality.record_turn_decision(&decision);
         assert!(result.is_err());
     }
-
     #[test]
     fn router_replies_to_direct_mention() {
         let (_tmp, mut personality) = setup_test_personality();
-
         let result = personality
             .route_event(&ConversationEvent {
                 epoch: 1,
@@ -1523,16 +1359,13 @@ mod tests {
                 content: "hey @agent can you help?".into(),
             })
             .unwrap();
-
         assert_eq!(result.decision.action, TurnAction::Speak);
         assert_eq!(result.decision.strategy, "direct_reply");
         assert!(result.decision.confidence_basis_points >= 9000);
     }
-
     #[test]
     fn router_replies_to_commands() {
         let (_tmp, mut personality) = setup_test_personality();
-
         let result = personality
             .route_event(&ConversationEvent {
                 epoch: 1,
@@ -1541,15 +1374,12 @@ mod tests {
                 content: "/help".into(),
             })
             .unwrap();
-
         assert_eq!(result.decision.action, TurnAction::Speak);
         assert_eq!(result.decision.strategy, "command_response");
     }
-
     #[test]
     fn router_replies_to_bang_commands() {
         let (_tmp, mut personality) = setup_test_personality();
-
         let result = personality
             .route_event(&ConversationEvent {
                 epoch: 1,
@@ -1558,15 +1388,12 @@ mod tests {
                 content: "!help".into(),
             })
             .unwrap();
-
         assert_eq!(result.decision.action, TurnAction::Speak);
         assert_eq!(result.decision.strategy, "command_response");
     }
-
     #[test]
     fn router_stays_silent_for_unaddressed_messages() {
         let (_tmp, mut personality) = setup_test_personality();
-
         let result = personality
             .route_event(&ConversationEvent {
                 epoch: 1,
@@ -1575,15 +1402,12 @@ mod tests {
                 content: "just chatting with friends".into(),
             })
             .unwrap();
-
         assert_eq!(result.decision.action, TurnAction::StaySilent);
         assert_eq!(result.decision.strategy, "listen");
     }
-
     #[test]
     fn router_reacts_to_reaction_events() {
         let (_tmp, mut personality) = setup_test_personality();
-
         let result = personality
             .route_event(&ConversationEvent {
                 epoch: 1,
@@ -1592,15 +1416,12 @@ mod tests {
                 content: "thumbs_up".into(),
             })
             .unwrap();
-
         assert_eq!(result.decision.action, TurnAction::React);
         assert_eq!(result.decision.strategy, "mirror_reaction");
     }
-
     #[test]
     fn router_continues_pending_for_unknown_events() {
         let (_tmp, mut personality) = setup_test_personality();
-
         let result = personality
             .route_event(&ConversationEvent {
                 epoch: 1,
@@ -1609,15 +1430,12 @@ mod tests {
                 content: "typing...".into(),
             })
             .unwrap();
-
         assert_eq!(result.decision.action, TurnAction::ContinuePending);
         assert_eq!(result.decision.strategy, "await_context");
     }
-
     #[test]
     fn router_replies_to_addressed_messages() {
         let (_tmp, mut personality) = setup_test_personality();
-
         let result = personality
             .route_event(&ConversationEvent {
                 epoch: 1,
@@ -1626,15 +1444,12 @@ mod tests {
                 content: "I need an assistant to help me out.".into(),
             })
             .unwrap();
-
         assert_eq!(result.decision.action, TurnAction::Speak);
         assert_eq!(result.decision.strategy, "addressed_reply");
     }
-
     #[test]
     fn router_answers_questions() {
         let (_tmp, mut personality) = setup_test_personality();
-
         let result = personality
             .route_event(&ConversationEvent {
                 epoch: 1,
@@ -1643,11 +1458,9 @@ mod tests {
                 content: "what is the weather?".into(),
             })
             .unwrap();
-
         assert_eq!(result.decision.action, TurnAction::Speak);
         assert_eq!(result.decision.strategy, "answer_question");
     }
-
     #[test]
     fn router_enforces_consecutive_turn_limit() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1657,7 +1470,6 @@ mod tests {
             max_consecutive_turns: 2,
             ..Default::default()
         });
-
         // Force 3 consecutive speaks.
         for i in 1..=3 {
             let result = personality
@@ -1676,7 +1488,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn router_resets_consecutive_turns_on_silence() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1686,7 +1497,6 @@ mod tests {
             max_consecutive_turns: 2,
             ..Default::default()
         });
-
         // Force 2 consecutive speaks.
         for i in 1..=2 {
             personality
@@ -1699,7 +1509,6 @@ mod tests {
                 .unwrap();
         }
         assert_eq!(personality.consecutive_agent_turns, 2);
-
         // 3rd turn is an unaddressed message -> StaySilent
         personality
             .route_event(&ConversationEvent {
@@ -1709,10 +1518,8 @@ mod tests {
                 content: "just chatting with friends".into(),
             })
             .unwrap();
-
         assert_eq!(personality.consecutive_agent_turns, 0);
     }
-
     #[test]
     fn router_enforces_rate_limit() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1722,7 +1529,6 @@ mod tests {
             min_reply_interval: 5,
             ..Default::default()
         });
-
         // First reply at epoch 1.
         let r1 = personality
             .route_event(&ConversationEvent {
@@ -1733,7 +1539,6 @@ mod tests {
             })
             .unwrap();
         assert_eq!(r1.decision.action, TurnAction::Speak);
-
         // Second at epoch 2 — should be rate limited.
         let r2 = personality
             .route_event(&ConversationEvent {
@@ -1746,11 +1551,9 @@ mod tests {
         assert_eq!(r2.decision.action, TurnAction::StaySilent);
         assert_eq!(r2.decision.strategy, "rate_limited");
     }
-
     #[test]
     fn router_returns_behavioral_context() {
         let (_tmp, mut personality) = setup_test_personality();
-
         // Store a voice card first.
         personality
             .store_voice_card(&VoiceCard {
@@ -1759,7 +1562,6 @@ mod tests {
                 ..test_voice_card("general")
             })
             .unwrap();
-
         let result = personality
             .route_event(&ConversationEvent {
                 epoch: 2,
@@ -1768,17 +1570,13 @@ mod tests {
                 content: "voice card norms general".into(),
             })
             .unwrap();
-
         // Behavioral context should include the voice card.
         assert!(!result.behavioral_context.is_empty());
     }
-
     // --- Signal derivation tests -------------------------------------------
-
     #[test]
     fn derives_response_latency_signal() {
         let (_tmp, mut personality) = setup_test_personality();
-
         // User sends message at epoch 1.
         personality
             .record_event(&ConversationEvent {
@@ -1788,7 +1586,6 @@ mod tests {
                 content: "hello".into(),
             })
             .unwrap();
-
         // Agent replies at epoch 3.
         personality
             .record_event(&ConversationEvent {
@@ -1798,15 +1595,12 @@ mod tests {
                 content: "hi there".into(),
             })
             .unwrap();
-
         let summary = personality.signal_summary("agent");
         assert!(summary.avg_response_latency_ms.is_some());
     }
-
     #[test]
     fn derives_typing_without_send_signal() {
         let (_tmp, mut personality) = setup_test_personality();
-
         // User types but never sends.
         personality
             .record_event(&ConversationEvent {
@@ -1816,18 +1610,14 @@ mod tests {
                 content: "typing...".into(),
             })
             .unwrap();
-
         let summary = personality.signal_summary("user");
         assert!(summary.typing_without_send >= 1);
     }
-
     #[test]
     fn signal_summary_computes_all_metrics() {
         let (_tmp, mut personality) = setup_test_personality();
-
         // Let's set epoch so conversation velocity can be calculated.
         personality.epoch = 10;
-
         // Sequence of events to trigger all metrics:
         // 1. Message from 'alice' at epoch 1
         personality
@@ -1838,7 +1628,6 @@ mod tests {
                 content: "hello".into(),
             })
             .unwrap();
-
         // 2. Message from 'bob' at epoch 3 (Latency for bob: 3 - 1 = 2)
         personality
             .record_event(&ConversationEvent {
@@ -1848,7 +1637,6 @@ mod tests {
                 content: "hi alice".into(),
             })
             .unwrap();
-
         // 3. Reaction from 'bob' at epoch 4
         personality
             .record_event(&ConversationEvent {
@@ -1858,7 +1646,6 @@ mod tests {
                 content: "thumbsup".into(),
             })
             .unwrap();
-
         // 4. Message from 'alice' at epoch 6 (Latency for alice: 6 - 3 = 3)
         personality
             .record_event(&ConversationEvent {
@@ -1868,7 +1655,6 @@ mod tests {
                 content: "how are you?".into(),
             })
             .unwrap();
-
         // 5. Typing from 'bob' at epoch 7.
         // No message sent by 'bob' within 5 epochs (up to epoch 12).
         personality
@@ -1879,7 +1665,6 @@ mod tests {
                 content: "true".into(),
             })
             .unwrap();
-
         // 6. Message from 'bob' at epoch 13 (Outside the 5 epoch window for typing without send)
         // (Latency for bob: 13 - 6 = 7)
         personality
@@ -1890,31 +1675,24 @@ mod tests {
                 content: "doing great!".into(),
             })
             .unwrap();
-
         let summary = personality.signal_summary("bob");
-
         assert_eq!(summary.participant, "bob");
         assert_eq!(summary.message_count, 2); // epochs 3 and 13
         assert_eq!(summary.reaction_count, 1); // epoch 4
         assert_eq!(summary.typing_without_send, 1); // epoch 7
-
         // Total messages: alice (2) + bob (2) = 4.
         assert_eq!(summary.participation_share, 0.5); // 2 / 4
-
         // Latency for bob (using windows(2) on all events, irrespective of type):
         // (1 "alice" msg, 3 "bob" msg) -> 3 - 1 = 2
         // (6 "alice" msg, 7 "bob" typing) -> 7 - 6 = 1
         // (Avg: (2 + 1) / 2 = 1.5)
         assert_eq!(summary.avg_response_latency_ms, Some(1.5));
-
         // Conversation velocity: 4 total messages / max(1, 10) = 0.4
         assert_eq!(summary.conversation_velocity, 0.4);
     }
-
     #[test]
     fn derives_conversation_velocity() {
         let (_tmp, mut personality) = setup_test_personality();
-
         for i in 1..=5 {
             personality
                 .record_event(&ConversationEvent {
@@ -1925,16 +1703,13 @@ mod tests {
                 })
                 .unwrap();
         }
-
         let summary = personality.signal_summary("user");
         assert!(summary.conversation_velocity > 0.0);
         assert_eq!(summary.message_count, 5);
     }
-
     #[test]
     fn signal_summary_handles_empty_events() {
         let (_tmp, personality) = setup_test_personality();
-
         let summary = personality.signal_summary("user");
         assert_eq!(summary.message_count, 0);
         assert_eq!(summary.avg_response_latency_ms, None);
@@ -1943,11 +1718,9 @@ mod tests {
         assert_eq!(summary.typing_without_send, 0);
         assert_eq!(summary.reaction_count, 0);
     }
-
     #[test]
     fn signal_summary_computes_reaction_count() {
         let (_tmp, mut personality) = setup_test_personality();
-
         personality
             .record_event(&ConversationEvent {
                 epoch: 1,
@@ -1956,15 +1729,12 @@ mod tests {
                 content: "👍".into(),
             })
             .unwrap();
-
         let summary = personality.signal_summary("user");
         assert_eq!(summary.reaction_count, 1);
     }
-
     #[test]
     fn signal_summary_computes_participation_share() {
         let (_tmp, mut personality) = setup_test_personality();
-
         // 3 user messages, 1 agent message.
         personality
             .record_event(&ConversationEvent {
@@ -1998,18 +1768,14 @@ mod tests {
                 content: "d".into(),
             })
             .unwrap();
-
         let summary = personality.signal_summary("user");
         assert_eq!(summary.message_count, 3);
         assert!((summary.participation_share - 0.75).abs() < 0.01);
     }
-
     // --- Theory of mind: risk assessment tests -----------------------------
-
     #[test]
     fn risk_assessment_proceeds_for_safe_candidate() {
         let (_tmp, mut personality) = setup_test_personality();
-
         // Give the user some normal participation.
         for i in 1..=5 {
             personality
@@ -2021,16 +1787,13 @@ mod tests {
                 })
                 .unwrap();
         }
-
         let risk = personality.assess_risk("user", "Here is a helpful answer.");
         assert_eq!(risk.recommendation, RiskRecommendation::Proceed);
         assert!(risk.overall_risk_basis_points < 3500);
     }
-
     #[test]
     fn risk_assessment_refines_for_aggressive_candidate() {
         let (_tmp, mut personality) = setup_test_personality();
-
         for i in 1..=5 {
             personality
                 .record_event(&ConversationEvent {
@@ -2041,15 +1804,12 @@ mod tests {
                 })
                 .unwrap();
         }
-
         let risk = personality.assess_risk("user", "That is stupid and wrong.");
         assert!(risk.escalation_risk >= 3000);
     }
-
     #[test]
     fn risk_assessment_flags_excluded_participant() {
         let (_tmp, mut personality) = setup_test_personality();
-
         // Only agent messages — user has 0 participation.
         for i in 1..=5 {
             personality
@@ -2061,15 +1821,12 @@ mod tests {
                 })
                 .unwrap();
         }
-
         let risk = personality.assess_risk("quiet_user", "Hello there.");
         assert!(risk.exclusion_risk >= 6000);
     }
-
     #[test]
     fn risk_assessment_aborts_for_high_overall_risk() {
         let (_tmp, mut personality) = setup_test_personality();
-
         // Add 4 typing events for the user with spacing > 5 epochs
         for i in 1..=4 {
             personality
@@ -2081,7 +1838,6 @@ mod tests {
                 })
                 .unwrap();
         }
-
         // Add 10 agent messages to make user participation share 0
         for i in 1..=10 {
             personality
@@ -2093,7 +1849,6 @@ mod tests {
                 })
                 .unwrap();
         }
-
         let risk = personality.assess_risk("user", "You are stupid, wrong, and an idiot.");
         assert_eq!(risk.recommendation, RiskRecommendation::Abort);
         assert_eq!(risk.misunderstanding_risk, 7000);
@@ -2101,15 +1856,12 @@ mod tests {
         assert_eq!(risk.exclusion_risk, 6000);
         assert_eq!(risk.escalation_risk, 9000);
     }
-
     #[test]
     fn risk_assessment_flags_high_churn_risk_for_low_velocity() {
         let (_tmp, mut personality) = setup_test_personality();
-
         for _ in 0..20 {
             personality.advance_epoch();
         }
-
         personality
             .record_event(&ConversationEvent {
                 epoch: 1,
@@ -2118,15 +1870,12 @@ mod tests {
                 content: "hello".into(),
             })
             .unwrap();
-
         let risk = personality.assess_risk("user", "Hello there.");
         assert_eq!(risk.churn_risk, 4000);
     }
-
     #[test]
     fn risk_assessment_mid_tier_risks_for_low_participation() {
         let (_tmp, mut personality) = setup_test_personality();
-
         personality
             .record_event(&ConversationEvent {
                 epoch: 1,
@@ -2135,7 +1884,6 @@ mod tests {
                 content: "a".into(),
             })
             .unwrap();
-
         for i in 2..=6 {
             personality
                 .record_event(&ConversationEvent {
@@ -2146,16 +1894,13 @@ mod tests {
                 })
                 .unwrap();
         }
-
         let risk = personality.assess_risk("user", "Okay.");
         assert_eq!(risk.misunderstanding_risk, 5000);
         assert_eq!(risk.exclusion_risk, 3000);
     }
-
     #[test]
     fn calibration_records_roundtrip() {
         let (_tmp, mut personality) = setup_test_personality();
-
         personality
             .record_calibration(&CalibrationRecord {
                 participant: "alice".into(),
@@ -2165,14 +1910,12 @@ mod tests {
                 epoch: 5,
             })
             .unwrap();
-
         let context = personality
             .search_personality("calibration alice", 5)
             .unwrap();
         assert_eq!(context.len(), 1);
         assert!(context[0].contains("frustrated"));
     }
-
     #[test]
     fn record_calibration_propagates_db_error() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2180,7 +1923,6 @@ mod tests {
         let tenant_id = TenantId("".into());
         let person_id = PersonId("p1".into());
         let mut personality = Personality::new(db, tenant_id, person_id);
-
         let result = personality.record_calibration(&CalibrationRecord {
             participant: "alice".into(),
             predicted_reaction: "happy".into(),
@@ -2188,14 +1930,11 @@ mod tests {
             correct: true,
             epoch: 1,
         });
-
         assert!(result.is_err());
     }
-
     #[test]
     fn record_calibration_multiple_epochs() {
         let (_tmp, mut personality) = setup_test_personality();
-
         personality
             .record_calibration(&CalibrationRecord {
                 participant: "bob".into(),
@@ -2205,7 +1944,6 @@ mod tests {
                 epoch: 1,
             })
             .unwrap();
-
         personality
             .record_calibration(&CalibrationRecord {
                 participant: "bob".into(),
@@ -2215,7 +1953,6 @@ mod tests {
                 epoch: 2,
             })
             .unwrap();
-
         let context = personality
             .search_personality("calibration bob", 5)
             .unwrap();
@@ -2227,11 +1964,9 @@ mod tests {
                 .any(|c| c.contains("calm") && c.contains("correct=true"))
         );
     }
-
     #[test]
     fn record_calibration_true_correct() {
         let (_tmp, mut personality) = setup_test_personality();
-
         personality
             .record_calibration(&CalibrationRecord {
                 participant: "charlie".into(),
@@ -2241,7 +1976,6 @@ mod tests {
                 epoch: 10,
             })
             .unwrap();
-
         let context = personality
             .search_personality("calibration charlie", 5)
             .unwrap();
@@ -2249,9 +1983,7 @@ mod tests {
         assert!(context[0].contains("correct=true"));
         assert!(context[0].contains("neutral"));
     }
-
     // --- Persona validation tests ------------------------------------------
-
     #[test]
     fn validates_good_persona() {
         let persona = PersonaBlueprint {
@@ -2266,7 +1998,6 @@ mod tests {
         assert!(validation.duplicate_traits.is_empty());
         assert!(validation.empty_fields.is_empty());
     }
-
     #[test]
     fn rejects_duplicate_traits() {
         let persona = PersonaBlueprint {
@@ -2280,7 +2011,6 @@ mod tests {
         assert!(!validation.valid);
         assert_eq!(validation.duplicate_traits, vec!["patient"]);
     }
-
     #[test]
     fn rejects_empty_fields() {
         let persona = PersonaBlueprint {
@@ -2300,13 +2030,10 @@ mod tests {
         );
         assert!(validation.empty_fields.contains(&"traits".to_string()));
     }
-
     // --- Observability analysis tests --------------------------------------
-
     #[test]
     fn analyze_conversation_detects_imbalance() {
         let (_tmp, mut personality) = setup_test_personality();
-
         // 9 agent messages, 1 user message.
         for i in 1..=9 {
             personality
@@ -2326,7 +2053,6 @@ mod tests {
                 content: "ok".into(),
             })
             .unwrap();
-
         let health = personality.analyze_conversation("thread-1").unwrap();
         assert!(health.participation_balance < 0.3);
         assert!(
@@ -2336,11 +2062,9 @@ mod tests {
                 .any(|f| f.finding.contains("imbalanced"))
         );
     }
-
     #[test]
     fn analyze_conversation_detects_high_error_rate() {
         let (_tmp, mut personality) = setup_test_personality();
-
         for i in 1..=10 {
             personality
                 .record_event(&ConversationEvent {
@@ -2351,7 +2075,6 @@ mod tests {
                 })
                 .unwrap();
         }
-
         let health = personality.analyze_conversation("thread-2").unwrap();
         assert!(health.error_rate > 0.2);
         assert!(
@@ -2361,11 +2084,9 @@ mod tests {
                 .any(|f| f.finding.contains("error rate"))
         );
     }
-
     #[test]
     fn analyze_conversation_detects_typing_without_send() {
         let (_tmp, mut personality) = setup_test_personality();
-
         for i in 1..=5 {
             personality
                 .record_event(&ConversationEvent {
@@ -2376,7 +2097,6 @@ mod tests {
                 })
                 .unwrap();
         }
-
         let health = personality.analyze_conversation("thread-3").unwrap();
         assert!(
             health
@@ -2385,11 +2105,9 @@ mod tests {
                 .any(|f| f.finding.contains("typing-without-send"))
         );
     }
-
     #[test]
     fn analyze_conversation_produces_clean_health_for_balanced_convo() {
         let (_tmp, mut personality) = setup_test_personality();
-
         // Balanced conversation.
         for i in 1..=10 {
             personality
@@ -2401,20 +2119,16 @@ mod tests {
                 })
                 .unwrap();
         }
-
         let health = personality.analyze_conversation("thread-4").unwrap();
         assert!(health.participation_balance > 0.8);
         assert!(health.findings.is_empty());
     }
-
     #[test]
     fn analyze_conversation_detects_low_velocity() {
         let (_tmp, mut personality) = setup_test_personality();
-
         for _ in 0..100 {
             personality.advance_epoch();
         }
-
         for i in 1..=6 {
             personality
                 .record_event(&ConversationEvent {
@@ -2425,7 +2139,6 @@ mod tests {
                 })
                 .unwrap();
         }
-
         let health = personality.analyze_conversation("thread-5").unwrap();
         assert!(
             health
@@ -2434,11 +2147,9 @@ mod tests {
                 .any(|f| f.finding.contains("velocity"))
         );
     }
-
     #[test]
     fn analyze_conversation_empty() {
         let (_tmp, mut personality) = setup_test_personality();
-
         let health = personality.analyze_conversation("thread-empty").unwrap();
         assert_eq!(health.total_turns, 0);
         assert_eq!(health.agent_turns, 0);
@@ -2447,13 +2158,10 @@ mod tests {
         assert_eq!(health.error_rate, 0.0);
         assert!(health.findings.is_empty());
     }
-
     // --- Existing storage/retrieval tests ----------------------------------
-
     #[test]
     fn records_and_retrieves_turn_decisions() {
         let (_tmp, mut personality) = setup_test_personality();
-
         personality
             .record_turn_decision(&TurnDecision {
                 epoch: 1,
@@ -2464,16 +2172,13 @@ mod tests {
                 rationale: "direct mention detected".into(),
             })
             .unwrap();
-
         let context = personality.turn_context("turn", 5).unwrap();
         assert_eq!(context.len(), 1);
         assert!(context[0].contains("direct_reply"));
     }
-
     #[test]
     fn voice_cards_are_stored_and_retrieved() {
         let (_tmp, mut personality) = setup_test_personality();
-
         personality
             .store_voice_card(&VoiceCard {
                 register: "casual".into(),
@@ -2489,20 +2194,17 @@ mod tests {
                 ..test_voice_card("room-42")
             })
             .unwrap();
-
         let context = personality.voice_card_context("room-42", 5).unwrap();
         assert_eq!(context.len(), 1);
         assert!(context[0].contains("casual"));
         assert!(context[0].contains("room-42") || context[0].contains("norms"));
     }
-
     #[test]
     fn store_voice_card_internals() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id.clone(), person_id.clone());
-
         personality
             .store_voice_card(&VoiceCard {
                 version: 2,
@@ -2518,7 +2220,6 @@ mod tests {
                 ..test_voice_card("engineering")
             })
             .unwrap();
-
         let export = personality
             .db
             .export(crate::store::ExportInput {
@@ -2531,9 +2232,7 @@ mod tests {
                 limit: 100,
             })
             .unwrap();
-
         assert!(!export.commits.is_empty(), "Expected at least one commit");
-
         let mut found_claim = false;
         for commit in export.commits {
             for record in commit.records {
@@ -2549,10 +2248,8 @@ mod tests {
                 }
             }
         }
-
         assert!(found_claim, "Voice card claim not found in database export");
     }
-
     #[test]
     fn store_voice_card_invalid_tenant() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2560,7 +2257,6 @@ mod tests {
         let person_id = PersonId("p1".into());
         // Use an empty tenant_id to trigger a database validation error.
         let mut personality = Personality::new(db, TenantId("".into()), person_id);
-
         let result = personality.store_voice_card(&VoiceCard {
             register: "formal".into(),
             humor: "none".into(),
@@ -2568,14 +2264,11 @@ mod tests {
             supporting_event_epochs: vec![3, 4],
             ..test_voice_card("engineering")
         });
-
         assert!(matches!(result, Err(crate::store::Error::Invalid(_))));
     }
-
     #[test]
     fn theory_of_mind_hypotheses_roundtrip() {
         let (_tmp, mut personality) = setup_test_personality();
-
         personality
             .record_hypothesis(&MindHypothesis {
                 participant: "alice".into(),
@@ -2587,16 +2280,13 @@ mod tests {
                 valid_until: None,
             })
             .unwrap();
-
         let context = personality.tom_context("alice", 5).unwrap();
         assert_eq!(context.len(), 1);
         assert!(context[0].contains("anxious"));
     }
-
     #[test]
     fn tom_context_retrieves_participant_context() {
         let (_tmp, mut personality) = setup_test_personality();
-
         personality
             .record_hypothesis(&MindHypothesis {
                 participant: "bob".into(),
@@ -2608,17 +2298,14 @@ mod tests {
                 valid_until: None,
             })
             .unwrap();
-
         let context = personality.tom_context("bob", 5).unwrap();
         assert_eq!(context.len(), 1);
         assert!(context[0].contains("bob"));
         assert!(context[0].contains("excited"));
     }
-
     #[test]
     fn tom_context_returns_empty_when_no_match() {
         let (_tmp, mut personality) = setup_test_personality();
-
         personality
             .record_hypothesis(&MindHypothesis {
                 participant: "charlie".into(),
@@ -2630,15 +2317,12 @@ mod tests {
                 valid_until: None,
             })
             .unwrap();
-
         let context = personality.tom_context("david", 5).unwrap();
         assert_eq!(context.len(), 0);
     }
-
     #[test]
     fn tom_context_respects_limit() {
         let (_tmp, mut personality) = setup_test_personality();
-
         for i in 0..5 {
             personality
                 .record_hypothesis(&MindHypothesis {
@@ -2653,15 +2337,12 @@ mod tests {
                 .unwrap();
             std::thread::sleep(std::time::Duration::from_millis(10)); // Ensure unique nanos for db
         }
-
         let context = personality.tom_context("eve", 3).unwrap();
         assert_eq!(context.len(), 3);
     }
-
     #[test]
     fn personas_are_stored_and_retrieved() {
         let (_tmp, mut personality) = setup_test_personality();
-
         personality
             .store_persona(&PersonaBlueprint {
                 name: "helpful-engineer".into(),
@@ -2671,16 +2352,13 @@ mod tests {
                 citations: vec!["doc-1".into()],
             })
             .unwrap();
-
         let context = personality.persona_context("helpful", 5).unwrap();
         assert_eq!(context.len(), 1);
         assert!(context[0].contains("helpful-engineer"));
     }
-
     #[test]
     fn store_persona_serializes_all_fields() {
         let (_tmp, mut personality) = setup_test_personality();
-
         personality
             .store_persona(&PersonaBlueprint {
                 name: "detailed-bot".into(),
@@ -2690,7 +2368,6 @@ mod tests {
                 citations: vec!["doc-a".into(), "doc-b".into()],
             })
             .unwrap();
-
         let context = personality.persona_context("detailed-bot", 5).unwrap();
         assert_eq!(context.len(), 1);
         let record = &context[0];
@@ -2703,11 +2380,9 @@ mod tests {
         assert!(record.contains("doc-a"));
         assert!(record.contains("doc-b"));
     }
-
     #[test]
     fn store_persona_idempotency() {
         let (_tmp, mut personality) = setup_test_personality();
-
         let blueprint = PersonaBlueprint {
             name: "idempotent-bot".into(),
             traits: vec!["consistent".into()],
@@ -2715,15 +2390,12 @@ mod tests {
             constraints: vec![],
             citations: vec![],
         };
-
         // Store it twice
         personality.store_persona(&blueprint).unwrap();
         personality.store_persona(&blueprint).unwrap();
-
         let context = personality.persona_context("idempotent-bot", 5).unwrap();
         assert_eq!(context.len(), 1);
     }
-
     #[test]
     fn store_persona_replay_ignores_wall_clock() {
         let (_tmp, mut personality) = setup_test_personality();
@@ -2734,10 +2406,8 @@ mod tests {
             constraints: vec![],
             citations: vec![],
         };
-
         personality.store_persona_at(&blueprint, 1_000).unwrap();
         personality.store_persona_at(&blueprint, 1_001).unwrap();
-
         assert_eq!(
             personality
                 .db
@@ -2756,7 +2426,6 @@ mod tests {
         let context = personality.persona_context("clocked-bot", 5).unwrap();
         assert_eq!(context.len(), 1);
     }
-
     #[test]
     fn store_persona_changed_content_still_conflicts() {
         let (_tmp, mut personality) = setup_test_personality();
@@ -2767,7 +2436,6 @@ mod tests {
             constraints: vec![],
             citations: vec![],
         };
-
         personality.store_persona_at(&blueprint, 1_000).unwrap();
         blueprint.system_prompt = "Version two.".into();
         for now in [1_000, 1_001] {
@@ -2775,7 +2443,6 @@ mod tests {
             assert!(error.to_string().contains("ingestion_key conflicts"));
         }
     }
-
     #[test]
     fn store_persona_propagates_db_error() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2783,7 +2450,6 @@ mod tests {
         let tenant_id = TenantId("".into());
         let person_id = PersonId("p1".into());
         let mut personality = Personality::new(db, tenant_id, person_id);
-
         let blueprint = PersonaBlueprint {
             name: "error-bot".into(),
             traits: vec![],
@@ -2791,15 +2457,12 @@ mod tests {
             constraints: vec![],
             citations: vec![],
         };
-
         let result = personality.store_persona(&blueprint);
         assert!(result.is_err());
     }
-
     #[test]
     fn observations_are_stored_and_retrieved() {
         let (_tmp, mut personality) = setup_test_personality();
-
         personality
             .record_finding(&ObservationFinding {
                 scope: "thread-99".into(),
@@ -2809,32 +2472,25 @@ mod tests {
                 severity: ObservationSeverity::Warning,
             })
             .unwrap();
-
         let context = personality.observation_context("thread-99", 5).unwrap();
         assert_eq!(context.len(), 1);
         assert!(context[0].contains("interrupted"));
     }
-
     #[test]
     fn observation_context_returns_empty() {
         let (_tmp, personality) = setup_test_personality();
-
         let context = personality.observation_context("thread-99", 5).unwrap();
         assert!(context.is_empty());
     }
-
     #[test]
     fn observation_context_returns_empty_when_no_match() {
         let (_tmp, personality) = setup_test_personality();
-
         let context = personality.observation_context("nonexistent", 5).unwrap();
         assert!(context.is_empty());
     }
-
     #[test]
     fn observation_context_filters_by_scope() {
         let (_tmp, mut personality) = setup_test_personality();
-
         personality
             .record_finding(&ObservationFinding {
                 scope: "thread-99".into(),
@@ -2844,7 +2500,6 @@ mod tests {
                 severity: ObservationSeverity::Warning,
             })
             .unwrap();
-
         personality
             .record_finding(&ObservationFinding {
                 scope: "thread-100".into(),
@@ -2854,23 +2509,19 @@ mod tests {
                 severity: ObservationSeverity::Info,
             })
             .unwrap();
-
         let context = personality.observation_context("thread-100", 5).unwrap();
         assert!(!context.is_empty());
         // The first result should be the one for thread-100
         assert!(context[0].contains("thread-100"));
         assert!(context[0].contains("praised"));
-
         let context2 = personality.observation_context("thread-99", 5).unwrap();
         assert!(!context2.is_empty());
         assert!(context2[0].contains("thread-99"));
         assert!(context2[0].contains("interrupted"));
     }
-
     #[test]
     fn observation_context_respects_limit() {
         let (_tmp, mut personality) = setup_test_personality();
-
         for i in 0..3 {
             personality
                 .record_finding(&ObservationFinding {
@@ -2882,11 +2533,9 @@ mod tests {
                 })
                 .unwrap();
         }
-
         let context = personality.observation_context("thread-100", 2).unwrap();
         assert_eq!(context.len(), 2);
     }
-
     #[test]
     fn observation_context_propagates_db_error() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2895,15 +2544,12 @@ mod tests {
         let tenant_id = TenantId("".into());
         let person_id = PersonId("p1".into());
         let personality = Personality::new(db, tenant_id, person_id);
-
         let result = personality.observation_context("thread-error", 5);
         assert!(result.is_err());
     }
-
     #[test]
     fn social_signals_are_stored() {
         let (_tmp, mut personality) = setup_test_personality();
-
         personality
             .record_signal(&SocialSignal {
                 signal_kind: "response_latency".into(),
@@ -2912,18 +2558,15 @@ mod tests {
                 epoch: 3,
             })
             .unwrap();
-
         let context = personality
             .search_personality("signal response latency", 5)
             .unwrap();
         assert_eq!(context.len(), 1);
         assert!(context[0].contains("3200ms"));
     }
-
     #[test]
     fn conversation_events_are_stored() {
         let (_tmp, mut personality) = setup_test_personality();
-
         personality
             .record_event(&ConversationEvent {
                 epoch: 1,
@@ -2932,25 +2575,20 @@ mod tests {
                 content: "hey can you help?".into(),
             })
             .unwrap();
-
         let context = personality.search_personality("hey help", 5).unwrap();
         assert_eq!(context.len(), 1);
         assert!(context[0].contains("hey can you help?"));
     }
-
     #[test]
     fn record_event_updates_internal_state() {
         let (_tmp, mut personality) = setup_test_personality();
-
         let event = ConversationEvent {
             epoch: 42,
             participant: "alice".into(),
             event_kind: "message".into(),
             content: "hello world".into(),
         };
-
         personality.record_event(&event).unwrap();
-
         assert_eq!(personality.recent_events.len(), 1);
         let stored = &personality.recent_events[0];
         assert_eq!(stored.epoch, 42);
@@ -2958,7 +2596,6 @@ mod tests {
         assert_eq!(stored.event_kind, "message");
         assert_eq!(stored.content, "hello world");
     }
-
     #[test]
     fn record_event_propagates_db_error() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2967,23 +2604,19 @@ mod tests {
         let tenant_id = TenantId("".into());
         let person_id = PersonId("p1".into());
         let mut personality = Personality::new(db, tenant_id, person_id);
-
         let event = ConversationEvent {
             epoch: 1,
             participant: "bob".into(),
             event_kind: "message".into(),
             content: "this should fail".into(),
         };
-
         let result = personality.record_event(&event);
         assert!(result.is_err());
         assert_eq!(personality.recent_events.len(), 1); // It is pushed before the db.remember call
     }
-
     #[test]
     fn personality_items_are_hidden_without_feature_flag() {
         let (_tmp, mut personality) = setup_test_personality();
-
         personality
             .store_persona(&PersonaBlueprint {
                 name: "secret".into(),
@@ -2993,7 +2626,6 @@ mod tests {
                 citations: vec![],
             })
             .unwrap();
-
         let pack = personality
             .db
             .search(SearchInput {
@@ -3008,29 +2640,24 @@ mod tests {
             .unwrap();
         assert!(pack.items.is_empty());
     }
-
     #[test]
     fn augment_prompt_injects_context() {
         let (_tmp, mut personality) = setup_test_personality();
-
         personality
             .store_voice_card(&VoiceCard {
                 group_norms: vec!["be concise".into()],
                 ..test_voice_card("general")
             })
             .unwrap();
-
         let augmented = personality
             .augment_prompt("voice card norms general", "You are an agent.")
             .unwrap();
         assert!(augmented.contains("<personality_context>"));
         assert!(augmented.contains("professional"));
     }
-
     #[test]
     fn augment_prompt_injects_multiple_contexts() {
         let (_tmp, mut personality) = setup_test_personality();
-
         // Turn context
         personality
             .record_event(&ConversationEvent {
@@ -3040,7 +2667,6 @@ mod tests {
                 content: "hello query".into(),
             })
             .unwrap();
-
         // TOM context
         personality
             .record_hypothesis(&MindHypothesis {
@@ -3053,7 +2679,6 @@ mod tests {
                 valid_until: None,
             })
             .unwrap();
-
         // Persona context
         personality
             .store_persona(&PersonaBlueprint {
@@ -3064,7 +2689,6 @@ mod tests {
                 citations: vec![],
             })
             .unwrap();
-
         // Observation context
         personality
             .record_finding(&ObservationFinding {
@@ -3075,7 +2699,6 @@ mod tests {
                 severity: ObservationSeverity::Info,
             })
             .unwrap();
-
         let augmented = personality.augment_prompt("query", "Base prompt.").unwrap();
         assert!(augmented.contains("<personality_context>"));
         assert!(augmented.contains("hello query"));
@@ -3083,28 +2706,23 @@ mod tests {
         assert!(augmented.contains("test persona query"));
         assert!(augmented.contains("user is nice"));
     }
-
     #[test]
     fn augment_prompt_returns_base_when_empty() {
         let (_tmp, personality) = setup_test_personality();
-
         let augmented = personality
             .augment_prompt("nothing", "Base prompt.")
             .unwrap();
         assert_eq!(augmented, "Base prompt.");
     }
-
     #[test]
     fn augment_prompt_combines_multiple_contexts() {
         let (_tmp, mut personality) = setup_test_personality();
-
         personality
             .store_voice_card(&VoiceCard {
                 group_norms: vec!["be concise".into()],
                 ..test_voice_card("general test")
             })
             .unwrap();
-
         personality
             .record_finding(&ObservationFinding {
                 scope: "general test".into(),
@@ -3114,21 +2732,18 @@ mod tests {
                 severity: ObservationSeverity::Info,
             })
             .unwrap();
-
         let augmented = personality
             .augment_prompt(
                 "voice card general test observation finding",
                 "Base prompt.",
             )
             .unwrap();
-
         assert!(augmented.contains("<personality_context>"));
         assert!(augmented.contains("1. "));
         assert!(augmented.contains("2. "));
         assert!(augmented.contains("professional"));
         assert!(augmented.contains("Some finding"));
     }
-
     #[test]
     fn augment_prompt_propagates_error() {
         let tmp = tempfile::tempdir().unwrap();
@@ -3137,11 +2752,9 @@ mod tests {
         let tenant_id = TenantId("".into());
         let person_id = PersonId("p1".into());
         let personality = Personality::new(db, tenant_id, person_id);
-
         let result = personality.augment_prompt("query", "Base prompt.");
         assert!(result.is_err());
     }
-
     #[test]
     fn search_personality_propagates_db_error() {
         let tmp = tempfile::tempdir().unwrap();
@@ -3150,15 +2763,12 @@ mod tests {
         let tenant_id = TenantId("".into());
         let person_id = PersonId("p1".into());
         let personality = Personality::new(db, tenant_id, person_id);
-
         let result = personality.search_personality("query", 5);
         assert!(result.is_err());
     }
-
     #[test]
     fn voice_card_context_retrieves_inserted_mock_data() {
         let (_tmp, mut personality) = setup_test_personality();
-
         personality
             .store_voice_card(&VoiceCard {
                 register: "technical".into(),
@@ -3168,21 +2778,17 @@ mod tests {
                 ..test_voice_card("dev-team")
             })
             .unwrap();
-
         let context = personality.voice_card_context("dev-team", 5).unwrap();
         assert_eq!(context.len(), 1);
         assert!(context[0].contains("technical"));
         assert!(context[0].contains("dev-team") || context[0].contains("norms"));
     }
-
     #[test]
     fn voice_card_context_returns_empty_when_no_match() {
         let (_tmp, personality) = setup_test_personality();
-
         let context = personality.voice_card_context("missing-scope", 5).unwrap();
         assert!(context.is_empty());
     }
-
     #[test]
     fn voice_card_context_propagates_db_error() {
         let tmp = tempfile::tempdir().unwrap();
@@ -3191,22 +2797,17 @@ mod tests {
         let tenant_id = TenantId("".into());
         let person_id = PersonId("p1".into());
         let personality = Personality::new(db, tenant_id, person_id);
-
         let result = personality.voice_card_context("any-scope", 5);
         assert!(result.is_err());
     }
-
     #[test]
     fn signal_summary_basic_metrics() {
         let (_tmp, mut personality) = setup_test_personality();
-
         // Advance epoch a few times to test conversation velocity
         personality.advance_epoch();
         personality.advance_epoch();
-
         std::thread::sleep(std::time::Duration::from_millis(10));
         personality.advance_epoch();
-
         personality
             .record_event(&ConversationEvent {
                 epoch: personality.current_epoch(),
@@ -3215,10 +2816,8 @@ mod tests {
                 content: "hi".into(),
             })
             .unwrap();
-
         std::thread::sleep(std::time::Duration::from_millis(10));
         personality.advance_epoch();
-
         personality
             .record_event(&ConversationEvent {
                 epoch: personality.current_epoch(),
@@ -3227,10 +2826,8 @@ mod tests {
                 content: "hello".into(),
             })
             .unwrap();
-
         std::thread::sleep(std::time::Duration::from_millis(10));
         personality.advance_epoch();
-
         personality
             .record_event(&ConversationEvent {
                 epoch: personality.current_epoch(),
@@ -3239,7 +2836,6 @@ mod tests {
                 content: "how are you?".into(),
             })
             .unwrap();
-
         std::thread::sleep(std::time::Duration::from_millis(10));
         personality
             .record_event(&ConversationEvent {
@@ -3249,27 +2845,22 @@ mod tests {
                 content: "smile".into(),
             })
             .unwrap();
-
         let summary_alice = personality.signal_summary("alice");
         assert_eq!(summary_alice.message_count, 2);
         assert_eq!(summary_alice.reaction_count, 1);
         assert_eq!(summary_alice.participation_share, 2.0 / 3.0); // 2 out of 3 total messages
-
         // velocity = total_messages / epoch_span
         // total_messages = 3
         // current_epoch is 5
         assert_eq!(summary_alice.conversation_velocity, 3.0 / 5.0);
-
         let summary_bob = personality.signal_summary("bob");
         assert_eq!(summary_bob.message_count, 1);
         assert_eq!(summary_bob.reaction_count, 0);
         assert_eq!(summary_bob.participation_share, 1.0 / 3.0);
     }
-
     #[test]
     fn signal_summary_latency() {
         let (_tmp, mut personality) = setup_test_personality();
-
         personality
             .record_event(&ConversationEvent {
                 epoch: 10,
@@ -3278,9 +2869,7 @@ mod tests {
                 content: "ping".into(),
             })
             .unwrap();
-
         std::thread::sleep(std::time::Duration::from_millis(1));
-
         personality
             .record_event(&ConversationEvent {
                 epoch: 15,
@@ -3289,9 +2878,7 @@ mod tests {
                 content: "pong".into(),
             })
             .unwrap();
-
         std::thread::sleep(std::time::Duration::from_millis(1));
-
         personality
             .record_event(&ConversationEvent {
                 epoch: 20,
@@ -3300,9 +2887,7 @@ mod tests {
                 content: "ping again".into(),
             })
             .unwrap();
-
         std::thread::sleep(std::time::Duration::from_millis(1));
-
         personality
             .record_event(&ConversationEvent {
                 epoch: 30,
@@ -3311,18 +2896,15 @@ mod tests {
                 content: "pong again".into(),
             })
             .unwrap();
-
         let summary = personality.signal_summary("alice");
         // Latency 1: 15 - 10 = 5
         // Latency 2: 30 - 20 = 10
         // Avg: (5 + 10) / 2 = 7.5
         assert_eq!(summary.avg_response_latency_ms, Some(7.5));
     }
-
     #[test]
     fn signal_summary_typing() {
         let (_tmp, mut personality) = setup_test_personality();
-
         // Typing event 1: followed by message within 5 epochs (should not count as typing without send)
         personality
             .record_event(&ConversationEvent {
@@ -3332,9 +2914,7 @@ mod tests {
                 content: "".into(),
             })
             .unwrap();
-
         std::thread::sleep(std::time::Duration::from_millis(1));
-
         personality
             .record_event(&ConversationEvent {
                 epoch: 12,
@@ -3343,9 +2923,7 @@ mod tests {
                 content: "hello".into(),
             })
             .unwrap();
-
         std::thread::sleep(std::time::Duration::from_millis(1));
-
         // Typing event 2: not followed by message within 5 epochs (should count)
         personality
             .record_event(&ConversationEvent {
@@ -3355,9 +2933,7 @@ mod tests {
                 content: "".into(),
             })
             .unwrap();
-
         std::thread::sleep(std::time::Duration::from_millis(1));
-
         // Message from another user doesn't affect it
         personality
             .record_event(&ConversationEvent {
@@ -3367,9 +2943,7 @@ mod tests {
                 content: "hello".into(),
             })
             .unwrap();
-
         std::thread::sleep(std::time::Duration::from_millis(1));
-
         // Typing event 3: followed by message outside 5 epochs (should count)
         personality
             .record_event(&ConversationEvent {
@@ -3379,9 +2953,7 @@ mod tests {
                 content: "".into(),
             })
             .unwrap();
-
         std::thread::sleep(std::time::Duration::from_millis(1));
-
         personality
             .record_event(&ConversationEvent {
                 epoch: 36, // > 30 + 5
@@ -3390,18 +2962,15 @@ mod tests {
                 content: "hello".into(),
             })
             .unwrap();
-
         let summary = personality.signal_summary("alice");
         assert_eq!(summary.typing_without_send, 2);
     }
-
     #[test]
     fn record_finding_formats_claim_correctly() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id.clone(), person_id.clone());
-
         personality
             .record_finding(&ObservationFinding {
                 scope: "thread-55".into(),
@@ -3411,7 +2980,6 @@ mod tests {
                 severity: ObservationSeverity::Info,
             })
             .unwrap();
-
         let export_page = personality
             .db
             .export(crate::store::ExportInput {
@@ -3424,10 +2992,8 @@ mod tests {
                 limit: 100,
             })
             .unwrap();
-
         assert_eq!(export_page.commits.len(), 1);
         let commit = &export_page.commits[0];
-
         // Find the Claim record in the commit
         let claim_record = commit.records.iter().find_map(|r| {
             if let crate::store::ExportRecord::Claim(c) = r {
@@ -3436,13 +3002,11 @@ mod tests {
                 None
             }
         });
-
         assert!(
             claim_record.is_some(),
             "Expected a Claim record to be exported"
         );
         let claim = claim_record.unwrap();
-
         assert_eq!(claim.subject, "observation:thread-55");
         assert_eq!(claim.predicate, "finding");
         assert_eq!(claim.value, "Info agent was very polite — epoch 1; epoch 2");
@@ -3450,7 +3014,6 @@ mod tests {
         assert_eq!(claim.tier, MemoryTier::LongTerm);
         assert_eq!(claim.processing_state, MemoryProcessingState::Processed);
     }
-
     #[test]
     fn record_finding_propagates_db_error() {
         let tmp = tempfile::tempdir().unwrap();
@@ -3458,7 +3021,6 @@ mod tests {
         let tenant_id = TenantId("".into()); // Invalid tenant_id causes db validation error
         let person_id = PersonId("p1".into());
         let mut personality = Personality::new(db, tenant_id, person_id);
-
         let result = personality.record_finding(&ObservationFinding {
             scope: "thread-1".into(),
             finding: "some finding".into(),
@@ -3466,16 +3028,12 @@ mod tests {
             recommendation: None,
             severity: ObservationSeverity::Info,
         });
-
         assert!(result.is_err());
     }
-
     // --- persona_context tests ---------------------------------------------
-
     #[test]
     fn persona_context_retrieves_stored_persona() {
         let (_tmp, mut personality) = setup_test_personality();
-
         personality
             .store_persona(&PersonaBlueprint {
                 name: "helper".into(),
@@ -3485,21 +3043,17 @@ mod tests {
                 citations: vec![],
             })
             .unwrap();
-
         let context = personality.persona_context("helper", 5).unwrap();
         assert_eq!(context.len(), 1);
         assert!(context[0].contains("helper"));
         assert!(context[0].contains("helpful"));
     }
-
     #[test]
     fn persona_context_empty_when_no_match() {
         let (_tmp, personality) = setup_test_personality();
-
         let context = personality.persona_context("nonexistent", 5).unwrap();
         assert!(context.is_empty());
     }
-
     #[test]
     fn persona_context_propagates_db_error() {
         let tmp = tempfile::tempdir().unwrap();
@@ -3507,11 +3061,9 @@ mod tests {
         let tenant_id = TenantId("".into());
         let person_id = PersonId("p1".into());
         let personality = Personality::new(db, tenant_id, person_id);
-
         let result = personality.persona_context("query", 5);
         assert!(result.is_err());
     }
-
     #[test]
     fn record_hypothesis_propagates_db_error() {
         let tmp = tempfile::tempdir().unwrap();
@@ -3520,7 +3072,6 @@ mod tests {
         let tenant_id = TenantId("".into());
         let person_id = PersonId("p1".into());
         let mut personality = Personality::new(db, tenant_id, person_id);
-
         let hyp = MindHypothesis {
             participant: "alice".into(),
             belief: "thinks the system is slow".into(),
@@ -3530,15 +3081,12 @@ mod tests {
             confidence_basis_points: 8500,
             valid_until: None,
         };
-
         let result = personality.record_hypothesis(&hyp);
         assert!(result.is_err());
     }
-
     #[test]
     fn record_hypothesis_persists_in_db() {
         let (_tmp, mut personality) = setup_test_personality();
-
         let hyp = MindHypothesis {
             participant: "alice".into(),
             belief: "thinks the system is slow".into(),
@@ -3548,16 +3096,13 @@ mod tests {
             confidence_basis_points: 8500,
             valid_until: None,
         };
-
         personality.record_hypothesis(&hyp).unwrap();
-
         let context = personality.tom_context("alice", 5).unwrap();
         assert_eq!(context.len(), 1);
         assert!(context[0].contains("alice"));
         assert!(context[0].contains("thinks the system is slow"));
         assert!(context[0].contains("frustrated"));
     }
-
     #[test]
     fn record_signal_propagates_db_error() {
         let tmp = tempfile::tempdir().unwrap();
@@ -3566,7 +3111,6 @@ mod tests {
         let tenant_id = TenantId("".into());
         let person_id = PersonId("p1".into());
         let mut personality = Personality::new(db, tenant_id, person_id);
-
         let result = personality.record_signal(&SocialSignal {
             signal_kind: "test".into(),
             participant: "alice".into(),
@@ -3575,14 +3119,12 @@ mod tests {
         });
         assert!(result.is_err());
     }
-
     #[test]
     fn record_signal_stores_and_mutates_state() {
         let tmp = tempfile::tempdir().unwrap();
         let db = MemoryDb::open(tmp.path().join("personality.db")).unwrap();
         let (tenant_id, person_id) = test_ids();
         let mut personality = Personality::new(db, tenant_id.clone(), person_id.clone());
-
         personality
             .record_signal(&SocialSignal {
                 signal_kind: "test_signal".into(),
@@ -3591,7 +3133,6 @@ mod tests {
                 epoch: 42,
             })
             .unwrap();
-
         let search_input = crate::store::SearchInput {
             tenant_id,
             person_id,
@@ -3609,11 +3150,9 @@ mod tests {
                 .contains("Signal test_signal for alice at epoch 42: 100")
         );
     }
-
     #[test]
     fn turn_context_retrieves_recent_events() {
         let (_tmp, mut personality) = setup_test_personality();
-
         personality
             .record_event(&ConversationEvent {
                 epoch: 1,
@@ -3622,12 +3161,10 @@ mod tests {
                 content: "turn context test".into(),
             })
             .unwrap();
-
         let context = personality.turn_context("turn context", 5).unwrap();
         assert_eq!(context.len(), 1);
         assert!(context[0].contains("turn context test"));
     }
-
     #[test]
     fn turn_context_propagates_db_error() {
         let tmp = tempfile::tempdir().unwrap();
@@ -3636,7 +3173,6 @@ mod tests {
         let tenant_id = TenantId("".into());
         let person_id = PersonId("p1".into());
         let personality = Personality::new(db, tenant_id, person_id);
-
         let result = personality.turn_context("query", 5);
         assert!(result.is_err());
     }
