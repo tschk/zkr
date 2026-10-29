@@ -263,6 +263,83 @@ fn process_repair_target(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+fn process_repair_targets(
+    transaction: &Transaction<'_>,
+    input: &RepairInput,
+    rows: Vec<(String, String, String)>,
+    embeddings_by_target: &HashMap<(String, String), Vec<EmbeddingRow>>,
+    delete_embeddings_specific: &mut Vec<(String, String, String, String)>,
+    delete_embeddings_all: &mut Vec<(String, String)>,
+    delete_source_fts: &mut Vec<String>,
+) -> Result<(u32, Vec<String>)> {
+    let mut processed = 0;
+    let mut processed_ids = Vec::new();
+
+    for (id, target_kind, target_id) in rows {
+        let target = match embedding_target(&target_kind, &target_id) {
+            Ok(target) => target,
+            Err(_) => {
+                processed_ids.push(id);
+                continue;
+            }
+        };
+        let empty_vec = Vec::new();
+        let target_embeddings = embeddings_by_target
+            .get(&(target_kind.clone(), target_id.clone()))
+            .unwrap_or(&empty_vec);
+
+        process_repair_target(
+            transaction,
+            input,
+            &target_kind,
+            &target_id,
+            target,
+            target_embeddings,
+            delete_embeddings_specific,
+            delete_embeddings_all,
+            delete_source_fts,
+        )?;
+        processed_ids.push(id);
+        processed += 1;
+    }
+
+    Ok((processed as u32, processed_ids))
+}
+
+fn execute_deletions(
+    transaction: &Transaction<'_>,
+    input: &RepairInput,
+    delete_embeddings_specific: &[(String, String, String, String)],
+    delete_embeddings_all: &[(String, String)],
+    delete_source_fts: &[String],
+) -> Result<()> {
+    if !delete_embeddings_specific.is_empty() {
+        let json = serde_json::to_string(delete_embeddings_specific)?;
+        transaction.execute(
+            "DELETE FROM embeddings WHERE tenant_id = ?1 AND person_id = ?2 AND (target_kind, target_id, model, version) IN (SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'), json_extract(value, '$[2]'), json_extract(value, '$[3]') FROM json_each(?3))",
+            params![input.tenant_id.0, input.person_id.0, json],
+        )?;
+    }
+
+    if !delete_embeddings_all.is_empty() {
+        let json = serde_json::to_string(delete_embeddings_all)?;
+        transaction.execute(
+            "DELETE FROM embeddings WHERE tenant_id = ?1 AND person_id = ?2 AND (target_kind, target_id) IN (SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?3))",
+            params![input.tenant_id.0, input.person_id.0, json],
+        )?;
+    }
+
+    if !delete_source_fts.is_empty() {
+        let json = serde_json::to_string(delete_source_fts)?;
+        transaction.execute(
+            "DELETE FROM source_fts WHERE tenant_id = ?1 AND person_id = ?2 AND source_id IN (SELECT value FROM json_each(?3))",
+            params![input.tenant_id.0, input.person_id.0, json],
+        )?;
+    }
+    Ok(())
+}
+
 impl MemoryDb {
     pub fn repair_projections(&mut self, input: RepairInput) -> Result<RepairResult> {
         require_scope(&input.tenant_id, &input.person_id)?;
@@ -275,63 +352,27 @@ impl MemoryDb {
 
         let embeddings_by_target = fetch_target_embeddings(&transaction, &input, &rows)?;
 
-        let mut processed = 0;
-        let mut processed_ids = Vec::new();
         let mut delete_embeddings_specific = Vec::new();
         let mut delete_embeddings_all = Vec::new();
         let mut delete_source_fts = Vec::new();
 
-        for (id, target_kind, target_id) in rows {
-            let target = match embedding_target(&target_kind, &target_id) {
-                Ok(target) => target,
-                Err(_) => {
-                    processed_ids.push(id);
-                    continue;
-                }
-            };
-            let empty_vec = Vec::new();
-            let target_embeddings = embeddings_by_target
-                .get(&(target_kind.clone(), target_id.clone()))
-                .unwrap_or(&empty_vec);
+        let (processed, processed_ids) = process_repair_targets(
+            &transaction,
+            &input,
+            rows,
+            &embeddings_by_target,
+            &mut delete_embeddings_specific,
+            &mut delete_embeddings_all,
+            &mut delete_source_fts,
+        )?;
 
-            process_repair_target(
-                &transaction,
-                &input,
-                &target_kind,
-                &target_id,
-                target,
-                target_embeddings,
-                &mut delete_embeddings_specific,
-                &mut delete_embeddings_all,
-                &mut delete_source_fts,
-            )?;
-            processed_ids.push(id);
-            processed += 1;
-        }
-
-        if !delete_embeddings_specific.is_empty() {
-            let json = serde_json::to_string(&delete_embeddings_specific)?;
-            transaction.execute(
-                "DELETE FROM embeddings WHERE tenant_id = ?1 AND person_id = ?2 AND (target_kind, target_id, model, version) IN (SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'), json_extract(value, '$[2]'), json_extract(value, '$[3]') FROM json_each(?3))",
-                params![input.tenant_id.0, input.person_id.0, json],
-            )?;
-        }
-
-        if !delete_embeddings_all.is_empty() {
-            let json = serde_json::to_string(&delete_embeddings_all)?;
-            transaction.execute(
-                "DELETE FROM embeddings WHERE tenant_id = ?1 AND person_id = ?2 AND (target_kind, target_id) IN (SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?3))",
-                params![input.tenant_id.0, input.person_id.0, json],
-            )?;
-        }
-
-        if !delete_source_fts.is_empty() {
-            let json = serde_json::to_string(&delete_source_fts)?;
-            transaction.execute(
-                "DELETE FROM source_fts WHERE tenant_id = ?1 AND person_id = ?2 AND source_id IN (SELECT value FROM json_each(?3))",
-                params![input.tenant_id.0, input.person_id.0, json],
-            )?;
-        }
+        execute_deletions(
+            &transaction,
+            &input,
+            &delete_embeddings_specific,
+            &delete_embeddings_all,
+            &delete_source_fts,
+        )?;
 
         mark_repair_outbox_processed(&transaction, &processed_ids, processed_at)?;
 
