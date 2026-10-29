@@ -88,6 +88,6 @@ mod repair;
 mod repair_perf;
 mod retrieval;
 mod schema;
+mod store;
 mod summaries;
 mod utils;
-mod store;

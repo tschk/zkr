@@ -63,7 +63,10 @@ fn require_aliases_enforces_limits() {
 #[test]
 fn fts_content_formats_correctly() {
     assert_eq!(fts_content("hello", &[]), "hello");
-    assert_eq!(fts_content("hello", &["".to_owned(), "  ".to_owned()]), "hello");
+    assert_eq!(
+        fts_content("hello", &["".to_owned(), "  ".to_owned()]),
+        "hello"
+    );
 
     let aliases = vec!["world".to_owned(), " test ".to_owned()];
     assert_eq!(fts_content("hello", &aliases), "hello\nworld\ntest");
@@ -85,6 +88,9 @@ fn memory_db_open_migrates_schema() {
     };
     assert!(db.migrate().is_ok());
 
-    let user_version: i64 = db.connection.query_row("PRAGMA user_version", [], |row| row.get(0)).unwrap();
+    let user_version: i64 = db
+        .connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
     assert!(user_version > 0);
 }
