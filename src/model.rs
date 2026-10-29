@@ -293,48 +293,38 @@ mod tests {
 
     #[test]
     fn test_is_legal_state_combination() {
-        let tiers = vec![
-            MemoryTier::ShortTerm,
-            MemoryTier::LongTerm,
-            MemoryTier::Archive,
+        use ClaimStatus::*;
+        use MemoryProcessingState::*;
+        use MemoryTier::*;
+
+        let legal_combinations = [
+            // ShortTerm accepts any status and any state
+            (ShortTerm, Accepted, Pending), (ShortTerm, Accepted, Processed), (ShortTerm, Accepted, Blocked),
+            (ShortTerm, Superseded, Pending), (ShortTerm, Superseded, Processed), (ShortTerm, Superseded, Blocked),
+            (ShortTerm, Retracted, Pending), (ShortTerm, Retracted, Processed), (ShortTerm, Retracted, Blocked),
+            // LongTerm requires Processed state
+            (LongTerm, Accepted, Processed),
+            (LongTerm, Superseded, Processed),
+            (LongTerm, Retracted, Processed),
+            // Archive requires Processed state and cannot be Superseded
+            (Archive, Accepted, Processed),
+            (Archive, Retracted, Processed),
         ];
-        let statuses = vec![
-            ClaimStatus::Accepted,
-            ClaimStatus::Superseded,
-            ClaimStatus::Retracted,
-        ];
-        let states = vec![
-            MemoryProcessingState::Pending,
-            MemoryProcessingState::Processed,
-            MemoryProcessingState::Blocked,
-        ];
 
-        let check = |tier: &MemoryTier, status: &ClaimStatus, state: &MemoryProcessingState| {
-            let mut expected = true;
+        let all_tiers = [ShortTerm, LongTerm, Archive];
+        let all_statuses = [Accepted, Superseded, Retracted];
+        let all_states = [Pending, Processed, Blocked];
 
-            if *tier == MemoryTier::Archive && *status == ClaimStatus::Superseded {
-                expected = false;
-            }
-            if (*tier == MemoryTier::LongTerm || *tier == MemoryTier::Archive)
-                && *state != MemoryProcessingState::Processed
-            {
-                expected = false;
-            }
-
-            assert_eq!(
-                is_legal_state_combination(tier, status, state),
-                expected,
-                "Failed for tier={:?}, status={:?}, processing_state={:?}",
-                tier,
-                status,
-                state
-            );
-        };
-
-        for tier in &tiers {
-            for status in &statuses {
-                for state in &states {
-                    check(tier, status, state);
+        for t in &all_tiers {
+            for s in &all_statuses {
+                for p in &all_states {
+                    let is_legal = legal_combinations.contains(&(t.clone(), s.clone(), p.clone()));
+                    assert_eq!(
+                        is_legal_state_combination(t, s, p),
+                        is_legal,
+                        "Failed for tier={:?}, status={:?}, processing_state={:?}",
+                        t, s, p
+                    );
                 }
             }
         }
