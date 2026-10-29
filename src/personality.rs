@@ -1041,7 +1041,13 @@ impl Personality {
 
         let mut findings = Vec::new();
 
-        if let Some(f) = evaluate_participation(scope, total_turns, agent_turns, user_turns, participation_balance) {
+        if let Some(f) = evaluate_participation(
+            scope,
+            total_turns,
+            agent_turns,
+            user_turns,
+            participation_balance,
+        ) {
             findings.push(f);
         }
         if let Some(f) = evaluate_errors(events, scope, total_turns, error_rate) {
@@ -1192,7 +1198,6 @@ impl Personality {
         Ok(pack.items.into_iter().map(|item| item.excerpt).collect())
     }
 }
-
 
 // --- Social observability helpers ----------------------------------------
 
