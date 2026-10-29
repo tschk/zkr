@@ -186,6 +186,57 @@ impl Default for ProjectQuery {
     }
 }
 
+impl ProjectQuery {
+    pub fn validate(&self) -> Result<()> {
+        require_scope(&self.tenant_id, &self.person_id)?;
+        if let Some(project) = &self.project {
+            require_text("project", project)?;
+        }
+        for project in &self.projects {
+            require_text("project", project)?;
+        }
+        if let Some(category) = &self.category {
+            require_text("category", category)?;
+        }
+        for category in &self.categories {
+            require_text("category", category)?;
+        }
+        for category in &self.all_categories {
+            require_text("category", category)?;
+        }
+        if let Some(predicate) = &self.predicate {
+            require_text("predicate", predicate)?;
+        }
+        if let Some(record_type) = &self.record_type {
+            require_text("record_type", record_type)?;
+        }
+        if let Some(relation) = &self.relation {
+            require_text("relation", relation)?;
+        }
+        if let Some(target) = &self.target {
+            require_text("target", target)?;
+        }
+        for key in self.where_fields.keys() {
+            require_text("where_fields key", key)?;
+        }
+        if let Some(connected_to) = &self.connected_to {
+            require_text("connected_to", connected_to)?;
+        }
+        if let Some(hops) = self.max_hops
+            && !(1..=4).contains(&hops)
+        {
+            return Err(Error::Invalid("max_hops must be between 1 and 4".into()));
+        }
+        if let Some(dq) = &self.query_embedding {
+            validate_dense_query(dq)?;
+        }
+        if let Some(vq) = &self.vector_query {
+            require_text("vector_query", vq)?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct ProjectFact {
     pub project: String,
@@ -868,52 +919,7 @@ impl MemoryDb {
     }
 
     pub fn project_memories(&self, input: ProjectQuery) -> Result<Vec<ProjectFact>> {
-        require_scope(&input.tenant_id, &input.person_id)?;
-        if let Some(project) = &input.project {
-            require_text("project", project)?;
-        }
-        for project in &input.projects {
-            require_text("project", project)?;
-        }
-        if let Some(category) = &input.category {
-            require_text("category", category)?;
-        }
-        for category in &input.categories {
-            require_text("category", category)?;
-        }
-        for category in &input.all_categories {
-            require_text("category", category)?;
-        }
-        if let Some(predicate) = &input.predicate {
-            require_text("predicate", predicate)?;
-        }
-        if let Some(record_type) = &input.record_type {
-            require_text("record_type", record_type)?;
-        }
-        if let Some(relation) = &input.relation {
-            require_text("relation", relation)?;
-        }
-        if let Some(target) = &input.target {
-            require_text("target", target)?;
-        }
-        for key in input.where_fields.keys() {
-            require_text("where_fields key", key)?;
-        }
-        if let Some(connected_to) = &input.connected_to {
-            require_text("connected_to", connected_to)?;
-        }
-        if let Some(hops) = input.max_hops
-            && !(1..=4).contains(&hops)
-        {
-            return Err(Error::Invalid("max_hops must be between 1 and 4".into()));
-        }
-        if let Some(dq) = &input.query_embedding {
-            validate_dense_query(dq)?;
-        }
-        if let Some(vq) = &input.vector_query {
-            require_text("vector_query", vq)?;
-        }
-
+        input.validate()?;
         let all_candidates = self.fetch_project_candidates(&input.tenant_id, &input.person_id)?;
 
         let activated_ids = if let Some(seed) = &input.connected_to {
