@@ -1684,7 +1684,6 @@ mod tests {
         });
     }
 
-
     #[test]
     fn remember_project_record_merges_categories_and_requires_claim() {
         let mut db = MemoryDb::open(":memory:").unwrap();
