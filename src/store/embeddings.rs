@@ -538,7 +538,20 @@ impl MemoryDb {
             &input.version,
             None,
         )?;
-        let mut statement = self.connection.prepare(
+        let mut statement = self.query_projections()?;
+        let rows = statement.query(params![
+            input.tenant_id.0,
+            input.person_id.0,
+            input.model,
+            input.version
+        ])?;
+
+        let limit = bounded_limit(input.limit) as usize;
+        collect_projection_issues(rows, &lane, limit)
+    }
+
+    fn query_projections(&self) -> Result<rusqlite::Statement<'_>> {
+        self.connection.prepare(
             "SELECT targets.target_kind, targets.target_id, targets.text, targets.target_revision,
                     embeddings.target_revision, embeddings.input_hash, embeddings.created_at, embeddings.dimension, embeddings.normalization, embeddings.distance, embeddings.vector
              FROM (
@@ -548,40 +561,39 @@ impl MemoryDb {
              ) targets
              LEFT JOIN embeddings ON embeddings.target_kind = targets.target_kind AND embeddings.target_id = targets.target_id AND embeddings.tenant_id = ?1 AND embeddings.person_id = ?2 AND embeddings.model = ?3 AND embeddings.version = ?4
              ORDER BY targets.target_kind, targets.target_id",
-        )?;
-        let mut rows = statement.query(params![
-            input.tenant_id.0,
-            input.person_id.0,
-            input.model,
-            input.version
-        ])?;
-
-        let mut issues = Vec::new();
-        let mut page_bytes = 2;
-        let limit = bounded_limit(input.limit) as usize;
-
-        while let Some(row) = rows.next()? {
-            let issue = match process_projection_row(row, &lane)? {
-                Some(issue) => issue,
-                None => continue,
-            };
-            let issue_bytes = serde_json::to_vec(&issue)?.len();
-            if issue_bytes + 2 > MAX_PROJECTION_PAGE_BYTES {
-                return Err(Error::Invalid(format!(
-                    "projection issue exceeds the {MAX_PROJECTION_PAGE_BYTES}-byte page limit"
-                )));
-            }
-            if !issues.is_empty() && page_bytes + issue_bytes + 1 > MAX_PROJECTION_PAGE_BYTES {
-                break;
-            }
-            page_bytes += issue_bytes + usize::from(!issues.is_empty());
-            issues.push(issue);
-            if issues.len() == limit {
-                break;
-            }
-        }
-        Ok(issues)
+        ).map_err(Into::into)
     }
+}
+
+fn collect_projection_issues(
+    mut rows: rusqlite::Rows<'_>,
+    lane: &Option<EmbeddingLane>,
+    limit: usize,
+) -> Result<Vec<ProjectionIssue>> {
+    let mut issues = Vec::new();
+    let mut page_bytes = 2;
+
+    while let Some(row) = rows.next()? {
+        let issue = match process_projection_row(row, lane)? {
+            Some(issue) => issue,
+            None => continue,
+        };
+        let issue_bytes = serde_json::to_vec(&issue)?.len();
+        if issue_bytes + 2 > MAX_PROJECTION_PAGE_BYTES {
+            return Err(Error::Invalid(format!(
+                "projection issue exceeds the {MAX_PROJECTION_PAGE_BYTES}-byte page limit"
+            )));
+        }
+        if !issues.is_empty() && page_bytes + issue_bytes + 1 > MAX_PROJECTION_PAGE_BYTES {
+            break;
+        }
+        page_bytes += issue_bytes + usize::from(!issues.is_empty());
+        issues.push(issue);
+        if issues.len() == limit {
+            break;
+        }
+    }
+    Ok(issues)
 }
 
 fn process_projection_row(
