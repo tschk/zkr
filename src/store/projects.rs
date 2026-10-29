@@ -433,7 +433,6 @@ fn claims_explicitly_connected(left: &LiveDreamClaim, right: &LiveDreamClaim) ->
 
 type CandidateFact = (ProjectFact, String, i64, String);
 
-
 fn extract_project_categories(
     project: Option<String>,
     category: Option<String>,
@@ -528,7 +527,13 @@ impl MemoryDb {
 
         let remembered = self.remember(input.memory)?;
         if let Some(claim_id) = remembered.claim_id.clone() {
-            self.attach_project_embeddings(&tenant_id, &person_id, &claim_id, inline_embedding, &source_text)?;
+            self.attach_project_embeddings(
+                &tenant_id,
+                &person_id,
+                &claim_id,
+                inline_embedding,
+                &source_text,
+            )?;
         }
         Ok(remembered)
     }
