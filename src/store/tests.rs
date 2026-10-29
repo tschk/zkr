@@ -79,6 +79,7 @@ fn claim_with_older_last_support() -> (MemoryDb, SourceId, ClaimId) {
 }
 
 mod apply;
+mod core;
 mod embeddings;
 mod export;
 mod lifecycle;
@@ -90,4 +91,3 @@ mod retrieval;
 mod schema;
 mod summaries;
 mod utils;
-mod core;

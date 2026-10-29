@@ -1,7 +1,6 @@
 use super::*;
-use tempfile::NamedTempFile;
 use std::iter;
-
+use tempfile::NamedTempFile;
 
 #[test]
 fn test_require_text() {
@@ -72,7 +71,10 @@ fn test_fts_content() {
 
     // Skips empty or whitespace aliases
     assert_eq!(
-        fts_content("hello", &["alias1".into(), "".into(), "   ".into(), "alias2".into()]),
+        fts_content(
+            "hello",
+            &["alias1".into(), "".into(), "   ".into(), "alias2".into()]
+        ),
         "hello\nalias1\nalias2"
     );
 }
@@ -88,10 +90,7 @@ fn test_bounded_limit() {
 
 #[test]
 fn test_collect_json_page() {
-    let rows: Vec<rusqlite::Result<String>> = vec![
-        Ok("item1".into()),
-        Ok("item2".into()),
-    ];
+    let rows: Vec<rusqlite::Result<String>> = vec![Ok("item1".into()), Ok("item2".into())];
     let page = collect_json_page(rows.into_iter()).unwrap();
     assert_eq!(page, vec!["item1".to_string(), "item2".to_string()]);
 
@@ -120,8 +119,16 @@ fn test_memorydb_open() {
     let db = MemoryDb::open(temp_file.path()).unwrap();
 
     // Verify migration ran (e.g. check tables exist)
-    let count: i64 = db.connection
-        .query_row("SELECT count(*) FROM sqlite_master WHERE type='table'", [], |row| row.get(0))
+    let count: i64 = db
+        .connection
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='table'",
+            [],
+            |row| row.get(0),
+        )
         .unwrap();
-    assert!(count > 0, "Database should have tables created after migration");
+    assert!(
+        count > 0,
+        "Database should have tables created after migration"
+    );
 }
