@@ -1,5 +1,5 @@
 use super::*;
-use std::iter;
+
 use tempfile::NamedTempFile;
 
 #[test]
@@ -42,12 +42,12 @@ fn test_require_aliases() {
     assert!(require_aliases(&[]).is_ok());
 
     // Too many aliases
-    let too_many: Vec<String> = iter::repeat("a".to_string()).take(33).collect();
+    let too_many: Vec<String> = std::iter::repeat_n("a".to_string(), 33).collect();
     let err = require_aliases(&too_many).unwrap_err();
     assert!(matches!(err, Error::Invalid(msg) if msg == "aliases cannot exceed 32 entries"));
 
     // Alias too long
-    let too_long = iter::repeat('a').take(65).collect::<String>();
+    let too_long = "a".repeat(65);
     let err = require_aliases(&[too_long]).unwrap_err();
     assert!(matches!(err, Error::Invalid(msg) if msg == "alias exceeds 64 characters"));
 
@@ -95,7 +95,7 @@ fn test_collect_json_page() {
     assert_eq!(page, vec!["item1".to_string(), "item2".to_string()]);
 
     // Test large item exceeding MAX_READ_PAGE_BYTES (1_000_000)
-    let large_item = iter::repeat('a').take(1_000_000).collect::<String>();
+    let large_item = "a".repeat(1_000_000);
     let rows: Vec<rusqlite::Result<String>> = vec![Ok(large_item)];
     let err = collect_json_page(rows.into_iter()).unwrap_err();
     assert!(matches!(err, Error::Invalid(msg) if msg.contains("read record exceeds")));
@@ -104,7 +104,7 @@ fn test_collect_json_page() {
 #[test]
 fn test_collect_json_page_exceeds_page_limit() {
     // Each string will be about 600_000 bytes when serialized (with quotes)
-    let large_item = iter::repeat('a').take(600_000).collect::<String>();
+    let large_item = "a".repeat(600_000);
     let rows: Vec<rusqlite::Result<String>> = vec![
         Ok(large_item.clone()),
         Ok(large_item), // Second item will push it over 1_000_000
