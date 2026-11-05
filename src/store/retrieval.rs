@@ -607,8 +607,8 @@ impl MemoryDb {
 
                 SELECT i.idx, i.kind, i.id, s.content as excerpt, MIN(e.id) as evidence_id
                 FROM inputs i
-                JOIN sources s ON s.id = i.id AND s.tenant_id = ?2 AND s.person_id = ?3 AND s.deleted_at IS NULL AND s.captured_at <= ?4 AND s.recorded_at <= ?5
-                JOIN evidence e ON e.source_id = s.id AND e.tenant_id = ?2 AND e.person_id = ?3 AND e.deleted_at IS NULL AND e.recorded_at <= ?5
+                JOIN sources s ON s.id = i.id AND s.tenant_id = ?2 AND s.person_id = ?3 AND s.deleted_at IS NULL
+                JOIN evidence e ON e.source_id = s.id AND e.tenant_id = ?2 AND e.person_id = ?3 AND e.deleted_at IS NULL
                 WHERE i.kind = 'source'
                 GROUP BY i.idx
 
@@ -616,8 +616,8 @@ impl MemoryDb {
 
                 SELECT i.idx, i.kind, i.id, e.quote as excerpt, MIN(e.id) as evidence_id
                 FROM inputs i
-                JOIN evidence e ON e.id = i.id AND e.tenant_id = ?2 AND e.person_id = ?3 AND e.deleted_at IS NULL AND e.recorded_at <= ?5
-                JOIN sources s ON s.id = e.source_id AND s.tenant_id = ?2 AND s.person_id = ?3 AND s.deleted_at IS NULL AND s.captured_at <= ?4 AND s.recorded_at <= ?5
+                JOIN evidence e ON e.id = i.id AND e.tenant_id = ?2 AND e.person_id = ?3 AND e.deleted_at IS NULL
+                JOIN sources s ON s.id = e.source_id AND s.tenant_id = ?2 AND s.person_id = ?3 AND s.deleted_at IS NULL
                 WHERE i.kind = 'evidence'
                 GROUP BY i.idx
 
@@ -662,10 +662,14 @@ impl MemoryDb {
             });
         }
 
+        if items.len() < targets.len() {
+            return Err(Error::NotFound);
+        }
+
         Ok(items)
     }
 
-    fn rerank_candidates(
+fn rerank_candidates(
         &self,
         tenant_id: &TenantId,
         person_id: &PersonId,
