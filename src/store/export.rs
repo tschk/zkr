@@ -344,30 +344,29 @@ pub(super) fn profile_records(
     Ok(entries)
 }
 
-pub(super) fn review_record(
+pub(super) fn review_records(
     transaction: &Transaction<'_>,
     tenant_id: &TenantId,
     person_id: &PersonId,
-    review_id: &DailyReviewId,
-) -> Result<DailyReview> {
-    transaction
-        .query_row(
-            "SELECT day, summary, evidence_ids, recorded_at FROM daily_reviews WHERE id = ?1 AND tenant_id = ?2 AND person_id = ?3",
-            params![review_id.0, tenant_id.0, person_id.0],
-            |row| {
-                let evidence_ids: String = row.get(2)?;
-                Ok(DailyReview {
-                    id: review_id.clone(),
-                    tenant_id: tenant_id.clone(),
-                    person_id: person_id.clone(),
-                    day: row.get(0)?,
-                    summary: row.get(1)?,
-                    evidence_ids: serde_json::from_str(&evidence_ids).map_err(super::sql_json_error)?,
-                    recorded_at: row.get(3)?,
-                })
-            },
-        )
-        .map_err(Error::from)
+) -> Result<Vec<DailyReview>> {
+    let mut stmt = transaction.prepare(
+        "SELECT id, day, summary, evidence_ids, recorded_at FROM daily_reviews WHERE tenant_id = ?1 AND person_id = ?2 ORDER BY id",
+    )?;
+    let records = stmt
+        .query_map(params![tenant_id.0, person_id.0], |row| {
+            let evidence_ids: String = row.get(3)?;
+            Ok(DailyReview {
+                id: DailyReviewId(row.get(0)?),
+                tenant_id: tenant_id.clone(),
+                person_id: person_id.clone(),
+                day: row.get(1)?,
+                summary: row.get(2)?,
+                evidence_ids: serde_json::from_str(&evidence_ids).map_err(super::sql_json_error)?,
+                recorded_at: row.get(4)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(records)
 }
 
 type ExportEventRow = (i64, Timestamp, i64, i64, String);
