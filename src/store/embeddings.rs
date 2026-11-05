@@ -163,29 +163,13 @@ pub(super) fn current_embedding_lane(
             continue;
         }
 
-        let (target_revision, text) = match kind.as_str() {
-            "source" => {
-                if let (Some(r), Some(t)) = (s_rev, s_content) {
-                    (r, t)
-                } else {
-                    continue;
-                }
-            }
-            "evidence" => {
-                if let (Some(r), Some(t)) = (e_rev, e_quote) {
-                    (r, t)
-                } else {
-                    continue;
-                }
-            }
-            "claim" => {
-                if let (Some(r), Some(t)) = (c_rev, c_value) {
-                    (r, t)
-                } else {
-                    continue;
-                }
-            }
-            _ => continue,
+        let Some((target_revision, text)) = (match kind.as_str() {
+            "source" => s_rev.zip(s_content),
+            "evidence" => e_rev.zip(e_quote),
+            "claim" => c_rev.zip(c_value),
+            _ => None,
+        }) else {
+            continue;
         };
 
         if target_revision != revision || input_hash(&text) != hash {
@@ -361,15 +345,12 @@ impl MemoryDb {
                 c_value,
             ) = row?;
 
-            let Some((current_target_revision, text)) = extract_target_revision_and_text(
-                &target_kind,
-                s_rev,
-                s_content,
-                e_rev,
-                e_quote,
-                c_rev,
-                c_value,
-            ) else {
+            let Some((current_target_revision, text)) = (match target_kind.as_str() {
+                "source" => s_rev.zip(s_content),
+                "evidence" => e_rev.zip(e_quote),
+                "claim" => c_rev.zip(c_value),
+                _ => None,
+            }) else {
                 continue;
             };
 
@@ -638,20 +619,4 @@ fn process_projection_row(
         stored_input_hash: stored.as_ref().map(|value| value.1.clone()),
         stored_created_at: stored.map(|value| value.2),
     }))
-}
-fn extract_target_revision_and_text(
-    target_kind: &str,
-    s_rev: Option<i64>,
-    s_content: Option<String>,
-    e_rev: Option<i64>,
-    e_quote: Option<String>,
-    c_rev: Option<i64>,
-    c_value: Option<String>,
-) -> Option<(i64, String)> {
-    match target_kind {
-        "source" => s_rev.zip(s_content),
-        "evidence" => e_rev.zip(e_quote),
-        "claim" => c_rev.zip(c_value),
-        _ => None,
-    }
 }
