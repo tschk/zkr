@@ -161,7 +161,11 @@ fn apply_commit(
             .enumerate()
         {
             if pass == ORIGIN_PASS {
-                apply_origin_pass_record(transaction, record, accepted[index])?;
+                if let ExportRecord::Source(record) = record {
+                    if accepted[index] {
+                        apply_source_origin(transaction, record)?;
+                    }
+                }
                 continue;
             }
             if record_pass(record) != pass {
@@ -973,17 +977,4 @@ fn record_hash(record: &ExportRecord) -> Result<String> {
         "sha256:{:x}",
         Sha256::digest(serde_json::to_vec(record)?)
     ))
-}
-
-fn apply_origin_pass_record(
-    transaction: &Transaction<'_>,
-    record: &ExportRecord,
-    accepted: bool,
-) -> Result<()> {
-    if let ExportRecord::Source(record) = record {
-        if accepted {
-            apply_source_origin(transaction, record)?;
-        }
-    }
-    Ok(())
 }
