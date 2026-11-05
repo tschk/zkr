@@ -163,29 +163,13 @@ pub(super) fn current_embedding_lane(
             continue;
         }
 
-        let (target_revision, text) = match kind.as_str() {
-            "source" => {
-                if let (Some(r), Some(t)) = (s_rev, s_content) {
-                    (r, t)
-                } else {
-                    continue;
-                }
-            }
-            "evidence" => {
-                if let (Some(r), Some(t)) = (e_rev, e_quote) {
-                    (r, t)
-                } else {
-                    continue;
-                }
-            }
-            "claim" => {
-                if let (Some(r), Some(t)) = (c_rev, c_value) {
-                    (r, t)
-                } else {
-                    continue;
-                }
-            }
-            _ => continue,
+        let Some((target_revision, text)) = (match kind.as_str() {
+            "source" => s_rev.zip(s_content),
+            "evidence" => e_rev.zip(e_quote),
+            "claim" => c_rev.zip(c_value),
+            _ => None,
+        }) else {
+            continue;
         };
 
         if target_revision != revision || input_hash(&text) != hash {
@@ -361,29 +345,13 @@ impl MemoryDb {
                 c_value,
             ) = row?;
 
-            let (current_target_revision, text) = match target_kind.as_str() {
-                "source" => {
-                    if let (Some(r), Some(t)) = (s_rev, s_content) {
-                        (r, t)
-                    } else {
-                        continue;
-                    }
-                }
-                "evidence" => {
-                    if let (Some(r), Some(t)) = (e_rev, e_quote) {
-                        (r, t)
-                    } else {
-                        continue;
-                    }
-                }
-                "claim" => {
-                    if let (Some(r), Some(t)) = (c_rev, c_value) {
-                        (r, t)
-                    } else {
-                        continue;
-                    }
-                }
-                _ => continue,
+            let Some((current_target_revision, text)) = (match target_kind.as_str() {
+                "source" => s_rev.zip(s_content),
+                "evidence" => e_rev.zip(e_quote),
+                "claim" => c_rev.zip(c_value),
+                _ => None,
+            }) else {
+                continue;
             };
 
             if current_target_revision != stored_target_revision
