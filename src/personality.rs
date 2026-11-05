@@ -540,7 +540,17 @@ impl Personality {
         }
 
         let prev = self.recent_events.iter().rev().nth(1)?;
-        extract_latency_signal(event, prev)
+        if prev.participant == event.participant || prev.event_kind != "message" {
+            return None;
+        }
+
+        let latency = event.epoch.saturating_sub(prev.epoch);
+        Some(SocialSignal {
+            signal_kind: "response_latency".into(),
+            participant: event.participant.clone(),
+            value: format!("{}epochs", latency),
+            epoch: event.epoch,
+        })
     }
 
     fn derive_typing_without_send_signal(&self, event: &ConversationEvent) -> Option<SocialSignal> {
@@ -1234,20 +1244,6 @@ impl Personality {
     }
 }
 
-
-fn extract_latency_signal(event: &ConversationEvent, prev: &ConversationEvent) -> Option<SocialSignal> {
-    if prev.participant == event.participant || prev.event_kind != "message" {
-        return None;
-    }
-
-    let latency = event.epoch.saturating_sub(prev.epoch);
-    Some(SocialSignal {
-        signal_kind: "response_latency".into(),
-        participant: event.participant.clone(),
-        value: format!("{}epochs", latency),
-        epoch: event.epoch,
-    })
-}
 
 #[cfg(test)]
 mod tests {
