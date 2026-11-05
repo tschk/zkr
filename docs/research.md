@@ -68,6 +68,19 @@ Selection is by lane, not one global winner: choose the smallest configuration m
 - Nightly: full LongMemEval, MemoryAgentBench, and [EverMemBench](https://github.com/EverMind-AI/EverMemBench); track quality, latency, index size, and token cost separately.
 - Before adopting graph expansion or reflection: require a statistically repeatable gain over FTS+dense RRF without regression in deletion, tenancy, or citation precision.
 
+## Associative memory audit
+
+`dream` in `src/store/projects.rs` proposes associations without writing claims. It can use a caller-supplied embedding lane, shared connection targets, or two-hop paths. These are suggestions, not evidence that a new relationship is true. A two-hop suggestion needs the supporting evidence for its intermediate claim as well as both endpoints.
+
+The current implementation has limits that an evaluation must address before treating its output as semantic recall:
+
+- `zkr-auto` hashes tokens into 64 dimensions. Its similarity can reflect token overlap and collisions, but it is not a trained semantic embedding. This differs from the decision above to avoid presenting hash-derived vectors as semantic truth.
+- `dream` loads all eligible claims before applying the output limit. Pair comparisons are quadratic, and the two-hop search can examine every claim for each pair. The output limit is not a work budget.
+- A two-hop result names its intermediate predicate but does not expose the intermediate claim ID or connection relations. Predicates need not uniquely identify a claim, so the explanation alone cannot identify the complete path.
+- Fixed scores of 8,500 for shared targets and 8,000 for two-hop paths are heuristics, not calibrated probabilities. Vector matches take precedence over structural matches for the same pair, so one result can hide another explanation.
+
+Useful next experiments include returning explicit, cited paths; finding changes in a topic over valid and recorded time; and proposing questions where live evidence conflicts or a connection target is unresolved. Evaluate each against curated examples with expected evidence and abstentions. Compare with ordinary hybrid retrieval at the same context budget, and test correction, deletion, and tenant isolation before promoting a suggestion into a retrieval signal.
+
 ## Scope boundary
 
 The first implementation needs SQLite FTS, an embedding import/export contract, exact vector scan for small local stores, reciprocal-rank fusion, citations, and lifecycle tests. Approximate nearest-neighbor indexes, graph databases, bundled model runtimes, background schedulers, and hosted services wait for benchmark evidence.

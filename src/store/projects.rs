@@ -1226,11 +1226,12 @@ impl MemoryDb {
                                 || (claim_points_to(right, b) && claim_points_to(b, left)))
                     }) {
                         paired_claims.insert((left.id.clone(), right.id.clone()));
-                        let evidence_ids = if left.evidence_id == right.evidence_id {
-                            vec![left.evidence_id.clone()]
-                        } else {
-                            vec![left.evidence_id.clone(), right.evidence_id.clone()]
-                        };
+                        let mut evidence_ids = vec![left.evidence_id.clone()];
+                        for id in [&bridge.evidence_id, &right.evidence_id] {
+                            if !evidence_ids.contains(id) {
+                                evidence_ids.push(id.clone());
+                            }
+                        }
                         associations.push(DreamAssociation {
                             left_claim_id: left.id.clone(),
                             left_subject: left.subject.clone(),
@@ -2243,6 +2244,48 @@ mod tests {
             pack.associations[1].reason,
             "shared_target:shared:db_migration"
         );
+    }
+
+    #[test]
+    fn dream_two_hop_association_cites_the_bridge() {
+        let mut db = MemoryDb::open(":memory:").unwrap();
+        let mut evidence = Vec::new();
+        for (predicate, target) in [("a", Some("b")), ("b", Some("c")), ("c", None)] {
+            let connections = target
+                .map(|target| vec![json!({"relation":"links", "target":target})])
+                .unwrap_or_default();
+            let stored = db
+                .remember_project_record(
+                    serde_json::from_value(json!({
+                        "project":predicate,"category":"work","tenant_id":"local","person_id":"me",
+                        "kind":"conversation","text":format!("evidence for {predicate}"),
+                        "captured_at":10,"recorded_at":10,
+                        "record":{"record_type":"item","fields":{},"connections":connections},
+                        "claim":{"predicate":predicate,"kind":"fact","valid_from":10}
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+            evidence.push(stored.evidence_id);
+        }
+        let pack = db
+            .dream(DreamInput {
+                tenant_id: TenantId("local".into()),
+                person_id: PersonId("me".into()),
+                model: Some("missing".into()),
+                version: Some("v1".into()),
+                min_similarity_basis_points: 8_000,
+                limit: 10,
+            })
+            .unwrap();
+        let association = pack
+            .associations
+            .iter()
+            .find(|item| item.reason == "triadic_closure:b")
+            .expect("two-hop association");
+        for id in evidence {
+            assert!(association.evidence_ids.contains(&id), "missing {id:?}");
+        }
     }
 
     #[test]

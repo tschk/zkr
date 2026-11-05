@@ -1,6 +1,5 @@
 use super::export::{
-    append_records, claim_evidence_record, claim_records, evidence_record, review_record,
-    source_record,
+    append_records, claim_records, evidence_record, review_records, source_record,
 };
 use super::*;
 use rusqlite::{Transaction, TransactionBehavior};
@@ -356,34 +355,16 @@ fn bootstrap_records(
     for claim in claim_records(transaction, tenant_id, person_id)? {
         records.push(ExportRecord::Claim(claim));
     }
-    let mut statement = transaction.prepare(
-        "SELECT claim_id, evidence_id FROM claim_evidence WHERE tenant_id = ?1 AND person_id = ?2 ORDER BY claim_id, evidence_id",
-    )?;
-    let claim_evidence = statement
-        .query_map(params![tenant_id.0, person_id.0], |row| {
-            Ok((ClaimId(row.get(0)?), EvidenceId(row.get(1)?)))
-        })?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    drop(statement);
-    for (claim_id, evidence_id) in claim_evidence {
-        records.push(ExportRecord::ClaimEvidence(claim_evidence_record(
-            transaction,
-            tenant_id,
-            person_id,
-            &claim_id,
-            &evidence_id,
-        )?));
+    for claim_evidence in
+        crate::store::export::claim_evidence_records(transaction, tenant_id, person_id)?
+    {
+        records.push(ExportRecord::ClaimEvidence(claim_evidence));
     }
     for profile in crate::store::export::profile_records(transaction, tenant_id, person_id)? {
         records.push(ExportRecord::Profile(profile));
     }
-    for review_id in scoped_ids(transaction, "daily_reviews", "id", tenant_id, person_id)? {
-        records.push(ExportRecord::DailyReview(review_record(
-            transaction,
-            tenant_id,
-            person_id,
-            &DailyReviewId(review_id),
-        )?));
+    for review in review_records(transaction, tenant_id, person_id)? {
+        records.push(ExportRecord::DailyReview(review));
     }
     Ok(records)
 }

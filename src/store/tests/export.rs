@@ -327,6 +327,41 @@ fn migration_bootstrap_is_event_bounded() {
 }
 
 #[test]
+fn migration_bootstrap_exports_only_scoped_reviews() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    db.remember(remember("a", "sam", "Acme")).unwrap();
+    db.remember(remember("b", "sam", "Other")).unwrap();
+    db.connection
+        .execute_batch(
+            "INSERT INTO daily_reviews VALUES('r2', 'a', 'sam', '2026-01-02', 'second', '[]', 12);
+         INSERT INTO daily_reviews VALUES('r1', 'a', 'sam', '2026-01-01', 'first', '[]', 11);
+         INSERT INTO daily_reviews VALUES('other', 'b', 'sam', '2026-01-03', 'private', '[]', 13);
+         DELETE FROM memory_commits;
+         PRAGMA user_version = 7;",
+        )
+        .unwrap();
+    db.migrate().unwrap();
+
+    let page = db.export(input(0, -1, None, 100)).unwrap();
+    let reviews: Vec<_> = page
+        .commits
+        .iter()
+        .flat_map(|commit| &commit.records)
+        .filter_map(|record| {
+            if let ExportRecord::DailyReview(review) = record {
+                Some((review.id.0.as_str(), review.summary.as_str()))
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(reviews, [("r1", "first"), ("r2", "second")]);
+}
+
+#[test]
 fn migration_bootstrap_rejects_oversized_legacy_record_atomically() {
     let mut db = MemoryDb {
         connection: Connection::open_in_memory().unwrap(),
