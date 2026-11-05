@@ -75,6 +75,40 @@ fn search_filters_by_enabled_features() {
 }
 
 #[test]
+fn search_accepts_large_feature_lists() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let mut memory = remember_raw("a", "sam", "Secret project is Beta");
+    memory.feature_flag = Some("beta".into());
+    db.remember(memory).unwrap();
+
+    let mut features = vec!["other".into(); 33_000];
+    features.push("beta".into());
+    for as_of in [
+        None,
+        Some(TemporalQuery {
+            valid_at: 15,
+            recorded_at: 15,
+        }),
+    ] {
+        let found = db
+            .search(SearchInput {
+                tenant_id: TenantId("a".into()),
+                person_id: PersonId("sam".into()),
+                query: "Secret project".into(),
+                limit: 5,
+                query_embedding: None,
+                as_of,
+                enabled_features: features.clone(),
+            })
+            .unwrap();
+        assert!(found.items.iter().any(|item| item.excerpt.contains("Beta")));
+    }
+}
+
+#[test]
 fn search_matches_aliases_without_changing_excerpt() {
     let mut db = MemoryDb {
         connection: Connection::open_in_memory().unwrap(),
