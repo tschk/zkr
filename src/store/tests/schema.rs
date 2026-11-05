@@ -56,6 +56,28 @@ fn migrate_fails_if_newer_version() {
         panic!("Expected Error::Invalid");
     }
 }
+
+#[test]
+fn open_reports_connection_and_migration_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing_parent = dir.path().join("missing").join("memory.db");
+    assert!(matches!(MemoryDb::open(missing_parent), Err(Error::Sql(_))));
+
+    let path = dir.path().join("future.db");
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .pragma_update(
+            None,
+            "user_version",
+            crate::store::schema::SCHEMA_VERSION + 1,
+        )
+        .unwrap();
+    drop(connection);
+    assert!(
+        matches!(MemoryDb::open(path), Err(Error::Invalid(message)) if message.contains("is newer than supported version"))
+    );
+}
+
 #[test]
 fn is_valid_identifier_accepts_valid_strings() {
     assert!(is_valid_identifier("valid_table_name"));
