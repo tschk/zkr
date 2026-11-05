@@ -263,18 +263,25 @@ fn process_repair_target(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
+struct RepairDeletions {
+    embeddings_specific: Vec<(String, String, String, String)>,
+    embeddings_all: Vec<(String, String)>,
+    source_fts: Vec<String>,
+}
+
 fn process_repair_targets(
     transaction: &Transaction<'_>,
     input: &RepairInput,
     rows: Vec<(String, String, String)>,
     embeddings_by_target: &HashMap<(String, String), Vec<EmbeddingRow>>,
-    delete_embeddings_specific: &mut Vec<(String, String, String, String)>,
-    delete_embeddings_all: &mut Vec<(String, String)>,
-    delete_source_fts: &mut Vec<String>,
-) -> Result<(u32, Vec<String>)> {
+) -> Result<(u32, Vec<String>, RepairDeletions)> {
     let mut processed = 0;
     let mut processed_ids = Vec::new();
+    let mut deletions = RepairDeletions {
+        embeddings_specific: Vec::new(),
+        embeddings_all: Vec::new(),
+        source_fts: Vec::new(),
+    };
 
     for (id, target_kind, target_id) in rows {
         let target = match embedding_target(&target_kind, &target_id) {
@@ -296,15 +303,15 @@ fn process_repair_targets(
             &target_id,
             target,
             target_embeddings,
-            delete_embeddings_specific,
-            delete_embeddings_all,
-            delete_source_fts,
+            &mut deletions.embeddings_specific,
+            &mut deletions.embeddings_all,
+            &mut deletions.source_fts,
         )?;
         processed_ids.push(id);
         processed += 1;
     }
 
-    Ok((processed as u32, processed_ids))
+    Ok((processed as u32, processed_ids, deletions))
 }
 
 fn execute_deletions(
@@ -352,26 +359,15 @@ impl MemoryDb {
 
         let embeddings_by_target = fetch_target_embeddings(&transaction, &input, &rows)?;
 
-        let mut delete_embeddings_specific = Vec::new();
-        let mut delete_embeddings_all = Vec::new();
-        let mut delete_source_fts = Vec::new();
-
-        let (processed, processed_ids) = process_repair_targets(
-            &transaction,
-            &input,
-            rows,
-            &embeddings_by_target,
-            &mut delete_embeddings_specific,
-            &mut delete_embeddings_all,
-            &mut delete_source_fts,
-        )?;
+        let (processed, processed_ids, deletions) =
+            process_repair_targets(&transaction, &input, rows, &embeddings_by_target)?;
 
         execute_deletions(
             &transaction,
             &input,
-            &delete_embeddings_specific,
-            &delete_embeddings_all,
-            &delete_source_fts,
+            &deletions.embeddings_specific,
+            &deletions.embeddings_all,
+            &deletions.source_fts,
         )?;
 
         mark_repair_outbox_processed(&transaction, &processed_ids, processed_at)?;
