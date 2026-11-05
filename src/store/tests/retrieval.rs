@@ -75,6 +75,114 @@ fn search_filters_by_enabled_features() {
 }
 
 #[test]
+fn search_cites_support_from_enabled_features() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let claim = db.remember(remember("a", "sam", "Acme")).unwrap();
+    let other = db
+        .remember(remember_raw("a", "sam", "Sam works at Acme"))
+        .unwrap();
+    db.link_claim_evidence(ClaimEvidence {
+        tenant_id: TenantId("a".into()),
+        person_id: PersonId("sam".into()),
+        claim_id: claim.claim_id.clone().unwrap(),
+        evidence_id: other.evidence_id.clone(),
+        relation: EvidenceRelation::Supports,
+        confidence_basis_points: 10_000,
+    })
+    .unwrap();
+    let (gated, visible) = if claim.evidence_id.0 < other.evidence_id.0 {
+        (&claim, &other)
+    } else {
+        (&other, &claim)
+    };
+    db.connection
+        .execute(
+            "UPDATE sources SET feature_flag = 'private' WHERE id = ?1",
+            [&gated.source_id.0],
+        )
+        .unwrap();
+    for as_of in [
+        None,
+        Some(TemporalQuery {
+            valid_at: 15,
+            recorded_at: 15,
+        }),
+    ] {
+        let pack = db
+            .search(SearchInput {
+                tenant_id: TenantId("a".into()),
+                person_id: PersonId("sam".into()),
+                query: "Sam works Acme".into(),
+                limit: 5,
+                query_embedding: None,
+                as_of,
+                enabled_features: Vec::new(),
+            })
+            .unwrap();
+        assert_eq!(pack.items.len(), 1);
+        assert_eq!(
+            pack.items[0].evidence_ids,
+            vec![visible.evidence_id.clone()]
+        );
+    }
+}
+
+#[test]
+fn dense_search_excludes_feature_gated_evidence() {
+    let mut db = MemoryDb {
+        connection: Connection::open_in_memory().unwrap(),
+    };
+    db.migrate().unwrap();
+    let mut private = remember("a", "sam", "Secret");
+    private.feature_flag = Some("private".into());
+    let private = db.remember(private).unwrap();
+    let public = db
+        .remember(remember_raw("a", "sam", "Public note"))
+        .unwrap();
+    for target in [
+        EmbeddingTarget::Source(private.source_id),
+        EmbeddingTarget::Evidence(private.evidence_id),
+        EmbeddingTarget::Claim(private.claim_id.unwrap()),
+        EmbeddingTarget::Source(public.source_id.clone()),
+    ] {
+        db.upsert_embedding(EmbeddingInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            target: target.clone(),
+            embedding: Embedding {
+                vector: vec![1.0],
+                model: "test/model".into(),
+                version: "1".into(),
+                input_hash: hash_for(&db, target),
+                normalization: VectorNormalization::L2,
+                distance: VectorDistance::Cosine,
+            },
+        })
+        .unwrap();
+    }
+    let found = db
+        .search(SearchInput {
+            tenant_id: TenantId("a".into()),
+            person_id: PersonId("sam".into()),
+            query: "unmatched".into(),
+            limit: 10,
+            query_embedding: Some(DenseQuery {
+                vector: vec![1.0],
+                model: "test/model".into(),
+                version: "1".into(),
+            }),
+            as_of: None,
+            enabled_features: Vec::new(),
+        })
+        .unwrap();
+    assert_eq!(found.items.len(), 1);
+    assert_eq!(found.items[0].memory, MemoryRef::Source(public.source_id));
+}
+
+#[test]
 fn search_accepts_large_feature_lists() {
     let mut db = MemoryDb {
         connection: Connection::open_in_memory().unwrap(),

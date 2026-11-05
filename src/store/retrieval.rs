@@ -41,6 +41,7 @@ impl MemoryDb {
                 target,
                 relevance_basis_points,
                 input.as_of.as_ref(),
+                Some(&input.enabled_features),
             )?);
         }
         if input.as_of.is_none() {
@@ -311,7 +312,14 @@ impl MemoryDb {
             EmbeddingTarget::Evidence(id) => RetrievalTarget::Evidence(id),
             EmbeddingTarget::Claim(id) => RetrievalTarget::Claim(id),
         };
-        self.retrieval_item(&input.tenant_id, &input.person_id, target, 10_000, None)
+        self.retrieval_item(
+            &input.tenant_id,
+            &input.person_id,
+            target,
+            10_000,
+            None,
+            None,
+        )
     }
 
     pub(super) fn retrieval_targets_for_embeddings_bulk(
@@ -342,7 +350,7 @@ impl MemoryDb {
         SELECT DISTINCT i.kind, i.id as orig_id, 'claim' as target_kind, c.id as target_id
         FROM inputs i
         JOIN evidence e ON i.kind = 'evidence' AND e.id = i.id AND e.tenant_id = ?1 AND e.person_id = ?2 AND e.deleted_at IS NULL
-        JOIN sources s ON s.id = e.source_id AND s.tenant_id = ?1 AND s.person_id = ?2 AND s.deleted_at IS NULL
+        JOIN sources s ON s.id = e.source_id AND s.tenant_id = ?1 AND s.person_id = ?2 AND s.deleted_at IS NULL AND s.feature_flag IS NULL
         JOIN claim_evidence ce ON ce.evidence_id = e.id AND ce.tenant_id = ?1 AND ce.person_id = ?2 AND ce.relation = '\"supports\"'
         JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ?1 AND c.person_id = ?2 AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL AND c.tier IN ('short_term', 'long_term') AND c.processing_state = 'processed'
 
@@ -350,7 +358,7 @@ impl MemoryDb {
 
         SELECT DISTINCT i.kind, i.id as orig_id, 'claim' as target_kind, c.id as target_id
         FROM inputs i
-        JOIN sources s ON i.kind = 'source' AND s.id = i.id AND s.tenant_id = ?1 AND s.person_id = ?2 AND s.deleted_at IS NULL
+        JOIN sources s ON i.kind = 'source' AND s.id = i.id AND s.tenant_id = ?1 AND s.person_id = ?2 AND s.deleted_at IS NULL AND s.feature_flag IS NULL
         JOIN evidence e ON e.source_id = s.id AND e.tenant_id = ?1 AND e.person_id = ?2 AND e.deleted_at IS NULL
         JOIN claim_evidence ce ON ce.evidence_id = e.id AND ce.tenant_id = ?1 AND ce.person_id = ?2 AND ce.relation = '\"supports\"'
         JOIN claims c ON c.id = ce.claim_id AND c.tenant_id = ?1 AND c.person_id = ?2 AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL AND c.tier IN ('short_term', 'long_term') AND c.processing_state = 'processed'
@@ -360,7 +368,7 @@ impl MemoryDb {
         SELECT DISTINCT i.kind, i.id as orig_id, 'evidence' as target_kind, e.id as target_id
         FROM inputs i
         JOIN evidence e ON i.kind = 'evidence' AND e.id = i.id AND e.tenant_id = ?1 AND e.person_id = ?2 AND e.deleted_at IS NULL
-        JOIN sources s ON s.id = e.source_id AND s.tenant_id = ?1 AND s.person_id = ?2 AND s.deleted_at IS NULL
+        JOIN sources s ON s.id = e.source_id AND s.tenant_id = ?1 AND s.person_id = ?2 AND s.deleted_at IS NULL AND s.feature_flag IS NULL
         WHERE NOT EXISTS (
             SELECT 1
             FROM claim_evidence ce
@@ -372,7 +380,7 @@ impl MemoryDb {
 
         SELECT DISTINCT i.kind, i.id as orig_id, 'source' as target_kind, s.id as target_id
         FROM inputs i
-        JOIN sources s ON i.kind = 'source' AND s.id = i.id AND s.tenant_id = ?1 AND s.person_id = ?2 AND s.deleted_at IS NULL
+        JOIN sources s ON i.kind = 'source' AND s.id = i.id AND s.tenant_id = ?1 AND s.person_id = ?2 AND s.deleted_at IS NULL AND s.feature_flag IS NULL
         WHERE EXISTS (
             SELECT 1 FROM evidence live_e
             WHERE live_e.source_id = s.id AND live_e.tenant_id = ?1 AND live_e.person_id = ?2 AND live_e.deleted_at IS NULL
@@ -390,6 +398,12 @@ impl MemoryDb {
         SELECT DISTINCT i.kind, i.id as orig_id, 'claim' as target_kind, c.id as target_id
         FROM inputs i
         JOIN claims c ON i.kind = 'claim' AND c.id = i.id AND c.tenant_id = ?1 AND c.person_id = ?2 AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL AND c.tier IN ('short_term', 'long_term') AND c.processing_state = 'processed'
+        WHERE EXISTS (
+            SELECT 1 FROM claim_evidence ce
+            JOIN evidence e ON e.id = ce.evidence_id AND e.tenant_id = ce.tenant_id AND e.person_id = ce.person_id AND e.deleted_at IS NULL
+            JOIN sources s ON s.id = e.source_id AND s.tenant_id = e.tenant_id AND s.person_id = e.person_id AND s.deleted_at IS NULL AND s.feature_flag IS NULL
+            WHERE ce.claim_id = c.id AND ce.tenant_id = ?1 AND ce.person_id = ?2 AND ce.relation = '\"supports\"'
+        )
         ";
         let mut statement = self.connection.prepare(sql)?;
         let rows = statement.query_map(params![tenant_id.0, person_id.0, inputs_json], |row| {
@@ -427,7 +441,9 @@ impl MemoryDb {
         target: RetrievalTarget,
         relevance_basis_points: u16,
         as_of: Option<&TemporalQuery>,
+        enabled_features: Option<&[String]>,
     ) -> Result<RetrievalItem> {
+        let features_json = enabled_features.map(serde_json::to_string).transpose()?;
         let (sql, values): (&str, Vec<&dyn rusqlite::ToSql>) = match &target {
             RetrievalTarget::Claim(id) => match as_of {
                 None => (
@@ -436,9 +452,9 @@ impl MemoryDb {
                  JOIN claim_evidence ce ON ce.claim_id = c.id AND ce.tenant_id = c.tenant_id AND ce.person_id = c.person_id AND ce.relation = '\"supports\"'
                  JOIN evidence e ON e.id = ce.evidence_id AND e.tenant_id = ce.tenant_id AND e.person_id = ce.person_id
                  JOIN sources s ON s.id = e.source_id AND s.tenant_id = e.tenant_id AND s.person_id = e.person_id
-                 WHERE c.id = ?1 AND c.tenant_id = ?2 AND c.person_id = ?3 AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL AND c.tier IN ('short_term', 'long_term') AND c.processing_state = 'processed' AND e.deleted_at IS NULL AND s.deleted_at IS NULL
+                 WHERE c.id = ?1 AND c.tenant_id = ?2 AND c.person_id = ?3 AND c.status = 'accepted' AND c.valid_until IS NULL AND c.recorded_until IS NULL AND c.tier IN ('short_term', 'long_term') AND c.processing_state = 'processed' AND e.deleted_at IS NULL AND s.deleted_at IS NULL AND (?4 IS NULL OR s.feature_flag IS NULL OR s.feature_flag IN (SELECT value FROM json_each(?4)))
                  ORDER BY ce.evidence_id LIMIT 1",
-                    vec![&id.0, &tenant_id.0, &person_id.0],
+                    vec![&id.0, &tenant_id.0, &person_id.0, &features_json],
                 ),
                 Some(as_of) => (
                     "SELECT c.subject || ' ' || c.predicate || ' ' || c.value, ce.evidence_id
@@ -446,9 +462,9 @@ impl MemoryDb {
                  JOIN claim_evidence ce ON ce.claim_id = c.id AND ce.tenant_id = c.tenant_id AND ce.person_id = c.person_id AND ce.relation = '\"supports\"'
                  JOIN evidence e ON e.id = ce.evidence_id AND e.tenant_id = ce.tenant_id AND e.person_id = ce.person_id
                  JOIN sources s ON s.id = e.source_id AND s.tenant_id = e.tenant_id AND s.person_id = e.person_id
-                 WHERE c.id = ?1 AND c.tenant_id = ?2 AND c.person_id = ?3 AND c.status IN ('accepted', 'superseded') AND c.valid_from <= ?4 AND (c.valid_until IS NULL OR c.valid_until > ?4) AND c.recorded_from <= ?5 AND (c.recorded_until IS NULL OR c.recorded_until > ?5) AND c.processing_state = 'processed' AND e.deleted_at IS NULL AND e.recorded_at <= ?5 AND s.deleted_at IS NULL AND s.captured_at <= ?4 AND s.recorded_at <= ?5
+                 WHERE c.id = ?1 AND c.tenant_id = ?2 AND c.person_id = ?3 AND c.status IN ('accepted', 'superseded') AND c.valid_from <= ?4 AND (c.valid_until IS NULL OR c.valid_until > ?4) AND c.recorded_from <= ?5 AND (c.recorded_until IS NULL OR c.recorded_until > ?5) AND c.processing_state = 'processed' AND e.deleted_at IS NULL AND e.recorded_at <= ?5 AND s.deleted_at IS NULL AND s.captured_at <= ?4 AND s.recorded_at <= ?5 AND (?6 IS NULL OR s.feature_flag IS NULL OR s.feature_flag IN (SELECT value FROM json_each(?6)))
                  ORDER BY ce.evidence_id LIMIT 1",
-                    vec![&id.0, &tenant_id.0, &person_id.0, &as_of.valid_at, &as_of.recorded_at],
+                    vec![&id.0, &tenant_id.0, &person_id.0, &as_of.valid_at, &as_of.recorded_at, &features_json],
                 ),
             },
             RetrievalTarget::Source(id) => (

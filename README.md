@@ -153,7 +153,7 @@ organization and maintenance pack containing:
 - `hubs`: high-degree graph hubs across incoming and outgoing connections,
 - `associations`: cross-category vector similarity, triadic closure (`2-hop` bridges), and shared-target associations,
 - `unresolved_targets`: connection targets that do not yet resolve to a live claim,
-- `contradictions`: conflicting live claims sharing a subject and predicate,
+- `contradictions`: live claims with explicitly linked, live contradicting evidence,
 - `short_term_claims`: `short_term` claims ready for `promote`,
 - `unsummarized_evidence_ids`: evidence ready for `nap`, and
 - `stale_summary_ids`: summary nodes marked stale and ready for `rebuild`.

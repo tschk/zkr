@@ -27,7 +27,7 @@ zkr should keep durable, cited records as truth and treat every index, summary, 
 
 | Concern | zkr rule |
 | --- | --- |
-| Evidence | Every derived claim and review cites exact source revisions and spans. Retrieval returns citations and explicit gaps. |
+| Evidence | Every derived claim and review should cite exact source revisions and spans. Retrieval should return citations and explicit gaps. See the audit below for current limitations. |
 | Corrections | Claims have valid time and recorded time. A correction closes or contradicts prior validity; it does not overwrite history. |
 | Embeddings | A vector stores record ID, source revision, model ID and revision, dimension, normalization, distance metric, input hash, and creation time. Vectors never grant truth status. |
 | Index lifecycle | Changed text or configuration marks prior vectors stale. Reindexing is idempotent. Mixed vector spaces are queried separately or rejected, never silently compared. |
@@ -67,6 +67,18 @@ Selection is by lane, not one global winner: choose the smallest configuration m
 - Before release: frozen embedding matrix and LongMemEval subset, with model and dataset revisions pinned.
 - Nightly: full LongMemEval, MemoryAgentBench, and [EverMemBench](https://github.com/EverMind-AI/EverMemBench); track quality, latency, index size, and token cost separately.
 - Before adopting graph expansion or reflection: require a statistically repeatable gain over FTS+dense RRF without regression in deletion, tenancy, or citation precision.
+
+## Evidence and uncertainty audit
+
+The following describes the implementation, not a guarantee that a cited source entails a claim. `remember` stores the input text as both source content and evidence quote, then links an optional claim to that evidence in one transaction ([lifecycle](../src/store/lifecycle.rs)). `search` returns one live supporting evidence ID for a claim, not its complete support history ([retrieval](../src/store/retrieval.rs)). The authoritative export includes evidence records with source IDs and revisions ([export](../src/store/export.rs)). An evidence citation establishes a stored link, not that the source text proves the claim.
+
+- **Spans are not implemented.** `Evidence` defines an optional byte range, but the database does not store one. Export sets it to `None`, and apply rejects a nonempty range ([model](../src/model.rs), [export](../src/store/export.rs), [apply](../src/store/apply.rs)). Transcript locators are optional. The invariant above is a target, not current behavior.
+- **Deletion favors forgetting over historical access.** Deleting a source tombstones its evidence, removes it from lexical retrieval, invalidates citing summaries, and retracts an accepted claim when no live supporting evidence remains ([lifecycle](../src/store/lifecycle.rs)). Historical search also excludes tombstoned sources and evidence, even for an earlier `as_of` time ([retrieval](../src/store/retrieval.rs)). Existing tests cover deletion and retrieval, but they do not prove every projection and replica path safe.
+- **Contradiction is recorded, not adjudicated.** `link` accepts a `contradicts` relation without changing claim status. Ordinary search selects supporting evidence and does not return opposing evidence. `dream` lists claims with an explicit live contradicting link; it does not discover all conflicting values with the same subject and predicate ([lifecycle](../src/store/lifecycle.rs), [projects](../src/store/projects.rs)). A caller cannot infer that a returned claim is uncontested.
+- **A link has no link-time field.** Historical retrieval filters the claim, source, and evidence timestamps, but `claim_evidence` has no timestamp for when a link was added ([schema](../src/store/schema.rs), [retrieval](../src/store/retrieval.rs)). A later link to older evidence can therefore appear in an earlier view. Test a full export and apply round trip before designing a migration that adds link time.
+- **A gap is not calibrated uncertainty.** Search reports `no cited memory matched` only when it returns no items. A nonempty result has no indication that a question is only partly answered, that retrieval missed relevant evidence, or that another source contradicts it. `wake` separately reports when no live summary fits its budget ([retrieval](../src/store/retrieval.rs), [summaries](../src/store/summaries.rs)). These are useful missing-result signals, not a general abstention decision.
+
+The highest-value next capability is an evidence dossier for a claim: return all visible support and contradiction links, source revisions, and deletion or correction status, with an explicit indication when results are incomplete. Keep it bounded and scoped. A separate temporal comparison could show what was believed at two valid and recorded times, including evidence gained or lost. A question generator could use unresolved targets and conflicting dossiers to suggest what to ask next, without converting its suggestions into accepted claims. Evaluate these against examples with known sources, late links, deleted support, conflicts, missing answers, and two tenants before using them as retrieval authority.
 
 ## Associative memory audit
 
